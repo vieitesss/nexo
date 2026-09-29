@@ -24,7 +24,14 @@ The text form prints target, harness, state, seen/unseen, and branch as
 tab-separated columns. On Herdr, agent status and seen state come from
 Herdr's native agent awareness: `idle` is a seen stopped agent and `done` is
 an unseen stopped agent; a focused pane is always seen. Herdr status is read
-through `herdr agent list`, never by scraping pane output.
+through `herdr agent list`, never by scraping pane output. Herdr's target
+column uses the opaque pane ID because that is the native target accepted by
+Herdr; workspace and tab IDs remain available in the native response. Herdr's
+`stopped_since` is persisted under the XDG state directory per Herdr server;
+when Herdr provides no timestamp, nexo records the first stopped observation
+and resets it on a new `state_change_seq` or working transition. Branches are
+read with `git branch --show-current` from Herdr's native foreground or pane
+working directory.
 
 On tmux, `nexo agents watch` runs the poller; only one watcher is active for a
 server at a time. The watcher enables tmux `focus-events` before installing
