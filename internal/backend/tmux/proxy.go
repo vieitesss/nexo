@@ -21,6 +21,9 @@ import (
 const (
 	proxySessionOption      = "@nexo-proxy"
 	healthyAttachmentPeriod = time.Minute
+	// connectionExitCode is the status ssh reserves for its own connection
+	// failures. Any other exit status comes from the remote command.
+	connectionExitCode = 255
 )
 
 // ProxyTransport attaches to a remote container. An attachment returning an
@@ -78,6 +81,9 @@ func RunReconnect(ctx context.Context, transport ProxyTransport, clock ProxyCloc
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if !isConnectionError(err) {
+			return err
+		}
 		if proxyNow(clock).Sub(started) >= healthyAttachmentPeriod {
 			// A connection that remained up for a meaningful period marks the
 			// previous outage recovered. The next outage gets the initial delay.
@@ -99,6 +105,19 @@ func RunReconnect(ctx context.Context, transport ProxyTransport, clock ProxyCloc
 	}
 }
 
+// isConnectionError reports whether err is a dropped connection worth
+// retrying. ssh reserves exit status 255 for its own connection errors; every
+// other exit status comes from the remote command and ends the attach loop.
+// Errors without an exit status come from non-process transports and are
+// treated as dropped connections.
+func isConnectionError(err error) bool {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode() == connectionExitCode
+	}
+	return true
+}
+
 type proxyClockNow interface {
 	Now() time.Time
 }
@@ -110,15 +129,12 @@ func proxyNow(clock ProxyClock) time.Time {
 	return time.Now()
 }
 
-type proxyKey struct {
-	key byte
-	err error
-}
-
-// waitProxyRetry owns input for the complete retry wait. It always stops and
-// joins the reader before returning, so an attachment cannot race a stale
-// reader consuming its input. Terminal state is restored before the caller
-// starts the next attachment.
+// waitProxyRetry owns input for the complete retry wait. It keeps the terminal
+// raw and keeps reading until q/Q, cancellation, or a read error, discarding
+// every other byte so no key typed during the wait leaks to the next
+// attachment. It always stops and joins the reader before returning, so an
+// attachment cannot race a stale reader consuming its input. Terminal state is
+// restored before the caller starts the next attachment.
 func waitProxyRetry(ctx context.Context, clock ProxyClock, input io.Reader, delay time.Duration) (bool, error) {
 	if input != nil {
 		if key, available := availableProxyKey(input); available {
@@ -140,12 +156,27 @@ func waitProxyRetry(ctx context.Context, clock ProxyClock, input io.Reader, dela
 		// stale read goroutine.
 		return false, <-sleepDone
 	}
-	keyRead := make(chan proxyKey, 1)
+	fmt.Fprintf(os.Stderr, "reconnecting in %s — press q to close\n", delay)
+	keyRead := make(chan error, 1)
 	go func() {
 		defer close(done)
 		var one [1]byte
-		_, err := reader.Read(one[:])
-		keyRead <- proxyKey{key: one[0], err: err}
+		for {
+			count, err := reader.Read(one[:])
+			if err != nil {
+				keyRead <- err
+				return
+			}
+			if count == 0 {
+				continue
+			}
+			if one[0] == 'q' || one[0] == 'Q' {
+				keyRead <- nil
+				return
+			}
+			// Discard any other byte and keep owning the terminal until q/Q,
+			// cancellation, or a read error.
+		}
 	}()
 
 	cleanup := func() {
@@ -163,17 +194,14 @@ func waitProxyRetry(ctx context.Context, clock ProxyClock, input io.Reader, dela
 	case err := <-sleepDone:
 		cleanup()
 		return false, err
-	case result := <-keyRead:
+	case resultErr := <-keyRead:
 		cleanup()
-		if result.err != nil {
+		if resultErr != nil {
 			// EOF or an unavailable input should not prevent a retry, but the
 			// configured delay still applies.
 			return false, <-sleepDone
 		}
-		if result.key == 'q' || result.key == 'Q' {
-			return true, nil
-		}
-		return false, <-sleepDone
+		return true, nil
 	}
 }
 
@@ -262,8 +290,12 @@ func (r *pollProxyReader) Read(buffer []byte) (int, error) {
 
 func (r *pollProxyReader) cancel() {
 	r.cancelOnce.Do(func() {
+		if r.cancelWriteFD < 0 {
+			return
+		}
 		_, _ = unix.Write(r.cancelWriteFD, []byte{1})
 		_ = unix.Close(r.cancelWriteFD)
+		r.cancelWriteFD = -1
 	})
 }
 
@@ -271,7 +303,10 @@ func (r *pollProxyReader) Close() error {
 	r.closeOnce.Do(func() {
 		_ = unix.Close(r.fd)
 		_ = unix.Close(r.cancelFD)
-		_ = unix.Close(r.cancelWriteFD)
+		if r.cancelWriteFD >= 0 {
+			_ = unix.Close(r.cancelWriteFD)
+			r.cancelWriteFD = -1
+		}
 	})
 	return nil
 }
@@ -279,21 +314,32 @@ func (r *pollProxyReader) Close() error {
 var errProxyInputCanceled = errors.New("proxy input canceled")
 
 // availableProxyKey handles buffered test and prompt readers without racing a
-// zero-duration fake clock. Terminal files use the cancelable reader path.
+// zero-duration fake clock. It drains buffered bytes until it finds q/Q,
+// discarding the rest; if the buffer empties first it reports no key so the
+// caller still honors the retry delay. Terminal files use the cancelable
+// reader path instead.
 func availableProxyKey(input io.Reader) (byte, bool) {
-	if source, ok := input.(interface{ Len() int }); ok && source.Len() > 0 {
+	for proxyInputBuffered(input) {
 		var one [1]byte
-		if count, err := input.Read(one[:]); count == 1 && err == nil {
-			return one[0], true
+		count, err := input.Read(one[:])
+		if count != 1 || err != nil {
+			return 0, false
 		}
-	}
-	if source, ok := input.(interface{ Buffered() int }); ok && source.Buffered() > 0 {
-		var one [1]byte
-		if count, err := input.Read(one[:]); count == 1 && err == nil {
+		if one[0] == 'q' || one[0] == 'Q' {
 			return one[0], true
 		}
 	}
 	return 0, false
+}
+
+func proxyInputBuffered(input io.Reader) bool {
+	if source, ok := input.(interface{ Len() int }); ok && source.Len() > 0 {
+		return true
+	}
+	if source, ok := input.(interface{ Buffered() int }); ok && source.Buffered() > 0 {
+		return true
+	}
+	return false
 }
 
 type commandProxyTransport struct {
@@ -320,7 +366,10 @@ func transportArgs(remote config.RemoteConfig, machine, container string) []stri
 		command := "tmux attach-session -t " + shellQuote(target)
 		return []string{"et", machine, "-c", command}
 	default:
-		args := []string{"ssh", "-t"}
+		// ServerAliveInterval/CountMax let ssh notice a dropped link instead of
+		// blocking the pane indefinitely. They apply to the attachment only;
+		// listing and other remote commands use plain SSH.
+		args := []string{"ssh", "-t", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
 		if strings.TrimSpace(remote.SSHConfig) != "" {
 			args = append(args, "-F", remote.SSHConfig)
 		}

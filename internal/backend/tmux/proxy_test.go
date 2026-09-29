@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -144,6 +146,81 @@ func TestRunReconnectCancelsRealFileReaderWhenTimerWins(t *testing.T) {
 	}
 }
 
+func TestRunReconnectHonorsQAfterOtherKeysDuringOneWait(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if _, err := writer.WriteString("xq"); err != nil {
+		t.Fatalf("write keys: %v", err)
+	}
+	_ = writer.Close()
+
+	transport := &fakeProxyTransport{failures: 1}
+	clock := &blockingProxyClock{release: make(chan struct{})}
+	result := make(chan error, 1)
+	go func() {
+		result <- RunReconnect(context.Background(), transport, clock, reader, "devbox", "$1", time.Second, 30*time.Second)
+	}()
+	select {
+	case err := <-result:
+		close(clock.release)
+		if err != nil {
+			t.Fatalf("RunReconnect() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		close(clock.release)
+		t.Fatal("q after another key during one wait was not honored")
+	}
+	if transport.calls != 1 {
+		t.Fatalf("transport calls = %d, want one before q", transport.calls)
+	}
+}
+
+type exitCodeTransport struct {
+	exitCode int
+	failures int
+	calls    int
+}
+
+func (t *exitCodeTransport) Attach(context.Context, string, string) error {
+	t.calls++
+	if t.calls > t.failures {
+		return nil
+	}
+	return exec.Command("sh", "-c", "exit "+strconv.Itoa(t.exitCode)).Run()
+}
+
+func TestRunReconnectDoesNotRetryRemoteCommandExit(t *testing.T) {
+	transport := &exitCodeTransport{exitCode: 1, failures: 5}
+	clock := &fakeProxyClock{}
+	err := RunReconnect(context.Background(), transport, clock, nil, "devbox", "$1", time.Second, 30*time.Second)
+	if err == nil {
+		t.Fatal("RunReconnect() error = nil, want the remote command failure")
+	}
+	if transport.calls != 1 {
+		t.Fatalf("transport calls = %d, want no retry of exit 1", transport.calls)
+	}
+	if len(clock.delays) != 0 {
+		t.Fatalf("retry delays = %v, want none", clock.delays)
+	}
+}
+
+func TestRunReconnectRetriesSSHConnectionExit(t *testing.T) {
+	transport := &exitCodeTransport{exitCode: 255, failures: 1}
+	clock := &fakeProxyClock{}
+	if err := RunReconnect(context.Background(), transport, clock, nil, "devbox", "$1", time.Second, 30*time.Second); err != nil {
+		t.Fatalf("RunReconnect() error = %v", err)
+	}
+	if transport.calls != 2 {
+		t.Fatalf("transport calls = %d, want retry after exit 255", transport.calls)
+	}
+	if want := []time.Duration{time.Second}; !reflect.DeepEqual(clock.delays, want) {
+		t.Fatalf("retry delays = %v, want %v", clock.delays, want)
+	}
+}
+
 type blockingProxyClock struct {
 	release chan struct{}
 }
@@ -220,9 +297,12 @@ func TestProxyCreatesSessionWithQuotedAttachCommand(t *testing.T) {
 }
 
 func TestTransportArgsHonorSSHConfigOnlyForSSH(t *testing.T) {
+	keepalive := []string{"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
 	remote := config.RemoteConfig{SSHConfig: "/tmp/ssh config", Transport: "ssh"}
-	if got, want := transportArgs(remote, "devbox", "$1"), []string{"ssh", "-t", "-F", "/tmp/ssh config", "devbox", "tmux attach-session -t '=$1'"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("ssh transport args = %#v, want %#v", got, want)
+	sshWant := append([]string{"ssh", "-t"}, keepalive...)
+	sshWant = append(sshWant, "-F", "/tmp/ssh config", "devbox", "tmux attach-session -t '=$1'")
+	if got := transportArgs(remote, "devbox", "$1"); !reflect.DeepEqual(got, sshWant) {
+		t.Fatalf("ssh transport args = %#v, want %#v", got, sshWant)
 	}
 	remote.Transport = "mosh"
 	if got, want := transportArgs(remote, "devbox", "$1"), []string{"mosh", "devbox", "--", "tmux", "attach-session", "-t", "=$1"}; !reflect.DeepEqual(got, want) {
@@ -233,7 +313,9 @@ func TestTransportArgsHonorSSHConfigOnlyForSSH(t *testing.T) {
 		t.Fatalf("et transport args = %#v, want %#v", got, want)
 	}
 	remote.Transport = "ssh"
-	if got, want := transportArgs(remote, "devbox", "app.v1:blue"), []string{"ssh", "-t", "-F", "/tmp/ssh config", "devbox", "tmux attach-session -t '=app_v1_blue'"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("canonical SSH transport args = %#v, want %#v", got, want)
+	canonicalWant := append([]string{"ssh", "-t"}, keepalive...)
+	canonicalWant = append(canonicalWant, "-F", "/tmp/ssh config", "devbox", "tmux attach-session -t '=app_v1_blue'")
+	if got := transportArgs(remote, "devbox", "app.v1:blue"); !reflect.DeepEqual(got, canonicalWant) {
+		t.Fatalf("canonical SSH transport args = %#v, want %#v", got, canonicalWant)
 	}
 }

@@ -16,9 +16,13 @@ reconnect-max = "30s"
 ```
 
 The SSH transport retries dropped attachments with exponential backoff up to
-`reconnect-max`. Press `q` during a retry wait to leave the local proxy. Mosh
-and ET provide their own reconnection behavior. Closing a proxy only removes
-the local container; it never closes the remote container.
+`reconnect-max`. Only an ssh connection error (exit status 255) is retried; any
+other exit status ends the attachment. The SSH attachment enables
+`ServerAliveInterval=15` and `ServerAliveCountMax=3` so a dropped link is
+detected promptly; listing and other remote commands use plain SSH. Press `q`
+during a retry wait to leave the local proxy; other keys typed during the wait
+are discarded. Mosh and ET provide their own reconnection behavior. Closing a
+proxy only removes the local container; it never closes the remote container.
 
 Commands:
 
