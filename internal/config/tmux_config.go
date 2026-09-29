@@ -20,10 +20,10 @@ func (c TmuxConfig) WithDefaults() TmuxConfig {
 		c.AgentKey = "a"
 	}
 	if c.PopupWidth == "" {
-		c.PopupWidth = "80%"
+		c.PopupWidth = "100%"
 	}
 	if c.PopupHeight == "" {
-		c.PopupHeight = "80%"
+		c.PopupHeight = "100%"
 	}
 	if c.PopupX == "" {
 		c.PopupX = "C"

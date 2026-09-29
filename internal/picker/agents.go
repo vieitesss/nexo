@@ -100,6 +100,7 @@ func applyAgentDots(places []Place, agents []capabilities.Agent, machine string)
 		if len(matches) == 0 && labelCounts[strings.TrimSpace(place.ContainerName)] == 1 {
 			matches = byLabel[strings.TrimSpace(place.ContainerName)]
 		}
+		place.Agents = append([]capabilities.Agent(nil), matches...)
 		if dot, ok := AgentDot(matches); ok {
 			decorations = append(decorations, dot)
 		}

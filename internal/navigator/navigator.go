@@ -14,6 +14,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
+	"github.com/vieitesss/nexo/internal/shell"
 )
 
 // RefreshMsg replaces the navigator's current agent snapshot. Commands that
@@ -47,6 +48,8 @@ type Model struct {
 	selected        *capabilities.Agent
 	cancelled       bool
 	err             error
+	width           int
+	height          int
 	refreshInFlight *bool
 }
 
@@ -80,6 +83,14 @@ func (m Model) Rows() []Row { return append([]Row(nil), m.rows...) }
 
 // Agents returns the latest complete source snapshot.
 func (m Model) Agents() []capabilities.Agent { return append([]capabilities.Agent(nil), m.agents...) }
+
+// Cursor returns the visible row selected by the keyboard.
+func (m Model) Cursor() int { return m.cursor }
+
+// SetSize records the terminal surface supplied by Bubble Tea.
+func (m *Model) SetSize(width, height int) {
+	m.width, m.height = width, height
+}
 
 // Selected returns the pane accepted by Enter.
 func (m Model) Selected() (capabilities.Agent, bool) {
@@ -150,6 +161,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		*m.refreshInFlight = true
 		return m, tea.Batch(m.refresh(), m.tick())
+	case tea.WindowSizeMsg:
+		m.SetSize(msg.Width, msg.Height)
+		return m, nil
 	case tea.KeyMsg:
 		switch {
 		case msg.Type == tea.KeyCtrlC, msg.Type == tea.KeyEsc:
@@ -206,6 +220,10 @@ func (m Model) tick() tea.Cmd {
 }
 
 func (m *Model) rebuild() {
+	previous := ""
+	if m.cursor >= 0 && m.cursor < len(m.rows) {
+		previous = agentIdentity(m.rows[m.cursor].Agent)
+	}
 	agents := append([]capabilities.Agent(nil), m.agents...)
 	sort.SliceStable(agents, func(i, j int) bool {
 		rankI, rankJ := attentionRank(agents[i]), attentionRank(agents[j])
@@ -228,20 +246,36 @@ func (m *Model) rebuild() {
 		}
 		m.rows = append(m.rows, Row{Agent: agent, Score: match.Score})
 	}
+	if previous != "" {
+		for index, row := range m.rows {
+			if agentIdentity(row.Agent) == previous {
+				m.cursor = index
+				return
+			}
+		}
+	}
 	m.clampCursor()
 }
 
+func agentIdentity(agent capabilities.Agent) string {
+	if agent.PaneID != "" {
+		return agent.PaneID
+	}
+	return agent.Target
+}
+
 func attentionRank(agent capabilities.Agent) int {
-	if agent.State == "stopped" {
+	switch strings.ToLower(strings.TrimSpace(agent.State)) {
+	case "stopped":
 		if !agent.Seen {
 			return 0
 		}
 		return 2
-	}
-	if agent.State == "working" {
+	case "working":
+		return 1
+	default:
 		return 1
 	}
-	return 1
 }
 
 func (m *Model) clampCursor() {
@@ -257,8 +291,49 @@ func (m *Model) clampCursor() {
 	}
 }
 
-// View renders the agent navigator using the place picker's theme vocabulary.
+// View renders a full terminal surface after the first WindowSizeMsg. Before
+// Bubble Tea supplies dimensions, the compact frame remains useful to callers
+// that inspect a model before it is started.
 func (m Model) View() string {
+	if m.width <= 0 || m.height <= 0 {
+		return m.legacyView()
+	}
+	items := make([]shell.Item, 0, len(m.rows))
+	for index, row := range m.rows {
+		selected := index == m.cursor
+		items = append(items, shell.Item{
+			Primary:    m.primaryText(row.Agent),
+			Secondary:  m.secondaryText(row.Agent),
+			Selectable: true,
+			Selected:   selected,
+		})
+	}
+	dialog := ""
+	if m.err != nil {
+		dialog = m.err.Error()
+	}
+	search := "Search: " + string(m.query) + m.style(m.theme.Highlight).Render("▌")
+	return shell.Render(shell.Options{
+		Width:  m.width,
+		Height: m.height,
+		Search: search,
+		Items:  items,
+		Hints:  m.hints(),
+		Dialog: dialog,
+		Paint: func(value string, selected bool) string {
+			style := m.surfaceStyle(m.theme.Foreground)
+			if selected && m.theme.Color {
+				value = shell.Plain(value)
+				style = style.Background(lipgloss.Color(m.theme.SelectionBackground))
+			}
+			return style.Render(value)
+		},
+		PaintSearch: func(value string) string { return m.surfaceStyle(m.theme.Foreground).Render(value) },
+		PaintHint:   func(value string) string { return m.surfaceStyle(m.theme.Muted).Render(value) },
+	})
+}
+
+func (m Model) legacyView() string {
 	lines := []string{m.style(m.theme.Foreground).Render("> " + string(m.query))}
 	for index, row := range m.rows {
 		selected := index == m.cursor
@@ -273,15 +348,58 @@ func (m Model) View() string {
 	return strings.Join(lines, "\n")
 }
 
+func (m Model) primaryText(agent capabilities.Agent) string {
+	parts := []string{m.marker(agent), strings.TrimSpace(agent.Harness)}
+	if strings.TrimSpace(agent.Container) != "" {
+		parts = append(parts, "·", strings.TrimSpace(agent.Container))
+	}
+	return strings.Join(parts, " ")
+}
+
+func (m Model) secondaryText(agent capabilities.Agent) string {
+	parts := make([]string, 0, 4)
+	if agent.Window != "" {
+		parts = append(parts, agent.Window)
+	}
+	if agent.Target != "" {
+		parts = append(parts, agent.Target)
+	}
+	if agent.Branch != "" {
+		parts = append(parts, "⎇ "+agent.Branch)
+	}
+	if strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && agent.StoppedSince != nil {
+		parts = append(parts, age(m.now(), *agent.StoppedSince))
+	}
+	return m.style(m.theme.Muted).Render(strings.Join(parts, " · "))
+}
+
+func (m Model) hints() []shell.Hint {
+	hints := []shell.Hint{{Key: firstKey(upKey), Label: "up"}, {Key: firstKey(downKey), Label: "down"}}
+	if len(m.rows) > 0 {
+		hints = append(hints, shell.Hint{Key: firstKey(acceptKey), Label: "open"})
+	}
+	hints = append(hints, shell.Hint{Key: "esc", Label: "cancel"})
+	return hints
+}
+
+func firstKey(binding key.Binding) string {
+	keys := binding.Keys()
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
+}
+
 func (m Model) marker(agent capabilities.Agent) string {
 	marker := "●"
 	if !m.theme.Color {
 		return marker
 	}
 	color := "3"
-	if agent.State == "stopped" && !agent.Seen {
+	state := strings.ToLower(strings.TrimSpace(agent.State))
+	if state == "stopped" && !agent.Seen {
 		color = "1"
-	} else if agent.State == "stopped" && agent.Seen {
+	} else if state == "stopped" && agent.Seen {
 		color = "2"
 	}
 	return m.style(color).Render(marker)
@@ -291,6 +409,14 @@ func (m Model) style(color string) lipgloss.Style {
 	style := lipgloss.NewStyle()
 	if m.theme.Color && color != "" {
 		style = style.Foreground(lipgloss.Color(color))
+	}
+	return style
+}
+
+func (m Model) surfaceStyle(color string) lipgloss.Style {
+	style := m.style(color)
+	if m.theme.Color && m.theme.Background != "" {
+		style = style.Background(lipgloss.Color(m.theme.Background))
 	}
 	return style
 }
@@ -306,7 +432,7 @@ func rowText(agent capabilities.Agent, now time.Time) string {
 		parts = append(parts, "⎇ "+agent.Branch)
 	}
 	text := strings.Join(parts, " · ")
-	if agent.State == "stopped" && agent.StoppedSince != nil {
+	if strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && agent.StoppedSince != nil {
 		text += "  " + age(now, *agent.StoppedSince)
 	}
 	return text
