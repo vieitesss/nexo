@@ -692,6 +692,18 @@ func (m Model) hasPlacePath(path string) bool {
 	return false
 }
 
+func (m Model) hasPlacePath(path string) bool {
+	if path == "" {
+		return false
+	}
+	for _, place := range m.places {
+		if place.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
 func searchText(place Place) string {
 	if place.SearchText != "" {
 		return place.SearchText
@@ -771,6 +783,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							// checkout even when discovery assigned a different
 							// group to the two paths.
 							m.places[index].Group = primary.Group
+							m.places[index].DisplayRemainder = projectRemainder(m.places[index].Path, primary.Group)
 							break
 						}
 					}

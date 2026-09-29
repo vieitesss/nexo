@@ -3,7 +3,6 @@ package picker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +17,7 @@ import (
 )
 
 func TestGitContextLoaderReadsRealRepositoryState(t *testing.T) {
+	isolateGitEnvironment(t)
 	root := t.TempDir()
 	gitTestCommand(t, root, "init", "-b", "main")
 	gitTestCommand(t, root, "config", "user.email", "nexo@example.test")
@@ -36,7 +36,7 @@ func TestGitContextLoaderReadsRealRepositoryState(t *testing.T) {
 
 	// Publish another commit and fetch only while setting up the local refs.
 	publisher := filepath.Join(t.TempDir(), "publisher")
-	gitTestCommand(t, "", "clone", bare, publisher)
+	gitTestCommand(t, "", "clone", "-b", "main", bare, publisher)
 	gitTestCommand(t, publisher, "config", "user.email", "nexo@example.test")
 	gitTestCommand(t, publisher, "config", "user.name", "Nexo Test")
 	writeGitFile(t, publisher, "remote.txt", "remote\n")
@@ -122,6 +122,50 @@ func TestGitContextLoaderResolvesLinkedWorktreePrimary(t *testing.T) {
 	}
 }
 
+func TestLinkedWorktreeRehomesGroupAndRemainder(t *testing.T) {
+	primary := Place{Kind: ProjectKind, Group: "/projects", Path: "/repos/primary", Git: true}
+	linked := Place{Kind: ProjectKind, Group: "/elsewhere", Path: "/work/linked", DisplayRemainder: "stale", Git: true}
+	model := NewModel([]Place{primary, linked}, Theme{})
+	updated, _ := model.Update(GitContextMsg{
+		Path:    linked.Path,
+		Context: GitContext{Identity: "linked", PrimaryPath: primary.Path},
+	})
+	model = updated.(Model)
+	places := model.Places()
+	if places[1].Group != primary.Group {
+		t.Fatalf("linked group = %q, want primary group %q", places[1].Group, primary.Group)
+	}
+	wantRemainder := projectRemainder(linked.Path, primary.Group)
+	if places[1].DisplayRemainder != wantRemainder {
+		t.Fatalf("linked remainder = %q, want recomputed %q", places[1].DisplayRemainder, wantRemainder)
+	}
+	updated, _ = model.Update(teaRightKey())
+	model = updated.(Model)
+	rows := model.Rows()
+	if len(rows) != 3 || rows[2].Depth != 2 {
+		t.Fatalf("rows = %#v, want linked row nested under primary", rows)
+	}
+}
+
+func TestLinkedWorktreeWithoutCandidatePrimaryUsesNormalDepth(t *testing.T) {
+	model := NewModel([]Place{{
+		Kind:             ProjectKind,
+		Group:            "/projects",
+		Path:             "/projects/linked",
+		ParentPath:       "/projects/primary",
+		DisplayRemainder: "linked",
+	}}, Theme{})
+	updated, _ := model.Update(teaRightKey())
+	model = updated.(Model)
+	rows := model.Rows()
+	if len(rows) != 2 || rows[1].Depth != 1 {
+		t.Fatalf("rows = %#v, want normal depth without visible primary", rows)
+	}
+	if strings.Contains(model.View(), "│") {
+		t.Fatalf("view = %q, want no continuation spine without primary", model.View())
+	}
+}
+
 func TestGitContextLoaderFailureDoesNotInventContext(t *testing.T) {
 	loader := NewGitContextLoader(runner.Func(func(context.Context, string, ...string) ([]byte, error) {
 		return nil, errors.New("git unavailable")
@@ -152,17 +196,57 @@ func TestGitContextLoaderDoesNotFetch(t *testing.T) {
 }
 
 func TestGitContextCommandsBoundConcurrencyAndTimeout(t *testing.T) {
-	loader := &blockingGitLoader{delay: 100 * time.Millisecond}
-	places := make([]Place, 0, 6)
-	for index := 0; index < 6; index++ {
-		places = append(places, Place{Path: fmt.Sprintf("repo-%d", index), Git: true})
+	loader := &observingGitLoader{
+		concurrency: 2,
+		timeout:     30 * time.Millisecond,
+		delay:       5 * time.Millisecond,
+		hungPath:    "repo-hung",
+	}
+	places := []Place{
+		{Path: "repo-1", Git: true},
+		{Path: "repo-2", Git: true},
+		{Path: "repo-hung", Git: true},
+		{Path: "repo-3", Git: true},
+		{Path: "repo-4", Git: true},
 	}
 	model := NewModel(places, Theme{}, loader)
-	if model.gitPool == nil || cap(model.gitPool.slots) != 4 {
-		t.Fatalf("git pool = %#v, want default bounded concurrency", model.gitPool)
+	if model.gitPool == nil || cap(model.gitPool.slots) != loader.concurrency {
+		t.Fatalf("git pool = %#v, want bounded concurrency=%d", model.gitPool, loader.concurrency)
 	}
-	// Input is handled synchronously even while a repository command is slow;
-	// the command itself is returned for Bubble Tea's asynchronous runner.
+
+	// Bubble Tea expands BatchMsg into concurrently running commands. Execute
+	// that same public command shape here so the test covers the pool and its
+	// timeout rather than only checking model construction.
+	batchMsg := model.Init()()
+	batch, ok := batchMsg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("Init() message = %T, want tea.BatchMsg", batchMsg)
+	}
+	messages := make(chan tea.Msg, len(batch))
+	for _, command := range batch {
+		go func() { messages <- command() }()
+	}
+	for range batch {
+		message := <-messages
+		updated, _ := model.Update(message)
+		model = updated.(Model)
+	}
+	if loader.maxActive > loader.concurrency {
+		t.Fatalf("maximum concurrent loads = %d, want <= %d", loader.maxActive, loader.concurrency)
+	}
+	if !loader.cancelled {
+		t.Fatal("hung repository context was not cancelled by timeout")
+	}
+	if !loader.hungResult {
+		t.Fatal("hung repository did not return an error")
+	}
+	for _, place := range model.Places() {
+		if place.Path == loader.hungPath && place.GitContext != nil {
+			t.Fatalf("hung repository got context %#v, want empty context", place.GitContext)
+		}
+	}
+
+	// Input is handled synchronously while those commands are running.
 	started := time.Now()
 	updated, cmd := model.Update(teaRuneKey('x'))
 	if cmd != nil || updated.(Model).Query() != "x" || time.Since(started) > 50*time.Millisecond {
@@ -170,11 +254,41 @@ func TestGitContextCommandsBoundConcurrencyAndTimeout(t *testing.T) {
 	}
 }
 
-type blockingGitLoader struct {
-	delay time.Duration
+type observingGitLoader struct {
+	mu          sync.Mutex
+	concurrency int
+	timeout     time.Duration
+	delay       time.Duration
+	hungPath    string
+	active      int
+	maxActive   int
+	cancelled   bool
+	hungResult  bool
 }
 
-func (l *blockingGitLoader) Load(ctx context.Context, _ string) (GitContext, error) {
+func (l *observingGitLoader) GitConcurrency() int       { return l.concurrency }
+func (l *observingGitLoader) GitTimeout() time.Duration { return l.timeout }
+
+func (l *observingGitLoader) Load(ctx context.Context, path string) (GitContext, error) {
+	l.mu.Lock()
+	l.active++
+	if l.active > l.maxActive {
+		l.maxActive = l.active
+	}
+	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		l.active--
+		l.mu.Unlock()
+	}()
+	if path == l.hungPath {
+		<-ctx.Done()
+		l.mu.Lock()
+		l.cancelled = true
+		l.hungResult = true
+		l.mu.Unlock()
+		return GitContext{}, ctx.Err()
+	}
 	select {
 	case <-time.After(l.delay):
 		return GitContext{Identity: "main"}, nil
@@ -185,6 +299,7 @@ func (l *blockingGitLoader) Load(ctx context.Context, _ string) (GitContext, err
 
 func setupGitRepo(t *testing.T) string {
 	t.Helper()
+	isolateGitEnvironment(t)
 	root := t.TempDir()
 	gitTestCommand(t, root, "init", "-b", "main")
 	gitTestCommand(t, root, "config", "user.email", "nexo@example.test")
@@ -200,6 +315,13 @@ func writeGitFile(t *testing.T, root, name, contents string) {
 	if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0o644); err != nil {
 		t.Fatalf("write %s: %v", name, err)
 	}
+}
+
+func isolateGitEnvironment(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 }
 
 func gitTestCommand(t *testing.T, dir string, args ...string) string {
