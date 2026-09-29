@@ -285,6 +285,21 @@ func isMissingSession(err error) bool {
 
 func sessionName(path string) string { return projects.TargetName(path) }
 
+// OpenContainer focuses an existing tmux session by stable session ID.
+func (b *Backend) OpenContainer(ctx context.Context, id string) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("tmux container opener requires a command runner")
+	}
+	if strings.TrimSpace(id) == "" {
+		return errors.New("tmux container opener requires an id")
+	}
+	if b.Inside {
+		_, err := b.run(ctx, "switch-client", "-t", id)
+		return err
+	}
+	return b.runInteractive(ctx, "attach-session", "-t", id)
+}
+
 // ConfigureAgents applies the shared agents configuration to the tmux source.
 func (b *Backend) ConfigureAgents(cfg config.AgentsConfig) {
 	b.agents.ConfigureAgents(cfg)

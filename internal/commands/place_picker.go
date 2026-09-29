@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -34,6 +35,19 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	}
 
 	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
+	places := picker.ProjectPlaces(discovery.Candidates)
+	var previewCmd func() tea.Msg
+	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
+		containers, err := lister.ListContainers(ctx)
+		if err != nil {
+			return fmt.Errorf("list containers: %w", err)
+		}
+		places = append(places, picker.ContainerPlaces(containers)...)
+		places = append(places, picker.MachinePlaces(containers)...)
+		if reader, ok := invocation.Adapter.(capabilities.ScreenReader); ok {
+			previewCmd = previewCommand(ctx, reader, containers)
+		}
+	}
 	for _, warning := range discovery.Warnings {
 		if invocation.Stderr != nil {
 			if _, err := fmt.Fprintf(invocation.Stderr, "nexo: warning: %s\n", warning); err != nil {
@@ -49,7 +63,10 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	}
 
 	theme := picker.ThemeFromTerminal(ctx, picker.ThemeQuery{Reader: os.Stdin, Writer: os.Stdout}, 100*time.Millisecond)
-	model := picker.NewModel(picker.ProjectPlaces(discovery.Candidates), theme)
+	model := picker.NewModel(places, theme)
+	if previewCmd != nil {
+		model = model.WithPreviewCommand(previewCmd)
+	}
 	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
 	result, err := program.Run()
 	if err != nil {
@@ -62,6 +79,54 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	if final.Cancelled() {
 		return nil
 	}
+	resolver := containerActionResolver(invocation)
+	if target, name, ok := final.RenameTargetRequest(); ok {
+		actions, err := resolver.ResolveContainerActions(ctx, target.Machine)
+		if err != nil {
+			return err
+		}
+		return actions.RenameContainer(ctx, target.ID, name)
+	}
+	if targets, ok := final.KillTargetsRequest(); ok {
+		// A selection can span machines. Resolve each machine once and keep the
+		// picker order within that machine so native batch close operations still
+		// receive one confirmation for the complete selection.
+		groups := make([]containerTargetGroup, 0)
+		for _, target := range targets {
+			groupIndex := -1
+			for index := range groups {
+				if groups[index].machine == target.Machine {
+					groupIndex = index
+					break
+				}
+			}
+			if groupIndex < 0 {
+				groups = append(groups, containerTargetGroup{machine: target.Machine})
+				groupIndex = len(groups) - 1
+			}
+			groups[groupIndex].ids = append(groups[groupIndex].ids, target.ID)
+		}
+		for _, group := range groups {
+			actions, err := resolver.ResolveContainerActions(ctx, group.machine)
+			if err != nil {
+				return err
+			}
+			if killer, supported := actions.(capabilities.ContainerBatchKiller); supported {
+				// The batch capability receives the whole per-machine selection
+				// exactly once; the backend may issue one native close per ID.
+				if err := killer.KillContainers(ctx, group.ids); err != nil {
+					return err
+				}
+				continue
+			}
+			for _, id := range group.ids {
+				if err := actions.KillContainer(ctx, id); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
 	place, ok := final.Selected()
 	if !ok {
 		return nil
@@ -69,14 +134,145 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	if place.OpenAction != nil {
 		return place.OpenAction(ctx, place)
 	}
-	if place.Kind != picker.ProjectKind {
+	if place.Kind != picker.ProjectKind && place.Kind != picker.ContainerKind {
 		return fmt.Errorf("place kind %q is not openable yet", place.Kind)
+	}
+	if place.Kind == picker.ContainerKind {
+		actions, err := resolver.ResolveContainerActions(ctx, place.Machine)
+		if err != nil {
+			return err
+		}
+		return actions.OpenContainer(ctx, place.ContainerID)
 	}
 	opener, ok := invocation.Adapter.(capabilities.ProjectOpener)
 	if !ok {
 		return fmt.Errorf("backend %q does not support opening projects", invocation.Selection.Kind)
 	}
 	return opener.OpenProject(ctx, place.Path, capabilities.OpenOptions{})
+}
+
+type containerTargetGroup struct {
+	machine string
+	ids     []string
+}
+
+type localContainerResolver struct {
+	adapter any
+}
+
+func containerActionResolver(invocation Invocation) capabilities.ContainerActionResolver {
+	if invocation.ContainerResolver != nil {
+		return invocation.ContainerResolver
+	}
+	return localContainerResolver{adapter: invocation.Adapter}
+}
+
+// ResolveContainerActions wraps the selected backend as the local machine's
+// source. A future remote resolver can be supplied on Invocation without
+// changing the picker command's action routing.
+func (r localContainerResolver) ResolveContainerActions(_ context.Context, machine string) (capabilities.ContainerActions, error) {
+	if !isLocalContainer(machine) {
+		return nil, fmt.Errorf("container machine %q is not supported", machine)
+	}
+	return localContainerActions(r), nil
+}
+
+type localContainerActions struct {
+	adapter any
+}
+
+func (a localContainerActions) OpenContainer(ctx context.Context, id string) error {
+	if opener, ok := a.adapter.(capabilities.ContainerOpener); ok {
+		return opener.OpenContainer(ctx, id)
+	}
+	// Keep the existing project-opener seam usable for adapters that model an
+	// existing container as an OpenOptions selection.
+	if opener, ok := a.adapter.(capabilities.ProjectOpener); ok {
+		return opener.OpenProject(ctx, "", capabilities.OpenOptions{ContainerID: id})
+	}
+	return errors.New("local backend does not support opening containers")
+}
+
+func (a localContainerActions) RenameContainer(ctx context.Context, id, name string) error {
+	if renamer, ok := a.adapter.(capabilities.ContainerRenamer); ok {
+		return renamer.RenameContainer(ctx, id, name)
+	}
+	return errors.New("local backend does not support renaming containers")
+}
+
+func (a localContainerActions) KillContainer(ctx context.Context, id string) error {
+	if killer, ok := a.adapter.(capabilities.ContainerKiller); ok {
+		return killer.KillContainer(ctx, id)
+	}
+	return errors.New("local backend does not support killing containers")
+}
+
+func (a localContainerActions) KillContainers(ctx context.Context, ids []string) error {
+	if killer, ok := a.adapter.(capabilities.ContainerBatchKiller); ok {
+		return killer.KillContainers(ctx, ids)
+	}
+	for _, id := range ids {
+		if err := a.KillContainer(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isLocalContainer(machine string) bool {
+	return machine == "" || machine == "local" || machine == picker.LocalMachine()
+}
+
+func previewCommand(ctx context.Context, reader capabilities.ScreenReader, containers []capabilities.Container) func() tea.Msg {
+	return func() tea.Msg {
+		type job struct {
+			ref  picker.ContainerRef
+			pane string
+		}
+		jobs := make(chan job)
+		previews := make(map[picker.ContainerRef]string)
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		workers := 4
+		if len(containers) < workers {
+			workers = len(containers)
+		}
+		if workers == 0 {
+			return nil
+		}
+		worker := func() {
+			defer wg.Done()
+			for item := range jobs {
+				readCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+				preview, err := reader.ReadScreen(readCtx, item.pane)
+				cancel()
+				if err == nil {
+					mu.Lock()
+					previews[item.ref] = preview
+					mu.Unlock()
+				}
+			}
+		}
+		wg.Add(workers)
+		for index := 0; index < workers; index++ {
+			go worker()
+		}
+		for _, container := range containers {
+			if container.ActivePaneID != "" {
+				machine := container.Machine
+				if machine == "" {
+					machine = picker.LocalMachine()
+				}
+				jobs <- job{ref: picker.ContainerRef{Machine: machine, ID: container.ID}, pane: container.ActivePaneID}
+			}
+		}
+		close(jobs)
+		wg.Wait()
+		if len(previews) == 0 {
+			return nil
+		}
+		return picker.PreviewBatch{Previews: previews}
+	}
 }
 
 func pickerCommand(kind, configPath string) string {
