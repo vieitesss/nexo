@@ -15,19 +15,29 @@ type call struct {
 }
 
 type fakeRunner struct {
-	calls   []call
-	outputs map[string][]byte
-	errors  map[string]error
+	calls            []call
+	outputs          map[string][]byte
+	errors           map[string]error
+	metadataReported bool
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, call{name: name, args: append([]string(nil), args...)})
 	key := strings.Join(args, " ")
+	if strings.HasPrefix(key, "workspace report-metadata ") {
+		f.metadataReported = true
+	}
+	if f.metadataReported && key == "workspace list" {
+		return []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"machine/container","tokens":{"nexo-proxy":"machine/container"}}]}}`), nil
+	}
 	if err := f.errors[key]; err != nil {
 		return nil, err
 	}
 	if output, ok := f.outputs[key]; ok {
 		return output, nil
+	}
+	if strings.HasPrefix(key, "workspace create --label machine/container --env") {
+		return []byte(`{"result":{"type":"workspace_created","workspace":{"workspace_id":"w1"},"root_pane":{"pane_id":"p1"}}}`), nil
 	}
 	// Agent location labels are read through Herdr's list commands. Keep the
 	// older fixtures focused on state behavior by returning empty snapshots.

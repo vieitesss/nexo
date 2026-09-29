@@ -203,10 +203,11 @@ one unreachable machine does not discard other results.
 nexo --backend=tmux --json remote list
 ```
 
-The output is one array of per-machine objects, each with `machine`. A machine
-whose listing succeeded has `containers` — omitted when that list is empty —
-with entries carrying `id`, `name`, and `machine`. A machine whose listing
-failed carries `error` (a normalized single-line message) and no `containers`.
+The output is one array of per-machine objects, each with `machine` and
+`kind` (`tmux` or `herdr`) when the listing succeeds. A machine whose listing
+succeeded has `containers` — omitted when that list is empty — with entries
+carrying `id`, `name`, and `machine`. A machine whose listing failed carries
+`error` (a normalized single-line message) and no `containers`.
 Because `containers` is `omitempty`, `{"machine":"empty"}` is a successful
 empty listing, not a failure; only `error` signals failure.
 
@@ -218,6 +219,7 @@ rather than the process status.
 [
   {
     "machine": "devbox",
+    "kind": "tmux",
     "containers": [
       {
         "id": "$1",
@@ -235,7 +237,8 @@ An empty successful listing omits `containers`; a failed machine reports
 ```json
 [
   {
-    "machine": "empty"
+    "machine": "empty",
+    "kind": "tmux"
   },
   {
     "machine": "offline",

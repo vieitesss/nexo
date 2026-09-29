@@ -4,343 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
+	"unicode"
 
-	"github.com/charmbracelet/x/term"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
-	"golang.org/x/sys/unix"
+	"github.com/vieitesss/nexo/internal/proxy"
 )
 
-const (
-	proxySessionOption      = "@nexo-proxy"
-	healthyAttachmentPeriod = time.Minute
-	// connectionExitCode is the status ssh reserves for its own connection
-	// failures. Any other exit status comes from the remote command.
-	connectionExitCode = 255
-)
-
-// ProxyTransport attaches to a remote container. An attachment returning an
-// error is considered a dropped connection and is retried by RunReconnect.
-type ProxyTransport interface {
-	Attach(context.Context, string, string) error
-}
-
-// ProxyClock is the sleep seam for reconnect backoff tests. Implementations
-// may also provide Now() for deterministic healthy-attachment tests.
-type ProxyClock interface {
-	Sleep(context.Context, time.Duration) error
-}
-
-type systemProxyClock struct{}
-
-func (systemProxyClock) Sleep(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-// RunReconnect attaches repeatedly after SSH transport failures. A q read
-// while waiting for the next attempt closes the proxy without touching the
-// remote container.
-func RunReconnect(ctx context.Context, transport ProxyTransport, clock ProxyClock, input io.Reader, machine, container string, initial, maximum time.Duration) error {
-	if transport == nil {
-		return errors.New("proxy transport is required")
-	}
-	if clock == nil {
-		clock = systemProxyClock{}
-	}
-	if initial <= 0 {
-		initial = config.DefaultReconnectInitial
-	}
-	if maximum <= 0 {
-		maximum = config.DefaultReconnectMax
-	}
-	if initial > maximum {
-		initial = maximum
-	}
-
-	delay := initial
-	for {
-		started := proxyNow(clock)
-		err := transport.Attach(ctx, machine, container)
-		if err == nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if !isConnectionError(err) {
-			return err
-		}
-		if proxyNow(clock).Sub(started) >= healthyAttachmentPeriod {
-			// A connection that remained up for a meaningful period marks the
-			// previous outage recovered. The next outage gets the initial delay.
-			delay = initial
-		}
-		quit, sleepErr := waitProxyRetry(ctx, clock, input, delay)
-		if sleepErr != nil {
-			return sleepErr
-		}
-		if quit {
-			return nil
-		}
-		if delay < maximum {
-			delay *= 2
-			if delay > maximum || delay < 0 {
-				delay = maximum
-			}
-		}
-	}
-}
-
-// isConnectionError reports whether err is a dropped connection worth
-// retrying. ssh reserves exit status 255 for its own connection errors; every
-// other exit status comes from the remote command and ends the attach loop.
-// Errors without an exit status come from non-process transports and are
-// treated as dropped connections.
-func isConnectionError(err error) bool {
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode() == connectionExitCode
-	}
-	return true
-}
-
-type proxyClockNow interface {
-	Now() time.Time
-}
-
-func proxyNow(clock ProxyClock) time.Time {
-	if clockWithNow, ok := clock.(proxyClockNow); ok {
-		return clockWithNow.Now()
-	}
-	return time.Now()
-}
-
-// waitProxyRetry owns input for the complete retry wait. It keeps the terminal
-// raw and keeps reading until q/Q, cancellation, or a read error, discarding
-// every other byte so no key typed during the wait leaks to the next
-// attachment. It always stops and joins the reader before returning, so an
-// attachment cannot race a stale reader consuming its input. Terminal state is
-// restored before the caller starts the next attachment.
-func waitProxyRetry(ctx context.Context, clock ProxyClock, input io.Reader, delay time.Duration) (bool, error) {
-	if input != nil {
-		if key, available := availableProxyKey(input); available {
-			return key == 'q' || key == 'Q', nil
-		}
-	}
-
-	sleepDone := make(chan error, 1)
-	go func() { sleepDone <- clock.Sleep(ctx, delay) }()
-	if input == nil {
-		return false, <-sleepDone
-	}
-
-	reader, stop, done, restore, ok := startProxyInput(input)
-	if !ok {
-		// A reader that cannot be canceled cannot safely run concurrently with
-		// the next attachment. Buffered readers were handled above; for an
-		// arbitrary blocking reader, honor the retry timer without starting a
-		// stale read goroutine.
-		return false, <-sleepDone
-	}
-	fmt.Fprintf(os.Stderr, "reconnecting in %s — press q to close\n", delay)
-	keyRead := make(chan error, 1)
-	go func() {
-		defer close(done)
-		var one [1]byte
-		for {
-			count, err := reader.Read(one[:])
-			if err != nil {
-				keyRead <- err
-				return
-			}
-			if count == 0 {
-				continue
-			}
-			if one[0] == 'q' || one[0] == 'Q' {
-				keyRead <- nil
-				return
-			}
-			// Discard any other byte and keep owning the terminal until q/Q,
-			// cancellation, or a read error.
-		}
-	}()
-
-	cleanup := func() {
-		stop()
-		<-done
-		if closer, ok := reader.(io.Closer); ok {
-			_ = closer.Close()
-		}
-		restore()
-	}
-	select {
-	case <-ctx.Done():
-		cleanup()
-		return false, ctx.Err()
-	case err := <-sleepDone:
-		cleanup()
-		return false, err
-	case resultErr := <-keyRead:
-		cleanup()
-		if resultErr != nil {
-			// EOF or an unavailable input should not prevent a retry, but the
-			// configured delay still applies.
-			return false, <-sleepDone
-		}
-		return true, nil
-	}
-}
-
-// startProxyInput returns a cancelable one-byte reader and a cleanup function
-// for terminal state. os.File inputs use unix.Poll with a cancellation pipe so
-// stopping a retry wakes a genuinely blocked read. os.Stdin is duplicated
-// before reading so canceling a retry never closes the process's standard input.
-func startProxyInput(input io.Reader) (io.Reader, func(), chan struct{}, func(), bool) {
-	restore := func() {}
-
-	if file, isFile := input.(*os.File); isFile {
-		var state *term.State
-		if term.IsTerminal(file.Fd()) {
-			var err error
-			state, err = term.MakeRaw(file.Fd())
-			if err != nil {
-				return nil, nil, nil, nil, false
-			}
-			restore = func() { _ = term.Restore(file.Fd(), state) }
-		}
-		fd, err := unix.Dup(int(file.Fd()))
-		if err != nil {
-			restore()
-			return nil, nil, nil, nil, false
-		}
-		cancel := make([]int, 2)
-		if err := unix.Pipe(cancel); err != nil {
-			_ = unix.Close(fd)
-			restore()
-			return nil, nil, nil, nil, false
-		}
-		reader := &pollProxyReader{fd: fd, cancelFD: cancel[0], cancelWriteFD: cancel[1]}
-		finished := make(chan struct{})
-		return reader, reader.cancel, finished, restore, true
-	}
-
-	closer, canClose := input.(io.Closer)
-	if !canClose {
-		return nil, nil, nil, nil, false
-	}
-	finished := make(chan struct{})
-	return input, func() { _ = closer.Close() }, finished, restore, true
-}
-
-// pollProxyReader waits for either input or a cancellation byte. Closing a
-// duplicated file descriptor does not interrupt an in-flight Linux read, but
-// polling a self-pipe does, which keeps retry cleanup bounded on terminals and
-// pipes alike.
-type pollProxyReader struct {
-	fd            int
-	cancelFD      int
-	cancelWriteFD int
-	cancelOnce    sync.Once
-	closeOnce     sync.Once
-}
-
-func (r *pollProxyReader) Read(buffer []byte) (int, error) {
-	if len(buffer) == 0 {
-		return 0, nil
-	}
-	pollfds := []unix.PollFd{
-		{Fd: int32(r.fd), Events: unix.POLLIN},
-		{Fd: int32(r.cancelFD), Events: unix.POLLIN},
-	}
-	for {
-		_, err := unix.Poll(pollfds, -1)
-		if err == unix.EINTR {
-			continue
-		}
-		if err != nil {
-			return 0, err
-		}
-		if pollfds[1].Revents != 0 {
-			return 0, errProxyInputCanceled
-		}
-		if pollfds[0].Revents == 0 {
-			continue
-		}
-		n, err := unix.Read(r.fd, buffer)
-		if err == unix.EINTR {
-			continue
-		}
-		return n, err
-	}
-}
-
-func (r *pollProxyReader) cancel() {
-	r.cancelOnce.Do(func() {
-		if r.cancelWriteFD < 0 {
-			return
-		}
-		_, _ = unix.Write(r.cancelWriteFD, []byte{1})
-		_ = unix.Close(r.cancelWriteFD)
-		r.cancelWriteFD = -1
-	})
-}
-
-func (r *pollProxyReader) Close() error {
-	r.closeOnce.Do(func() {
-		_ = unix.Close(r.fd)
-		_ = unix.Close(r.cancelFD)
-		if r.cancelWriteFD >= 0 {
-			_ = unix.Close(r.cancelWriteFD)
-			r.cancelWriteFD = -1
-		}
-	})
-	return nil
-}
-
-var errProxyInputCanceled = errors.New("proxy input canceled")
-
-// availableProxyKey handles buffered test and prompt readers without racing a
-// zero-duration fake clock. It drains buffered bytes until it finds q/Q,
-// discarding the rest; if the buffer empties first it reports no key so the
-// caller still honors the retry delay. Terminal files use the cancelable
-// reader path instead.
-func availableProxyKey(input io.Reader) (byte, bool) {
-	for proxyInputBuffered(input) {
-		var one [1]byte
-		count, err := input.Read(one[:])
-		if count != 1 || err != nil {
-			return 0, false
-		}
-		if one[0] == 'q' || one[0] == 'Q' {
-			return one[0], true
-		}
-	}
-	return 0, false
-}
-
-func proxyInputBuffered(input io.Reader) bool {
-	if source, ok := input.(interface{ Len() int }); ok && source.Len() > 0 {
-		return true
-	}
-	if source, ok := input.(interface{ Buffered() int }); ok && source.Buffered() > 0 {
-		return true
-	}
-	return false
-}
+const proxySessionOption = "@nexo-proxy"
 
 type commandProxyTransport struct {
 	config config.RemoteConfig
@@ -405,8 +80,10 @@ func ValidateProxyIdentity(machine, container string) error {
 	if strings.HasSuffix(container, ";") {
 		return errors.New("tmux remote proxy container cannot end with ';'")
 	}
-	if strings.ContainsAny(machine+container, "\x00\r\n\t") {
-		return errors.New("tmux remote proxy names cannot contain NUL, newline, or tab")
+	for _, r := range machine + container {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return errors.New("tmux remote proxy names cannot contain control or format characters")
+		}
 	}
 	return nil
 }
@@ -464,12 +141,19 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	}
 
 	name := machine + "/" + container
+	if _, err := b.proxyPaneCommand(machine, container); err != nil {
+		return err
+	}
 	sessionID, err := b.ProxySessionID(ctx, machine, container)
 	if err != nil {
 		return err
 	}
 	if sessionID == "" {
-		output, err := b.run(ctx, "new-session", "-d", "-P", "-F", "#{session_id}", "-s", EscapeSessionName(name), b.proxyPaneCommand(machine, container))
+		command, err := b.proxyPaneCommand(machine, container)
+		if err != nil {
+			return err
+		}
+		output, err := b.run(ctx, "new-session", "-d", "-P", "-F", "#{session_id}", "-s", EscapeSessionName(name), command)
 		if err != nil {
 			return err
 		}
@@ -499,14 +183,8 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	return b.runInteractive(ctx, "attach-session", "-t", sessionID)
 }
 
-func (b *Backend) proxyPaneCommand(machine, container string) string {
-	binary := proxyBinary()
-	parts := []string{shellQuote(binary), "--backend", "tmux"}
-	if b.proxyConfigPath != "" {
-		parts = append(parts, "--config-file", shellQuote(b.proxyConfigPath))
-	}
-	parts = append(parts, "remote", "attach", "--", shellQuote(machine), shellQuote(container))
-	return strings.Join(parts, " ")
+func (b *Backend) proxyPaneCommand(machine, container string) (string, error) {
+	return proxy.AttachCommand(proxyBinary(), "tmux", b.proxyConfigPath, machine, container, false)
 }
 
 func proxyBinary() string {
@@ -521,10 +199,10 @@ func proxyBinary() string {
 }
 
 // NewCommandTransport returns the process transport used by the hidden attach
-// command. It is exported for command wiring while tests use ProxyTransport.
-func NewCommandTransport(remote config.RemoteConfig) ProxyTransport {
+// command.
+func NewCommandTransport(remote config.RemoteConfig) proxy.Transport {
 	return commandProxyTransport{config: remote}
 }
 
 var _ capabilities.RemoteProxy = (*Backend)(nil)
-var _ ProxyTransport = commandProxyTransport{}
+var _ proxy.Transport = commandProxyTransport{}

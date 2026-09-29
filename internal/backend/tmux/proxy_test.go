@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/proxy"
 )
 
 type fakeProxyTransport struct {
@@ -52,10 +53,10 @@ func TestRunReconnectResetsBackoffAfterHealthyAttachment(t *testing.T) {
 		if call == 2 {
 			// The second attachment stayed healthy for longer than the reset
 			// period before dropping.
-			clock.now = clock.now.Add(healthyAttachmentPeriod)
+			clock.now = clock.now.Add(proxy.HealthyAttachmentPeriod)
 		}
 	}}
-	if err := RunReconnect(context.Background(), transport, clock, nil, "devbox", "$1", time.Second, 30*time.Second); err != nil {
+	if err := proxy.RunReconnect(context.Background(), transport, clock, nil, "devbox", "$1", time.Second, 30*time.Second); err != nil {
 		t.Fatalf("RunReconnect() error = %v", err)
 	}
 	if want := []time.Duration{time.Second, time.Second, 2 * time.Second}; !reflect.DeepEqual(clock.delays, want) {
@@ -66,7 +67,7 @@ func TestRunReconnectResetsBackoffAfterHealthyAttachment(t *testing.T) {
 func TestRunReconnectDoublesDelayUntilTransportRecovers(t *testing.T) {
 	transport := &fakeProxyTransport{failures: 3}
 	clock := &fakeProxyClock{}
-	if err := RunReconnect(context.Background(), transport, clock, nil, "devbox", "$1", time.Second, 3*time.Second); err != nil {
+	if err := proxy.RunReconnect(context.Background(), transport, clock, nil, "devbox", "$1", time.Second, 3*time.Second); err != nil {
 		t.Fatalf("RunReconnect() error = %v", err)
 	}
 	if transport.calls != 4 {
@@ -82,7 +83,7 @@ func TestRunReconnectQDuringRetryStopsWithoutAnotherAttach(t *testing.T) {
 	clock := &blockingProxyClock{release: make(chan struct{})}
 	result := make(chan error, 1)
 	go func() {
-		result <- RunReconnect(context.Background(), transport, clock, strings.NewReader("q"), "devbox", "$1", time.Second, 30*time.Second)
+		result <- proxy.RunReconnect(context.Background(), transport, clock, strings.NewReader("q"), "devbox", "$1", time.Second, 30*time.Second)
 	}()
 	select {
 	case err := <-result:
@@ -117,7 +118,7 @@ func TestRunReconnectStopsCancelableReaderBeforeNextAttach(t *testing.T) {
 	transport := &fakeProxyTransport{failures: 1}
 	clock := &fakeProxyClock{}
 	input := &blockingProxyInput{closed: make(chan struct{})}
-	if err := RunReconnect(context.Background(), transport, clock, input, "devbox", "$1", time.Second, time.Second); err != nil {
+	if err := proxy.RunReconnect(context.Background(), transport, clock, input, "devbox", "$1", time.Second, time.Second); err != nil {
 		t.Fatalf("RunReconnect() error = %v", err)
 	}
 	if transport.calls != 2 {
@@ -135,7 +136,7 @@ func TestRunReconnectCancelsRealFileReaderWhenTimerWins(t *testing.T) {
 	transport := &fakeProxyTransport{failures: 1}
 	clock := &fakeProxyClock{}
 	started := time.Now()
-	if err := RunReconnect(context.Background(), transport, clock, reader, "devbox", "$1", time.Second, time.Second); err != nil {
+	if err := proxy.RunReconnect(context.Background(), transport, clock, reader, "devbox", "$1", time.Second, time.Second); err != nil {
 		t.Fatalf("RunReconnect() error = %v", err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
@@ -161,7 +162,7 @@ func TestRunReconnectHonorsQAfterOtherKeysDuringOneWait(t *testing.T) {
 	clock := &blockingProxyClock{release: make(chan struct{})}
 	result := make(chan error, 1)
 	go func() {
-		result <- RunReconnect(context.Background(), transport, clock, reader, "devbox", "$1", time.Second, 30*time.Second)
+		result <- proxy.RunReconnect(context.Background(), transport, clock, reader, "devbox", "$1", time.Second, 30*time.Second)
 	}()
 	select {
 	case err := <-result:
@@ -195,7 +196,7 @@ func (t *exitCodeTransport) Attach(context.Context, string, string) error {
 func TestRunReconnectDoesNotRetryRemoteCommandExit(t *testing.T) {
 	transport := &exitCodeTransport{exitCode: 1, failures: 5}
 	clock := &fakeProxyClock{}
-	err := RunReconnect(context.Background(), transport, clock, nil, "devbox", "$1", time.Second, 30*time.Second)
+	err := proxy.RunReconnect(context.Background(), transport, clock, nil, "devbox", "$1", time.Second, 30*time.Second)
 	if err == nil {
 		t.Fatal("RunReconnect() error = nil, want the remote command failure")
 	}
@@ -210,7 +211,7 @@ func TestRunReconnectDoesNotRetryRemoteCommandExit(t *testing.T) {
 func TestRunReconnectRetriesSSHConnectionExit(t *testing.T) {
 	transport := &exitCodeTransport{exitCode: 255, failures: 1}
 	clock := &fakeProxyClock{}
-	if err := RunReconnect(context.Background(), transport, clock, nil, "devbox", "$1", time.Second, 30*time.Second); err != nil {
+	if err := proxy.RunReconnect(context.Background(), transport, clock, nil, "devbox", "$1", time.Second, 30*time.Second); err != nil {
 		t.Fatalf("RunReconnect() error = %v", err)
 	}
 	if transport.calls != 2 {

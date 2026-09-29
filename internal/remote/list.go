@@ -18,30 +18,42 @@ import (
 
 const DefaultMachineTimeout = 5 * time.Second
 
+// Kind identifies the multiplexer running on a remote machine.
+type Kind string
+
 const (
-	agentFrameStart = "__NEXO_AGENTS_START__"
-	agentFrameEnd   = "__NEXO_AGENTS_END__"
+	KindTmux  Kind = "tmux"
+	KindHerdr Kind = "herdr"
+)
+
+const (
+	agentFrameStart      = "__NEXO_AGENTS_START__"
+	agentFrameEnd        = "__NEXO_AGENTS_END__"
+	remoteKindFrameStart = "__NEXO_REMOTE_KIND__"
 )
 
 // MachineResult is one configured machine's listing result. An error does not
 // prevent other machines from being listed.
 type MachineResult struct {
 	Machine    string                   `json:"machine"`
+	Kind       Kind                     `json:"kind,omitempty"`
 	Containers []capabilities.Container `json:"containers,omitempty"`
 	Agents     []capabilities.Agent     `json:"agents,omitempty"`
 	Error      string                   `json:"error,omitempty"`
 }
 
-// Lister runs one selected multiplexer backend's list operation remotely.
+// Lister runs the selected backend locally and decodes the detected remote
+// kind for each machine's listing.
 type Lister struct {
-	Runner    runner.CommandRunner
-	Backend   backend.Kind
-	SSHConfig string
-	Timeout   time.Duration
+	Runner     runner.CommandRunner
+	Backend    backend.Kind
+	SSHConfig  string
+	Timeout    time.Duration
+	DetectKind bool
 }
 
-// NewLister creates an SSH lister. The selected backend is the only backend
-// queried during this invocation, in line with backend selection semantics.
+// NewLister creates an SSH lister. Backend selection controls local decoding;
+// a detected remote kind controls the remote listing command.
 func NewLister(commandRunner runner.CommandRunner, selected backend.Kind, sshConfig string) Lister {
 	return Lister{
 		Runner:    commandRunner,
@@ -49,6 +61,14 @@ func NewLister(commandRunner runner.CommandRunner, selected backend.Kind, sshCon
 		SSHConfig: strings.TrimSpace(sshConfig),
 		Timeout:   DefaultMachineTimeout,
 	}
+}
+
+// WithKindDetection enables the read-only remote multiplexer probe in the
+// listing round trip. The result carries the detected kind for reuse by an
+// opening operation, so no second probe is needed.
+func (l Lister) WithKindDetection() Lister {
+	l.DetectKind = true
+	return l
 }
 
 // ListMachine queries one machine. The timeout bounds both SSH connection and
@@ -87,12 +107,14 @@ func (l Lister) ListMachine(ctx context.Context, machine string) MachineResult {
 		}
 		return result
 	}
+	kind, listing := splitRemoteKind(output, l.Backend)
+	result.Kind = kind
 	var containers []capabilities.Container
-	switch l.Backend {
-	case backend.Tmux:
-		containers, err = decodeTmux(output, machine)
-	case backend.Herdr:
-		containers, err = decodeHerdr(output, machine)
+	switch kind {
+	case KindTmux:
+		containers, err = decodeTmux(listing, machine)
+	case KindHerdr:
+		containers, err = decodeHerdr(listing, machine)
 	}
 	if err != nil {
 		result.Error = normalizeError(err.Error())
@@ -138,12 +160,14 @@ func (l Lister) ListMachineWithAgents(ctx context.Context, machine string) Machi
 		}
 		return result
 	}
-	containerOutput, agentOutput := splitAgentFrame(output)
+	kind, listing := splitRemoteKind(output, l.Backend)
+	result.Kind = kind
+	containerOutput, agentOutput := splitAgentFrame(listing)
 	var containers []capabilities.Container
-	switch l.Backend {
-	case backend.Tmux:
+	switch kind {
+	case KindTmux:
 		containers, err = decodeTmux(containerOutput, machine)
-	case backend.Herdr:
+	case KindHerdr:
 		containers, err = decodeHerdr(containerOutput, machine)
 	}
 	if err != nil {
@@ -164,6 +188,7 @@ func (l Lister) ListMachineWithAgents(ctx context.Context, machine string) Machi
 // List queries all configured machines in parallel. Results retain the input
 // order while each machine's own timeout controls completion.
 func (l Lister) List(ctx context.Context, machines []string) []MachineResult {
+	l.DetectKind = true
 	machines = uniqueMachines(machines)
 	results := make([]MachineResult, len(machines))
 	var wg sync.WaitGroup
@@ -193,28 +218,60 @@ func uniqueMachines(machines []string) []string {
 }
 
 func (l Lister) run(ctx context.Context, machine string) ([]byte, error) {
-	return l.runCommand(ctx, machine, l.backendCommand())
+	if !l.DetectKind {
+		return l.runCommand(ctx, machine, l.backendCommand())
+	}
+	return l.runCommand(ctx, machine, l.remoteListingCommand(false))
 }
 
 func (l Lister) runWithAgents(ctx context.Context, machine string) ([]byte, error) {
-	listing := l.backendCommand()
-	agents := shellCommand("nexo", "--backend", string(l.Backend), "agents", "--json")
-	command := strings.Join([]string{
-		"agent_status=0",
-		listing + " || agent_status=$?",
-		"printf '\\n%s\\n' " + shellCommand(agentFrameStart),
-		agents + " 2>/dev/null || true",
-		"printf '\\n%s\\n' " + shellCommand(agentFrameEnd),
-		"exit $agent_status",
+	if !l.DetectKind {
+		return l.runCommand(ctx, machine, l.backendAgentsCommand())
+	}
+	return l.runCommand(ctx, machine, l.remoteListingCommand(true))
+}
+
+// remoteListingCommand probes the remote server and emits its kind beside the
+// one listing gathered in this SSH round trip. A running Herdr server wins;
+// tmux is the fallback for machines that do not expose Herdr.
+func (l Lister) remoteListingCommand(withAgents bool) string {
+	herdrStatus := shellCommand("herdr", "status", "server", "--json")
+	herdrList := shellCommand("herdr", "workspace", "list")
+	tmuxList := l.backendTmuxCommand()
+	herdrAgents := shellCommand("nexo", "--backend", string(backend.Herdr), "agents", "--json")
+	tmuxAgents := shellCommand("nexo", "--backend", string(backend.Tmux), "agents", "--json")
+	agentFrames := ""
+	if withAgents {
+		agentFrames = "; printf '\\n%s\\n' " + shellCommand(agentFrameStart) + "; AGENT_COMMAND 2>/dev/null || true; printf '\\n%s\\n' " + shellCommand(agentFrameEnd)
+	}
+	// Herdr status exits successfully even when no server is running. Parse its
+	// running field before selecting the one authoritative listing command.
+	return strings.Join([]string{
+		"herdr_running=0",
+		"herdr_status=$(" + herdrStatus + " 2>/dev/null) || herdr_status=''",
+		"herdr_compact=$(printf '%s' \"$herdr_status\" | tr -d '[:space:]')",
+		"case \"$herdr_compact\" in *'\"running\":true'*) herdr_running=1;; esac",
+		"listing_status=0",
+		"if test $herdr_running -eq 1; then listing_output=$(" + herdrList + ") || listing_status=$?; printf '%s\\n' " + shellCommand(remoteKindFrameStart+string(KindHerdr)) + "; printf '%s\\n' \"$listing_output\"" + strings.ReplaceAll(agentFrames, "AGENT_COMMAND", herdrAgents) + "; else listing_output=$(" + tmuxList + ") || listing_status=$?; printf '%s\\n' " + shellCommand(remoteKindFrameStart+string(KindTmux)) + "; printf '%s\\n' \"$listing_output\"" + strings.ReplaceAll(agentFrames, "AGENT_COMMAND", tmuxAgents) + "; fi",
+		"exit $listing_status",
 	}, "; ")
-	return l.runCommand(ctx, machine, command)
+}
+
+func (l Lister) backendTmuxCommand() string {
+	return shellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
 }
 
 func (l Lister) runCommand(ctx context.Context, machine, command string) ([]byte, error) {
 	args := l.sshArgs(machine, command)
 	output, err := l.Runner.Run(ctx, "ssh", args...)
 	if err != nil {
-		if l.Backend == backend.Tmux && isNoServer(err, output) {
+		if isNoServer(err, output) {
+			// Detection emits the kind before tmux reports its no-server status.
+			// Preserve that frame so a stopped tmux machine is a successful empty
+			// listing rather than an incorrectly decoded Herdr result.
+			if l.DetectKind && bytesHasRemoteKind(output) {
+				return output, nil
+			}
 			return []byte{}, nil
 		}
 		if text := strings.TrimSpace(string(output)); text != "" {
@@ -236,6 +293,51 @@ func (l Lister) backendCommand() string {
 	return shellCommand("herdr", "workspace", "list")
 }
 
+func (l Lister) backendAgentsCommand() string {
+	listing := l.backendCommand()
+	agents := shellCommand("nexo", "--backend", string(l.Backend), "agents", "--json")
+	return strings.Join([]string{
+		"agent_status=0",
+		listing + " || agent_status=$?",
+		"printf '\\n%s\\n' " + shellCommand(agentFrameStart),
+		agents + " 2>/dev/null || true",
+		"printf '\\n%s\\n' " + shellCommand(agentFrameEnd),
+		"exit $agent_status",
+	}, "; ")
+}
+
+func splitRemoteKind(output []byte, fallback backend.Kind) (Kind, []byte) {
+	kind := KindTmux
+	if fallback == backend.Herdr {
+		kind = KindHerdr
+	}
+	lines := strings.Split(string(output), "\n")
+	// The kind marker is control data and is valid only as the first non-empty
+	// line emitted by our probe. Never scan listing or optional agent payload.
+	for index, line := range lines {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.TrimSpace(line) == "" && index == 0 {
+			continue
+		}
+		if strings.HasPrefix(line, remoteKindFrameStart) {
+			switch strings.TrimPrefix(line, remoteKindFrameStart) {
+			case string(KindHerdr):
+				kind = KindHerdr
+			case string(KindTmux):
+				kind = KindTmux
+			}
+			lines = append(lines[:index], lines[index+1:]...)
+		}
+		break
+	}
+	return kind, []byte(strings.Join(lines, "\n"))
+}
+
+func bytesHasRemoteKind(output []byte) bool {
+	text := string(output)
+	return strings.Contains(text, remoteKindFrameStart+string(KindTmux)) || strings.Contains(text, remoteKindFrameStart+string(KindHerdr))
+}
+
 func splitAgentFrame(output []byte) (listing, agents []byte) {
 	lines := strings.Split(string(output), "\n")
 	start, end := -1, -1
@@ -246,7 +348,7 @@ func splitAgentFrame(output []byte) (listing, agents []byte) {
 				start = index
 			}
 		case agentFrameEnd:
-			if start >= 0 {
+			if start >= 0 && end < 0 {
 				end = index
 			}
 		}
@@ -254,10 +356,11 @@ func splitAgentFrame(output []byte) (listing, agents []byte) {
 	if start < 0 {
 		return output, nil
 	}
+	listing = []byte(strings.Join(lines[:start], "\n"))
 	if end < 0 || end <= start {
-		return []byte(strings.Join(lines[:start], "\n")), nil
+		return listing, nil
 	}
-	return []byte(strings.Join(lines[:start], "\n")), []byte(strings.Join(lines[start+1:end], "\n"))
+	return listing, []byte(strings.Join(lines[start+1:end], "\n"))
 }
 
 func (l Lister) sshArgs(machine, command string) []string {

@@ -9,10 +9,13 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/vieitesss/nexo/internal/backend"
+	"github.com/vieitesss/nexo/internal/backend/herdr"
 	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/proxy"
 	"github.com/vieitesss/nexo/internal/remote"
 )
 
@@ -72,15 +75,14 @@ func runRemoteOpen(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	container = tmux.CanonicalContainerName(container)
 	if !configuredMachine(invocation.Config.Remote.Machines, machine) {
 		return fmt.Errorf("remote machine %q is not configured", machine)
 	}
-	actions, err := containerActionResolver(invocation).ResolveContainerActions(ctx, machine)
+	result, err := listRemoteMachine(ctx, invocation, machine)
 	if err != nil {
 		return err
 	}
-	return actions.OpenContainer(ctx, container)
+	return openRemoteContainerWithResolver(ctx, invocation, machine, container, result.Kind)
 }
 
 func runRemoteNew(ctx context.Context, invocation Invocation) error {
@@ -91,36 +93,25 @@ func runRemoteNew(ctx context.Context, invocation Invocation) error {
 	if err := validateRemoteMachine(invocation.Config.Remote.Machines, machine); err != nil {
 		return err
 	}
-	name := ""
-	if len(invocation.Args) == 3 {
-		name = strings.TrimSpace(invocation.Args[2])
-	} else {
-		if invocation.Stdout == nil {
-			return errors.New("remote new requires a name when stdout is unavailable")
-		}
-		_, _ = fmt.Fprint(invocation.Stdout, "Remote container name: ")
-		input := invocation.Stdin
-		if input == nil {
-			input = os.Stdin
-		}
-		line, err := bufio.NewReader(input).ReadString('\n')
-		if err != nil && len(line) == 0 {
-			return fmt.Errorf("read remote container name: %w", err)
-		}
-		name = strings.TrimSpace(line)
+	name, err := remoteContainerName(invocation)
+	if err != nil {
+		return err
 	}
-	if name == "" {
-		return errors.New("remote new requires a non-empty name")
+	result, err := listRemoteMachine(ctx, invocation, machine)
+	if err != nil {
+		return err
 	}
-	if strings.ContainsAny(name, "\r\n") {
-		return errors.New("remote container name must be one line")
+	if result.Kind == remote.KindHerdr {
+		if invocation.Selection.Kind != backend.Herdr {
+			return fmt.Errorf("unsupported: %s runs Herdr; use Herdr to open it", machine)
+		}
+		if err := createHerdrRemoteWorkspace(ctx, invocation, machine, name); err != nil {
+			return err
+		}
+		return openRemoteContainerWithResolver(ctx, invocation, machine, name, result.Kind)
 	}
 	if err := tmux.ValidateProxyIdentity(machine, name); err != nil {
 		return err
-	}
-	proxy, ok := invocation.Adapter.(capabilities.RemoteProxy)
-	if !ok {
-		return fmt.Errorf("backend %q does not support remote proxies", invocation.Selection.Kind)
 	}
 	if invocation.Runner == nil {
 		return errors.New("remote new requires a command runner")
@@ -144,6 +135,10 @@ func runRemoteNew(ctx context.Context, invocation Invocation) error {
 	if canonical == "" {
 		canonical = tmux.CanonicalContainerName(name)
 	}
+	proxy, ok := invocation.Adapter.(capabilities.RemoteProxy)
+	if !ok {
+		return fmt.Errorf("backend %q does not support remote proxies", invocation.Selection.Kind)
+	}
 	return proxy.Proxy(ctx, machine, canonical)
 }
 
@@ -157,6 +152,22 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 	target := ""
 	if len(invocation.Args) == 2 {
 		target = invocation.Args[1]
+	} else if invocation.Selection.Kind == backend.Herdr {
+		pane := strings.TrimSpace(os.Getenv("HERDR_PANE_ID"))
+		resolver, ok := invocation.Adapter.(interface {
+			ProxyTarget(context.Context, string) (string, error)
+		})
+		if pane == "" || !ok {
+			return errors.New("remote close requires MACHINE/CONTAINER outside a proxy session")
+		}
+		var err error
+		target, err = resolver.ProxyTarget(ctx, pane)
+		if err != nil {
+			return fmt.Errorf("find current proxy: %w", err)
+		}
+		if strings.TrimSpace(target) == "" {
+			return errors.New("current workspace is not a nexo proxy")
+		}
 	} else {
 		pane := strings.TrimSpace(os.Getenv("TMUX_PANE"))
 		if pane == "" {
@@ -175,10 +186,9 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
+	// Closing is local-only. Do not probe the remote machine: links are often
+	// down precisely when a stale local proxy needs to be removed.
 	container = tmux.CanonicalContainerName(container)
-	if !configuredMachine(invocation.Config.Remote.Machines, machine) {
-		return fmt.Errorf("remote machine %q is not configured", machine)
-	}
 	if _, ok := invocation.Adapter.(capabilities.RemoteProxy); !ok {
 		return fmt.Errorf("backend %q does not support remote proxies", invocation.Selection.Kind)
 	}
@@ -205,33 +215,257 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 }
 
 func runRemoteAttach(ctx context.Context, invocation Invocation) error {
-	if len(invocation.Args) != 3 {
+	fromEnv := len(invocation.Args) == 2 && invocation.Args[1] == "--from-env"
+	if !fromEnv && len(invocation.Args) != 3 {
 		return errors.New("remote attach requires MACHINE CONTAINER")
 	}
-	if invocation.Selection.Kind != backend.Tmux {
+	if fromEnv && invocation.Selection.Kind != backend.Herdr {
+		return errors.New("remote attach --from-env requires the Herdr backend")
+	}
+	if invocation.Selection.Kind != backend.Tmux && invocation.Selection.Kind != backend.Herdr {
+		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
+	}
+	if invocation.Selection.Kind == backend.Herdr && !fromEnv {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
 	if _, ok := invocation.Adapter.(capabilities.RemoteProxy); !ok {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
-	machine := strings.TrimSpace(invocation.Args[1])
-	container := tmux.CanonicalContainerName(strings.TrimSpace(invocation.Args[2]))
-	if err := validateRemoteMachine(invocation.Config.Remote.Machines, machine); err != nil {
-		return err
+	var machine, container string
+	if fromEnv {
+		machine = os.Getenv("NEXO_PROXY_MACHINE")
+		container = os.Getenv("NEXO_PROXY_CONTAINER")
+		if err := herdr.ValidateProxyIdentity(machine, container); err != nil {
+			return err
+		}
+	} else {
+		machine = strings.TrimSpace(invocation.Args[1])
+		container = tmux.CanonicalContainerName(strings.TrimSpace(invocation.Args[2]))
+		if err := validateRemoteMachine(invocation.Config.Remote.Machines, machine); err != nil {
+			return err
+		}
+		if container == "" {
+			return errors.New("remote attach requires a container")
+		}
 	}
-	if container == "" {
-		return errors.New("remote attach requires a container")
+	if invocation.Selection.Kind == backend.Herdr && !configuredMachine(invocation.Config.Remote.Machines, machine) {
+		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
 	transport := tmux.NewCommandTransport(invocation.Config.Remote)
 	if invocation.Config.Remote.EffectiveTransport() != "ssh" {
-		return transport.Attach(ctx, machine, container)
+		attachErr := transport.Attach(ctx, machine, container)
+		if fromEnv {
+			return finishHerdrProxyAttach(invocation, attachErr)
+		}
+		return attachErr
 	}
 	initial, maximum := invocation.Config.Remote.ReconnectDelays()
 	input := invocation.Stdin
 	if input == nil {
 		input = os.Stdin
 	}
-	return tmux.RunReconnect(ctx, transport, nil, input, machine, container, initial, maximum)
+	attachErr := proxy.RunReconnect(ctx, transport, nil, input, machine, container, initial, maximum)
+	if fromEnv {
+		return finishHerdrProxyAttach(invocation, attachErr)
+	}
+	return attachErr
+}
+
+func finishHerdrProxyAttach(invocation Invocation, attachErr error) error {
+	cleanupErr := closeHerdrProxyWorkspace(invocation)
+	if attachErr != nil && cleanupErr != nil {
+		return errors.Join(attachErr, cleanupErr)
+	}
+	if attachErr != nil {
+		return attachErr
+	}
+	return cleanupErr
+}
+
+func closeHerdrProxyWorkspace(invocation Invocation) error {
+	if invocation.Runner == nil {
+		return errors.New("close Herdr proxy workspace requires a command runner")
+	}
+	paneID := strings.TrimSpace(os.Getenv("HERDR_PANE_ID"))
+	if paneID == "" {
+		return errors.New("HERDR_PANE_ID is required to close the Herdr proxy workspace")
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	output, err := invocation.Runner.Run(cleanupCtx, "herdr", "pane", "get", paneID)
+	if err != nil {
+		return fmt.Errorf("find Herdr proxy workspace: %w", err)
+	}
+	workspaceID, err := decodePaneWorkspaceID(output)
+	if err != nil {
+		return err
+	}
+	if _, err := invocation.Runner.Run(cleanupCtx, "herdr", "workspace", "close", workspaceID); err != nil {
+		return fmt.Errorf("close Herdr proxy workspace %s: %w", workspaceID, err)
+	}
+	return nil
+}
+
+func decodePaneWorkspaceID(output []byte) (string, error) {
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	raw := output
+	if json.Unmarshal(output, &envelope) == nil && len(envelope.Result) > 0 && string(envelope.Result) != "null" {
+		raw = envelope.Result
+	}
+	var result struct {
+		Pane struct {
+			WorkspaceID string `json:"workspace_id"`
+		} `json:"pane"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil || strings.TrimSpace(result.Pane.WorkspaceID) == "" {
+		return "", errors.New("herdr proxy pane did not report a workspace id")
+	}
+	return result.Pane.WorkspaceID, nil
+}
+
+func listRemoteMachine(ctx context.Context, invocation Invocation, machine string) (remote.MachineResult, error) {
+	if invocation.Runner == nil {
+		// Keep the adapter seam useful to callers that already resolved a
+		// tmux proxy and do not need a remote probe.
+		return remote.MachineResult{Machine: machine, Kind: remote.KindTmux}, nil
+	}
+	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithKindDetection()
+	result := lister.ListMachine(ctx, machine)
+	if result.Error != "" {
+		return result, fmt.Errorf("list remote machine %q: %s", machine, result.Error)
+	}
+	return result, nil
+}
+
+func remoteContainerName(invocation Invocation) (string, error) {
+	if len(invocation.Args) == 3 {
+		name := strings.TrimSpace(invocation.Args[2])
+		if name == "" {
+			return "", errors.New("remote new requires a non-empty name")
+		}
+		if strings.ContainsAny(name, "\r\n") {
+			return "", errors.New("remote container name must be one line")
+		}
+		return name, nil
+	}
+	if invocation.Stdout == nil {
+		return "", errors.New("remote new requires a name when stdout is unavailable")
+	}
+	_, _ = fmt.Fprint(invocation.Stdout, "Remote container name: ")
+	input := invocation.Stdin
+	if input == nil {
+		input = os.Stdin
+	}
+	line, err := bufio.NewReader(input).ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return "", fmt.Errorf("read remote container name: %w", err)
+	}
+	name := strings.TrimSpace(line)
+	if name == "" {
+		return "", errors.New("remote new requires a non-empty name")
+	}
+	if strings.ContainsAny(name, "\r\n") {
+		return "", errors.New("remote container name must be one line")
+	}
+	return name, nil
+}
+
+func openRemoteContainerWithResolver(ctx context.Context, invocation Invocation, machine, container string, kind remote.Kind) error {
+	if invocation.ContainerResolver != nil {
+		actions, err := invocation.ContainerResolver.ResolveContainerActions(ctx, machine)
+		if err != nil {
+			return err
+		}
+		return actions.OpenContainer(ctx, container)
+	}
+	return openRemoteContainer(ctx, invocation, machine, container, kind)
+}
+
+func openRemoteContainer(ctx context.Context, invocation Invocation, machine, container string, kind remote.Kind) error {
+	switch kind {
+	case remote.KindHerdr:
+		if invocation.Selection.Kind != backend.Herdr {
+			return fmt.Errorf("unsupported: %s runs Herdr; use Herdr to open it", machine)
+		}
+		return openNativeHerdrContainer(ctx, invocation, machine, container)
+	case remote.KindTmux:
+		container = tmux.CanonicalContainerName(container)
+		if err := tmux.ValidateProxyIdentity(machine, container); err != nil {
+			return err
+		}
+		proxy, ok := invocation.Adapter.(capabilities.RemoteProxy)
+		if !ok {
+			return fmt.Errorf("backend %q does not support remote proxies", invocation.Selection.Kind)
+		}
+		return proxy.Proxy(ctx, machine, container)
+	default:
+		return fmt.Errorf("remote machine %q has an unknown multiplexer kind", machine)
+	}
+}
+
+func openNativeHerdrContainer(ctx context.Context, invocation Invocation, machine, container string) error {
+	if invocation.Runner == nil {
+		return errors.New("opening a Herdr remote requires a command runner")
+	}
+	output, err := invocation.Runner.Run(ctx, "herdr", "machine", "list", "--json")
+	if err != nil {
+		return fmt.Errorf("list Herdr machines: %w", err)
+	}
+	if !herdrMachineSaved(output, machine) {
+		if _, err := invocation.Runner.Run(ctx, "herdr", "machine", "add", machine, "--label", machine); err != nil {
+			return fmt.Errorf("save Herdr machine %q: %w", machine, err)
+		}
+		if invocation.Stdout != nil {
+			if _, err := fmt.Fprintf(invocation.Stdout, "saved Herdr machine %s\n", machine); err != nil {
+				return err
+			}
+		}
+	}
+	if invocation.Stdout == nil {
+		return nil
+	}
+	_, err = fmt.Fprintf(invocation.Stdout, "%s is available under %s in Herdr's sidebar\n", container, machine)
+	return err
+}
+
+func herdrMachineSaved(output []byte, machine string) bool {
+	// Herdr 0.9 returns a direct array of saved machine rows. Match the SSH
+	// target, not the display label, and do not treat disabled rows as usable.
+	var rows []struct {
+		Target  string `json:"target"`
+		Enabled *bool  `json:"enabled"`
+	}
+	if err := json.Unmarshal(output, &rows); err != nil {
+		return false
+	}
+	for _, row := range rows {
+		enabled := row.Enabled == nil || *row.Enabled
+		if enabled && strings.TrimSpace(row.Target) == machine {
+			return true
+		}
+	}
+	return false
+}
+
+func createHerdrRemoteWorkspace(ctx context.Context, invocation Invocation, machine, name string) error {
+	if invocation.Runner == nil {
+		return errors.New("remote new requires a command runner")
+	}
+	args := []string{"-o", "BatchMode=yes"}
+	if configPath := strings.TrimSpace(invocation.Config.Remote.SSHConfig); configPath != "" {
+		args = append(args, "-F", configPath)
+	}
+	args = append(args, machine, "herdr workspace create --label "+remoteShellQuote(name))
+	output, err := invocation.Runner.Run(ctx, "ssh", args...)
+	if err != nil {
+		if text := strings.TrimSpace(string(output)); text != "" {
+			return fmt.Errorf("create remote Herdr container: %s", text)
+		}
+		return fmt.Errorf("create remote Herdr container on %s: %w", machine, err)
+	}
+	return nil
 }
 
 func parseRemoteTarget(target string) (string, string, error) {

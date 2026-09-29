@@ -74,8 +74,13 @@ func TestRemoteCloseOnlyKillsLocalProxy(t *testing.T) {
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
 		Adapter:   killer,
-		Runner:    runner.Func(func(context.Context, string, ...string) ([]byte, error) { return nil, nil }),
-		Args:      []string{"close", "devbox/$1"},
+		Runner: runner.Func(func(_ context.Context, name string, _ ...string) ([]byte, error) {
+			if name == "ssh" {
+				t.Fatal("remote close must not probe SSH")
+			}
+			return nil, nil
+		}),
+		Args: []string{"close", "devbox/$1"},
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
