@@ -79,8 +79,31 @@ func TestLoadParsesAgentSettingsAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got.Agents.IdleSeconds != 3 || got.Agents.PollInterval != 2 || len(got.Agents.Processes) != 7 || got.Agents.WorkingPattern["aider"] != "…" {
-		t.Fatalf("Agents = %#v, want defaults and aider pattern", got.Agents)
+	if got.Agents.Notify == nil || !*got.Agents.Notify || got.Agents.Sound || got.Agents.IdleSeconds != 3 || got.Agents.PollInterval != 2 || len(got.Agents.Processes) != 7 || got.Agents.WorkingPattern["aider"] != "…" {
+		t.Fatalf("Agents = %#v, want notification defaults and aider pattern", got.Agents)
+	}
+}
+
+func TestLoadParsesAgentNotificationSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[agents]\nnotify = false\nsound = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Agents.Notify == nil || *got.Agents.Notify || !got.Agents.Sound {
+		t.Fatalf("Agents = %#v, want notify=false and sound=true", got.Agents)
+	}
+}
+
+func TestAgentNotificationDefaultsPreserveProgrammaticFalse(t *testing.T) {
+	enabled := false
+	got := (AgentsConfig{Notify: &enabled}).WithDefaults()
+	if got.Notify == nil || *got.Notify {
+		t.Fatalf("Notify = %#v, want explicit false preserved", got.Notify)
 	}
 }
 
