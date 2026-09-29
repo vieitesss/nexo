@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
 )
@@ -31,6 +33,10 @@ func TestOnlyOneWatcherLockPerServer(t *testing.T) {
 func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 	clock := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	screen := "⠋ working"
+	var blockCapture bool
+	captureEntered := make(chan struct{})
+	releaseCapture := make(chan struct{})
+	var captureOnce sync.Once
 	r := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "tmux":
@@ -41,6 +47,10 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 			case strings.HasPrefix(joined, "display-message"):
 				return []byte("/tmp/tmux-test\n"), nil
 			case strings.HasPrefix(joined, "capture-pane"):
+				if blockCapture {
+					captureOnce.Do(func() { close(captureEntered) })
+					<-releaseCapture
+				}
 				return []byte(screen), nil
 			}
 		case "git":
@@ -83,29 +93,36 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 		t.Fatal("newly stopped pane is seen")
 	}
 
-	if err := source.MarkSeen(context.Background(), "%1"); err != nil {
-		t.Fatal(err)
-	}
-	agents, err = source.ListAgents(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !agents[0].Seen {
-		t.Fatal("focused stopped pane is still unseen")
-	}
-
-	// A watcher process may have a stale in-memory snapshot when the focus
-	// hook process marks the pane seen. Its next poll must merge that update
-	// instead of overwriting it.
+	// A watcher may have a stale snapshot when the focus-hook process marks
+	// the pane seen. Block the watcher in its fake capture runner, mark seen
+	// from a second source, then release the watcher before its state update.
 	watcher := NewAgentSource(r)
 	watcher.SetStateDir(source.stateDir)
 	watcher.SetClock(func() time.Time { return clock })
 	watcher.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 3, PollInterval: 1})
-	agents, err = watcher.ListAgents(context.Background())
-	if err != nil {
+	blockCapture = true
+	watcherDone := make(chan struct{})
+	var watcherAgents []capabilities.Agent
+	var watcherErr error
+	go func() {
+		watcherAgents, watcherErr = watcher.ListAgents(context.Background())
+		close(watcherDone)
+	}()
+	<-captureEntered
+
+	hook := NewAgentSource(r)
+	hook.SetStateDir(source.stateDir)
+	hook.SetClock(func() time.Time { return clock })
+	hook.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 3, PollInterval: 1})
+	if err := hook.MarkSeen(context.Background(), "%1"); err != nil {
 		t.Fatal(err)
 	}
-	if !agents[0].Seen {
-		t.Fatal("watcher poll clobbered focus hook state")
+	close(releaseCapture)
+	<-watcherDone
+	if watcherErr != nil {
+		t.Fatal(watcherErr)
+	}
+	if len(watcherAgents) != 1 || !watcherAgents[0].Seen {
+		t.Fatalf("watcher poll clobbered focus hook state: %#v", watcherAgents)
 	}
 }
