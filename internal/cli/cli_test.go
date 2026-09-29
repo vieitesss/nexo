@@ -1,0 +1,89 @@
+package cli
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/vieitesss/nexo/internal/backend"
+	"github.com/vieitesss/nexo/internal/backend/tmux"
+	"github.com/vieitesss/nexo/internal/commands"
+	"github.com/vieitesss/nexo/internal/runner"
+)
+
+func TestParseGlobalFlagsBeforeAndAfterCommand(t *testing.T) {
+	parsed, err := Parse([]string{"--backend=tmux", "backend", "--json", "-c", "/tmp/nexo.toml"})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if parsed.Command != "backend" || !parsed.JSON || parsed.ConfigPath != "/tmp/nexo.toml" || parsed.Backend == nil || *parsed.Backend != "tmux" {
+		t.Fatalf("parsed = %#v", parsed)
+	}
+}
+
+func TestParseRequiresCommand(t *testing.T) {
+	if _, err := Parse(nil); err == nil {
+		t.Fatal("Parse() error = nil, want missing command")
+	}
+}
+
+func TestRunWithReportsBackendOutsideMultiplexerAsJSON(t *testing.T) {
+	var output, errors strings.Builder
+	status := RunWith([]string{"backend", "--json"}, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("backend command should not invoke an external program")
+		return nil, nil
+	}), backend.MapEnvironment{}, "")
+	if status != 0 {
+		t.Fatalf("status = %d, errors = %q", status, errors.String())
+	}
+	if !strings.Contains(output.String(), `"backend":"none"`) {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+type captureCommand struct {
+	invocation commands.Invocation
+}
+
+func (captureCommand) Name() string { return "capture" }
+
+func (c *captureCommand) Run(_ context.Context, invocation commands.Invocation) error {
+	c.invocation = invocation
+	return nil
+}
+
+func TestRunWithPassesConfigRunnerAndAdapter(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("backend = \"tmux\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	capture := &captureCommand{}
+	registry := commands.NewRegistry()
+	if err := registry.Register(capture); err != nil {
+		t.Fatal(err)
+	}
+	fakeRunner := runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("selected tmux backend should not need an external call")
+		return nil, nil
+	})
+
+	status := RunWithRegistry(registry, []string{"-c", configPath, "capture"}, &strings.Builder{}, &strings.Builder{}, fakeRunner, backend.MapEnvironment{}, "")
+	if status != 0 {
+		t.Fatalf("status = %d", status)
+	}
+	if capture.invocation.Config.Backend != "tmux" {
+		t.Fatalf("config = %#v, want typed config", capture.invocation.Config)
+	}
+	if capture.invocation.Runner == nil {
+		t.Fatal("runner = nil, want injected command runner")
+	}
+	adapter, ok := capture.invocation.Adapter.(*tmux.Backend)
+	if !ok || adapter == nil {
+		t.Fatalf("adapter = %#v, want *tmux.Backend", capture.invocation.Adapter)
+	}
+	if capture.invocation.Selection.Adapter != adapter {
+		t.Fatal("selection adapter and invocation adapter differ")
+	}
+}
