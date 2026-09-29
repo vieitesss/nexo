@@ -692,18 +692,6 @@ func (m Model) hasPlacePath(path string) bool {
 	return false
 }
 
-func (m Model) hasPlacePath(path string) bool {
-	if path == "" {
-		return false
-	}
-	for _, place := range m.places {
-		if place.Path == path {
-			return true
-		}
-	}
-	return false
-}
-
 func searchText(place Place) string {
 	if place.SearchText != "" {
 		return place.SearchText
