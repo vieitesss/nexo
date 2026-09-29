@@ -14,6 +14,7 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
+	"github.com/vieitesss/nexo/internal/remote"
 )
 
 const PlacePickerCommandName = "__place-picker"
@@ -66,6 +67,9 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	model := picker.NewModel(places, theme, picker.NewGitContextLoader(invocation.Runner))
 	if previewCmd != nil {
 		model = model.WithPreviewCommand(previewCmd)
+	}
+	if remoteCmds := remotePlaceCommands(ctx, invocation); len(remoteCmds) > 0 {
+		model = model.WithRemoteCommands(remoteCmds)
 	}
 	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
 	result, err := program.Run()
@@ -164,7 +168,52 @@ func containerActionResolver(invocation Invocation) capabilities.ContainerAction
 	if invocation.ContainerResolver != nil {
 		return invocation.ContainerResolver
 	}
-	return localContainerResolver{adapter: invocation.Adapter}
+	return configuredContainerResolver{
+		local:  localContainerResolver{adapter: invocation.Adapter},
+		remote: configuredRemoteMachines(invocation.Config.Remote.Machines),
+	}
+}
+
+func configuredRemoteMachines(machines []string) map[string]bool {
+	configured := make(map[string]bool, len(machines))
+	for _, machine := range machines {
+		machine = strings.TrimSpace(machine)
+		if machine != "" {
+			configured[machine] = true
+		}
+	}
+	return configured
+}
+
+type configuredContainerResolver struct {
+	local  localContainerResolver
+	remote map[string]bool
+}
+
+func (r configuredContainerResolver) ResolveContainerActions(ctx context.Context, machine string) (capabilities.ContainerActions, error) {
+	if isLocalContainer(machine) {
+		return r.local.ResolveContainerActions(ctx, machine)
+	}
+	if r.remote[machine] {
+		return unsupportedRemoteContainerActions{machine: machine}, nil
+	}
+	return nil, fmt.Errorf("container machine %q is not configured", machine)
+}
+
+type unsupportedRemoteContainerActions struct {
+	machine string
+}
+
+func (a unsupportedRemoteContainerActions) OpenContainer(context.Context, string) error {
+	return fmt.Errorf("opening remote containers is not yet supported for machine %q", a.machine)
+}
+
+func (a unsupportedRemoteContainerActions) RenameContainer(context.Context, string, string) error {
+	return fmt.Errorf("renaming remote containers is not yet supported for machine %q", a.machine)
+}
+
+func (a unsupportedRemoteContainerActions) KillContainer(context.Context, string) error {
+	return fmt.Errorf("killing remote containers is not yet supported for machine %q", a.machine)
 }
 
 // ResolveContainerActions wraps the selected backend as the local machine's
@@ -221,6 +270,27 @@ func (a localContainerActions) KillContainers(ctx context.Context, ids []string)
 
 func isLocalContainer(machine string) bool {
 	return machine == "" || machine == "local" || machine == picker.LocalMachine()
+}
+
+func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
+	if len(invocation.Config.Remote.Machines) == 0 || invocation.Runner == nil {
+		return nil
+	}
+	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig)
+	commands := make([]tea.Cmd, 0, len(invocation.Config.Remote.Machines))
+	seen := make(map[string]bool)
+	for _, configured := range invocation.Config.Remote.Machines {
+		machine := strings.TrimSpace(configured)
+		if machine == "" || seen[machine] {
+			continue
+		}
+		seen[machine] = true
+		commands = append(commands, func() tea.Msg {
+			result := lister.ListMachine(ctx, machine)
+			return picker.RemoteBatch{Machine: result.Machine, Places: picker.ContainerPlaces(result.Containers), Error: result.Error}
+		})
+	}
+	return commands
 }
 
 func previewCommand(ctx context.Context, reader capabilities.ScreenReader, containers []capabilities.Container) func() tea.Msg {

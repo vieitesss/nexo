@@ -12,6 +12,7 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
+	"github.com/vieitesss/nexo/internal/remote"
 )
 
 type listCommand struct{}
@@ -94,6 +95,18 @@ func listPlaces(ctx context.Context, invocation Invocation) error {
 		}
 	}
 	places := append(picker.ProjectPlaces(discovery.Candidates), picker.ContainerPlaces(containers)...)
+	remoteResults := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).List(ctx, invocation.Config.Remote.Machines)
+	for _, result := range remoteResults {
+		if result.Error != "" {
+			if invocation.Stderr != nil {
+				if _, err := fmt.Fprintf(invocation.Stderr, "nexo: warning: %s: %s\n", result.Machine, result.Error); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		places = append(places, picker.ContainerPlaces(result.Containers)...)
+	}
 	if invocation.JSON {
 		return json.NewEncoder(invocation.Stdout).Encode(places)
 	}

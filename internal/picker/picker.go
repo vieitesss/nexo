@@ -61,6 +61,14 @@ type PreviewBatch struct {
 	Previews map[ContainerRef]string
 }
 
+// RemoteBatch is one asynchronous machine listing. Error keeps an unreachable
+// machine visible without turning a partial picker result into a failure.
+type RemoteBatch struct {
+	Machine string
+	Places  []Place
+	Error   string
+}
+
 // Place is the additive item model used by the picker. SearchText and
 // DisplayRemainder keep ranking and rendering independent of filesystem paths;
 // Path and Group remain populated for project places.
@@ -256,6 +264,7 @@ type Row struct {
 	Score      int
 	Expanded   bool
 	ChildCount int
+	Error      string
 	Marked     bool
 	// Depth is one for a group child and greater when the place is nested
 	// below another checkout, such as a linked worktree.
@@ -276,6 +285,7 @@ type group struct {
 	name   string
 	places []Place
 	orders []int
+	error  string
 }
 
 // Model is the Bubble Tea place picker model.
@@ -302,9 +312,12 @@ type Model struct {
 	killReady   bool
 	previewCmd  func() tea.Msg
 
-	gitLoader  GitLoader
-	gitPool    *gitLoadPool
-	gitTimeout time.Duration
+	gitLoader      GitLoader
+	gitPool        *gitLoadPool
+	gitTimeout     time.Duration
+	remoteCmds     []tea.Cmd
+	remoteMachines []string
+	groupErrors    map[groupKey]string
 }
 
 // NewModel constructs a picker model with all groups folded.
@@ -313,12 +326,13 @@ func NewModel(places []Place, theme Theme, loaders ...GitLoader) Model {
 		theme = DefaultTheme
 	}
 	m := Model{
-		places:     append([]Place(nil), places...),
-		theme:      theme,
-		expanded:   make(map[groupKey]bool),
-		collapsed:  make(map[groupKey]bool),
-		marked:     make(map[ContainerRef]bool),
-		gitTimeout: DefaultGitTimeout,
+		places:      append([]Place(nil), places...),
+		theme:       theme,
+		expanded:    make(map[groupKey]bool),
+		collapsed:   make(map[groupKey]bool),
+		marked:      make(map[ContainerRef]bool),
+		groupErrors: make(map[groupKey]string),
+		gitTimeout:  DefaultGitTimeout,
 	}
 	if len(loaders) > 0 && loaders[0] != nil {
 		m.gitLoader = loaders[0]
@@ -340,15 +354,25 @@ func (m Model) WithPreviewCommand(command func() tea.Msg) Model {
 	return m
 }
 
+// WithRemoteCommands starts one Bubble Tea command per configured machine, so
+// a slow machine cannot delay rows from machines that already responded.
+func (m Model) WithRemoteCommands(commands []tea.Cmd) Model {
+	m.remoteCmds = append([]tea.Cmd(nil), commands...)
+	return m
+}
+
 // Init implements tea.Model. Git context and screen previews are started
 // independently of input handling, so opening the picker never waits on I/O.
 func (m Model) Init() tea.Cmd {
-	var commands []tea.Cmd
+	commands := append([]tea.Cmd(nil), m.remoteCmds...)
 	if m.previewCmd != nil {
 		commands = append(commands, m.previewCmd)
 	}
 	if m.gitLoader != nil && m.gitPool != nil {
 		commands = append(commands, newGitContextCommands(m.gitLoader, m.gitPool, m.gitTimeout, m.places))
+	}
+	if len(commands) == 0 {
+		return nil
 	}
 	return tea.Batch(commands...)
 }
@@ -470,6 +494,28 @@ func (m *Model) SetSize(width, height int) {
 	m.width, m.height = width, height
 }
 
+func (m *Model) applyRemoteBatch(batch RemoteBatch) {
+	machine := strings.TrimSpace(batch.Machine)
+	if machine == "" {
+		return
+	}
+	key := GroupKey{Kind: ContainerKind, Name: machine}
+	if m.groupErrors == nil {
+		m.groupErrors = make(map[groupKey]string)
+	}
+	if _, seen := m.groupErrors[key]; !seen {
+		m.remoteMachines = append(m.remoteMachines, machine)
+	}
+	m.groupErrors[key] = batch.Error
+	for _, place := range batch.Places {
+		if place.Machine == "" {
+			place.Machine = machine
+		}
+		m.places = append(m.places, place)
+	}
+	m.rebuild()
+}
+
 // PlaceGroupKey is the grouping identity shared by the picker and scripted
 // place listings. Container affordances use the machine namespace; projects
 // use the configured parent namespace.
@@ -495,7 +541,7 @@ func (m *Model) rebuild() {
 		if !ok {
 			index = len(groups)
 			byKey[key] = index
-			groups = append(groups, group{key: key, name: key.Name})
+			groups = append(groups, group{key: key, name: key.Name, error: m.groupErrors[key]})
 		}
 		groups[index].places = append(groups[index].places, place)
 		groups[index].orders = append(groups[index].orders, order)
@@ -503,11 +549,19 @@ func (m *Model) rebuild() {
 	for index := range groups {
 		groups[index].places, groups[index].orders = nestPlaces(groups[index].places, groups[index].orders)
 	}
+	for _, machine := range m.remoteMachines {
+		key := GroupKey{Kind: ContainerKind, Name: machine}
+		if _, ok := byKey[key]; ok {
+			continue
+		}
+		byKey[key] = len(groups)
+		groups = append(groups, group{key: key, name: machine, error: m.groupErrors[key]})
+	}
 	m.rows = m.rows[:0]
 	query := string(m.query)
 	if query == "" {
 		for _, g := range groups {
-			m.rows = append(m.rows, Row{Kind: HeaderRow, Group: g.name, groupKey: g.key, Expanded: m.expanded[g.key], ChildCount: m.groupCount(groups, g.key)})
+			m.rows = append(m.rows, Row{Kind: HeaderRow, Group: g.name, groupKey: g.key, Expanded: m.expanded[g.key], ChildCount: m.groupCount(groups, g.key), Error: g.error})
 			if m.expanded[g.key] {
 				for index, place := range g.places {
 					if place.Kind != NewContainerKind {
@@ -562,7 +616,7 @@ func (m *Model) rebuild() {
 	for _, hit := range ranked {
 		if !visible[hit.group] && !m.expanded[hit.group] {
 			if !seenFolded[hit.group] {
-				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.Name, groupKey: hit.group, ChildCount: m.groupCount(groups, hit.group)})
+				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.Name, groupKey: hit.group, ChildCount: m.groupCount(groups, hit.group), Error: m.groupErrors[hit.group]})
 				seenFolded[hit.group] = true
 				lastRenderedGroup = hit.group
 			}
@@ -570,13 +624,13 @@ func (m *Model) rebuild() {
 		}
 		if m.collapsed[hit.group] {
 			if lastRenderedGroup != hit.group {
-				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.Name, groupKey: hit.group, ChildCount: m.groupCount(groups, hit.group)})
+				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.Name, groupKey: hit.group, ChildCount: m.groupCount(groups, hit.group), Error: m.groupErrors[hit.group]})
 				lastRenderedGroup = hit.group
 			}
 			continue
 		}
 		if lastRenderedGroup != hit.group {
-			m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.Name, groupKey: hit.group, Expanded: visible[hit.group] || m.expanded[hit.group], ChildCount: m.groupCount(groups, hit.group)})
+			m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.Name, groupKey: hit.group, Expanded: visible[hit.group] || m.expanded[hit.group], ChildCount: m.groupCount(groups, hit.group), Error: m.groupErrors[hit.group]})
 			lastRenderedGroup = hit.group
 		}
 		positions := hit.rem.Positions
@@ -792,6 +846,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.SetPreview(ref, preview)
 		}
 		return m, nil
+	case RemoteBatch:
+		m.applyRemoteBatch(msg)
+		return m, nil
 	case tea.KeyMsg:
 		if m.renameMode {
 			switch {
@@ -989,7 +1046,9 @@ func (m Model) View() string {
 			if label == "." || label == "/" || label == "" {
 				label = row.Group
 			}
-			if row.Expanded {
+			if row.Error != "" {
+				lines = append(lines, m.rowStyle(selected, true).Render(arrow+" "+label+" — "+row.Error))
+			} else if row.Expanded {
 				lines = append(lines, m.rowStyle(selected, true).Render(arrow+" "+label))
 			} else {
 				lines = append(lines, m.rowStyle(selected, true).Render(arrow+" "+label+" ("+itoa(row.ChildCount)+")"))

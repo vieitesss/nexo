@@ -24,6 +24,7 @@ type Config struct {
 	Backend        string `toml:"backend"`
 	ProjectsConfig `toml:",inline"`
 	Agents         AgentsConfig `toml:"agents"`
+	Remote         RemoteConfig `toml:"remote"`
 }
 
 // Load reads a required configuration file.

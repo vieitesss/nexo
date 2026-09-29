@@ -119,6 +119,21 @@ func TestLoadRejectsUnknownTopLevelProjectKey(t *testing.T) {
 	}
 }
 
+func TestLoadParsesRemoteSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[remote]\nmachines = [\"devbox\", \"gpu1\"]\nssh-config = \"/tmp/ssh-config\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(got.Remote, RemoteConfig{Machines: []string{"devbox", "gpu1"}, SSHConfig: "/tmp/ssh-config"}) {
+		t.Fatalf("Remote = %#v, want configured machines", got.Remote)
+	}
+}
+
 func TestLoadParsesBackend(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("backend = \"tmux\"\n"), 0o600); err != nil {
