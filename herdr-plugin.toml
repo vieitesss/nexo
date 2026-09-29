@@ -1,0 +1,34 @@
+id = "nexo"
+name = "nexo"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Open nexo's place picker and agent navigator in Herdr popups."
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "place-picker"
+title = "Open nexo place picker"
+contexts = ["workspace", "tab", "pane"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "place-picker"]
+
+[[actions]]
+id = "agent-navigator"
+title = "Open nexo agent navigator"
+contexts = ["workspace", "tab", "pane"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "agent-navigator"]
+
+[[panes]]
+id = "place-picker"
+title = "nexo places"
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["nexo", "--backend=herdr"]
+
+[[panes]]
+id = "agent-navigator"
+title = "nexo agents"
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["nexo", "--backend=herdr", "agents", "pick"]
