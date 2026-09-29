@@ -15,6 +15,7 @@ type pluginManifest struct {
 	Name            string            `toml:"name"`
 	Version         string            `toml:"version"`
 	MinHerdrVersion string            `toml:"min_herdr_version"`
+	Platforms       []string          `toml:"platforms"`
 	Actions         []pluginAction    `toml:"actions"`
 	Panes           []pluginPane      `toml:"panes"`
 	Events          []pluginEventHook `toml:"events"`
@@ -53,6 +54,9 @@ func TestHerdrPluginManifestDeclaresPopupActions(t *testing.T) {
 	}
 	if manifest.Version == "" || manifest.MinHerdrVersion != "0.9.0" {
 		t.Fatalf("plugin versions = %q/%q, want non-empty/0.9.0", manifest.Version, manifest.MinHerdrVersion)
+	}
+	if !sameStrings(manifest.Platforms, []string{"linux", "macos"}) {
+		t.Fatalf("plugin platforms = %#v, want linux and macos", manifest.Platforms)
 	}
 	if len(manifest.Events) != 0 {
 		t.Fatalf("events = %#v, want no event hooks", manifest.Events)
@@ -106,8 +110,10 @@ func TestHerdrDocsProvidePluginActionKeys(t *testing.T) {
 	for _, snippet := range []string{
 		"key = \"ctrl+s\"\ntype = \"plugin_action\"\ncommand = \"nexo.place-picker\"",
 		"key = \"prefix+a\"\ntype = \"plugin_action\"\ncommand = \"nexo.agent-navigator\"",
-		"herdr plugin install OWNER/REPOSITORY[/SUBDIRECTORY]",
-		"herdr plugin link /path/to/nexo",
+		"herdr plugin install vieitesss/nexo",
+		"herdr plugin link ~/personal/nexo",
+		"existing `nexo` executable",
+		"docs/release.md",
 		"herdr server reload-config",
 	} {
 		if !strings.Contains(docs, snippet) {

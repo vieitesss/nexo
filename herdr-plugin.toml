@@ -3,7 +3,7 @@ name = "nexo"
 version = "0.1.0"
 min_herdr_version = "0.9.0"
 description = "Open nexo's place picker and agent navigator in Herdr popups."
-platforms = ["linux", "macos", "windows"]
+platforms = ["linux", "macos"]
 
 [[actions]]
 id = "place-picker"

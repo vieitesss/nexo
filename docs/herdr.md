@@ -14,17 +14,20 @@ agent notifications, so no event hook is needed.
 
 ## Install or link
 
-For a GitHub release, install the plugin with the repository's GitHub shorthand
-(the optional path is needed when the manifest is in a subdirectory):
+Install the `nexo` binary first and make sure it is on `PATH`; the plugin only
+registers the manifest and invokes the existing `nexo` executable. See
+[docs/release.md](release.md) for nexo installation options.
+
+For the GitHub repository, install the plugin with:
 
 ```sh
-herdr plugin install OWNER/REPOSITORY[/SUBDIRECTORY]
+herdr plugin install vieitesss/nexo
 ```
 
-When developing from a checkout, link that checkout instead:
+When developing from this repository's checkout, link it instead:
 
 ```sh
-herdr plugin link /path/to/nexo
+herdr plugin link ~/personal/nexo
 ```
 
 `herdr plugin install` and `herdr plugin link` register the manifest; neither
