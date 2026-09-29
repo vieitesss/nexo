@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -64,20 +65,24 @@ type PreviewBatch struct {
 // DisplayRemainder keep ranking and rendering independent of filesystem paths;
 // Path and Group remain populated for project places.
 type Place struct {
-	Kind             PlaceKind    `json:"kind"`
-	Path             string       `json:"path,omitempty"`
-	Group            string       `json:"group,omitempty"`
-	Machine          string       `json:"machine,omitempty"`
-	SearchText       string       `json:"search_text,omitempty"`
-	DisplayRemainder string       `json:"display_remainder,omitempty"`
-	ContainerID      string       `json:"container_id,omitempty"`
-	ContainerName    string       `json:"container_name,omitempty"`
-	Preview          string       `json:"preview,omitempty"`
-	Payload          any          `json:"-"`
-	OpenAction       OpenAction   `json:"-"`
-	Git              bool         `json:"git,omitempty"`
-	LinkedWorktree   bool         `json:"linked_worktree,omitempty"`
-	Decorations      []Decoration `json:"decorations,omitempty"`
+	Kind             PlaceKind  `json:"kind"`
+	Path             string     `json:"path,omitempty"`
+	Group            string     `json:"group,omitempty"`
+	Machine          string     `json:"machine,omitempty"`
+	SearchText       string     `json:"search_text,omitempty"`
+	DisplayRemainder string     `json:"display_remainder,omitempty"`
+	ContainerID      string     `json:"container_id,omitempty"`
+	ContainerName    string     `json:"container_name,omitempty"`
+	Preview          string     `json:"preview,omitempty"`
+	Payload          any        `json:"-"`
+	OpenAction       OpenAction `json:"-"`
+	Git              bool       `json:"git,omitempty"`
+	LinkedWorktree   bool       `json:"linked_worktree,omitempty"`
+	// GitContext is populated asynchronously for Git project candidates.
+	GitContext *GitContext `json:"-"`
+	// ParentPath is the primary checkout path for a linked worktree.
+	ParentPath  string       `json:"-"`
+	Decorations []Decoration `json:"decorations,omitempty"`
 }
 
 // ProjectPlaces converts project discovery results into picker places while
@@ -252,6 +257,9 @@ type Row struct {
 	Expanded   bool
 	ChildCount int
 	Marked     bool
+	// Depth is one for a group child and greater when the place is nested
+	// below another checkout, such as a linked worktree.
+	Depth int
 }
 
 // GroupKey identifies a displayed group without conflating project and
@@ -293,19 +301,33 @@ type Model struct {
 	confirmKill bool
 	killReady   bool
 	previewCmd  func() tea.Msg
+
+	gitLoader  GitLoader
+	gitPool    *gitLoadPool
+	gitTimeout time.Duration
 }
 
 // NewModel constructs a picker model with all groups folded.
-func NewModel(places []Place, theme Theme) Model {
+func NewModel(places []Place, theme Theme, loaders ...GitLoader) Model {
 	if theme.Foreground == "" {
 		theme = DefaultTheme
 	}
 	m := Model{
-		places:    append([]Place(nil), places...),
-		theme:     theme,
-		expanded:  make(map[groupKey]bool),
-		collapsed: make(map[groupKey]bool),
-		marked:    make(map[ContainerRef]bool),
+		places:     append([]Place(nil), places...),
+		theme:      theme,
+		expanded:   make(map[groupKey]bool),
+		collapsed:  make(map[groupKey]bool),
+		marked:     make(map[ContainerRef]bool),
+		gitTimeout: DefaultGitTimeout,
+	}
+	if len(loaders) > 0 && loaders[0] != nil {
+		m.gitLoader = loaders[0]
+		concurrency := DefaultGitConcurrency
+		if configured, ok := loaders[0].(gitLoaderSettings); ok {
+			concurrency = configured.GitConcurrency()
+			m.gitTimeout = configured.GitTimeout()
+		}
+		m.gitPool = newGitLoadPool(concurrency)
 	}
 	m.rebuild()
 	return m
@@ -318,12 +340,17 @@ func (m Model) WithPreviewCommand(command func() tea.Msg) Model {
 	return m
 }
 
-// Init implements tea.Model.
+// Init implements tea.Model. Git context and screen previews are started
+// independently of input handling, so opening the picker never waits on I/O.
 func (m Model) Init() tea.Cmd {
-	if m.previewCmd == nil {
-		return nil
+	var commands []tea.Cmd
+	if m.previewCmd != nil {
+		commands = append(commands, m.previewCmd)
 	}
-	return m.previewCmd
+	if m.gitLoader != nil && m.gitPool != nil {
+		commands = append(commands, newGitContextCommands(m.gitLoader, m.gitPool, m.gitTimeout, m.places))
+	}
+	return tea.Batch(commands...)
 }
 
 // Places returns a copy of the model's source places.
@@ -473,6 +500,9 @@ func (m *Model) rebuild() {
 		groups[index].places = append(groups[index].places, place)
 		groups[index].orders = append(groups[index].orders, order)
 	}
+	for index := range groups {
+		groups[index].places, groups[index].orders = nestPlaces(groups[index].places, groups[index].orders)
+	}
 	m.rows = m.rows[:0]
 	query := string(m.query)
 	if query == "" {
@@ -589,6 +619,43 @@ func (m Model) groupHasContainerPlace(key groupKey) bool {
 	return false
 }
 
+func nestPlaces(places []Place, orders []int) ([]Place, []int) {
+	if len(places) < 2 {
+		return places, orders
+	}
+	byPath := make(map[string]int, len(places))
+	for index, place := range places {
+		byPath[place.Path] = index
+	}
+	emitted := make([]bool, len(places))
+	nestedPlaces := make([]Place, 0, len(places))
+	nestedOrders := make([]int, 0, len(places))
+	var appendPlace func(int)
+	appendPlace = func(index int) {
+		if index < 0 || index >= len(places) || emitted[index] {
+			return
+		}
+		emitted[index] = true
+		nestedPlaces = append(nestedPlaces, places[index])
+		nestedOrders = append(nestedOrders, orders[index])
+		for childIndex, candidate := range places {
+			if candidate.ParentPath == places[index].Path {
+				appendPlace(childIndex)
+			}
+		}
+	}
+	for index, place := range places {
+		parentIndex, hasParent := byPath[place.ParentPath]
+		if !hasParent || place.ParentPath == "" || parentIndex == index {
+			appendPlace(index)
+		}
+	}
+	for index := range places {
+		appendPlace(index)
+	}
+	return nestedPlaces, nestedOrders
+}
+
 func (m Model) groupCount(groups []group, key groupKey) int {
 	for _, g := range groups {
 		if g.key == key {
@@ -606,7 +673,23 @@ func (m Model) groupCount(groups []group, key groupKey) int {
 
 func (m Model) placeRow(place Place, score int, positions []int, _ bool) Row {
 	ref := ContainerRef{Machine: place.Machine, ID: place.ContainerID}
-	return Row{Kind: PlaceRow, Group: place.Group, groupKey: placeGroupKey(place), Place: place, Remainder: visibleRemainder(place), Matches: append([]int(nil), positions...), Score: score, Marked: m.marked[ref]}
+	depth := 1
+	if place.ParentPath != "" && m.hasPlacePath(place.ParentPath) {
+		depth = 2
+	}
+	return Row{Kind: PlaceRow, Group: place.Group, groupKey: placeGroupKey(place), Place: place, Remainder: visibleRemainder(place), Matches: append([]int(nil), positions...), Score: score, Marked: m.marked[ref], Depth: depth}
+}
+
+func (m Model) hasPlacePath(path string) bool {
+	if path == "" {
+		return false
+	}
+	for _, place := range m.places {
+		if place.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func searchText(place Place) string {
@@ -671,6 +754,36 @@ var defaultKeyMap = KeyMap{
 // accepting a place.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case GitContextMsg:
+		if msg.Err == nil {
+			for index := range m.places {
+				if m.places[index].Path != msg.Path {
+					continue
+				}
+				value := msg.Context
+				m.places[index].GitContext = &value
+				m.places[index].ParentPath = value.PrimaryPath
+				if value.PrimaryPath != "" {
+					m.places[index].LinkedWorktree = true
+					for _, primary := range m.places {
+						if primary.Path == value.PrimaryPath {
+							// A linked worktree belongs beside its primary
+							// checkout even when discovery assigned a different
+							// group to the two paths.
+							m.places[index].Group = primary.Group
+							m.places[index].DisplayRemainder = projectRemainder(m.places[index].Path, primary.Group)
+							break
+						}
+					}
+				}
+				decoration := value.Decoration()
+				if decoration.Text != "" {
+					m.places[index].Decorations = append(m.places[index].Decorations, decoration)
+				}
+			}
+			m.rebuild()
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.SetSize(msg.Width, msg.Height)
 		return m, nil
@@ -895,6 +1008,12 @@ func (m Model) View() string {
 		spineStyle := m.style(m.theme.Muted)
 		body := m.highlight(row.Remainder, row.Matches, selected)
 		body = strings.ReplaceAll(body, "/", spineStyle.Render(" │ "))
+		for _, decoration := range row.Place.Decorations {
+			if decoration.Text == "" {
+				continue
+			}
+			body += " " + m.decorationStyle(decoration).Render(decoration.Text)
+		}
 		if row.Place.Kind == ContainerKind {
 			mark := "☐"
 			if row.Marked {
@@ -905,7 +1024,11 @@ func (m Model) View() string {
 				body += "  " + spineStyle.Render(preview)
 			}
 		}
-		lines = append(lines, m.rowStyle(selected, false).Render("  ")+spineStyle.Render(spine+" ")+m.rowStyle(selected, false).Render(body))
+		indent := "  "
+		if row.Depth > 1 {
+			indent = strings.Repeat("  ", row.Depth-1) + spineStyle.Render("│ ")
+		}
+		lines = append(lines, m.rowStyle(selected, false).Render(indent)+spineStyle.Render(spine+" ")+m.rowStyle(selected, false).Render(body))
 	}
 	if m.confirmKill {
 		lines = append(lines, queryStyle.Render("kill selected containers? [y/N]"))
@@ -950,6 +1073,17 @@ func normalizeColor(color string) string {
 		return numeric
 	}
 	return color
+}
+
+func (m Model) decorationStyle(decoration Decoration) lipgloss.Style {
+	color := m.theme.Foreground
+	switch decoration.Style {
+	case DecorationMuted:
+		color = m.theme.Muted
+	case DecorationAccent:
+		color = m.theme.Highlight
+	}
+	return m.style(color)
 }
 
 func (m Model) rowStyle(selected, header bool) lipgloss.Style {

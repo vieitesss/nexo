@@ -63,7 +63,7 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	}
 
 	theme := picker.ThemeFromTerminal(ctx, picker.ThemeQuery{Reader: os.Stdin, Writer: os.Stdout}, 100*time.Millisecond)
-	model := picker.NewModel(places, theme)
+	model := picker.NewModel(places, theme, picker.NewGitContextLoader(invocation.Runner))
 	if previewCmd != nil {
 		model = model.WithPreviewCommand(previewCmd)
 	}
