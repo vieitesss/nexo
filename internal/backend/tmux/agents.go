@@ -534,7 +534,7 @@ func (s *Source) Watch(ctx context.Context) error {
 		watchersMu.Unlock()
 		release()
 	}()
-	if err := s.installHooks(ctx); err != nil {
+	if err := s.installHooksQuiet(ctx); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -564,6 +564,14 @@ func (s *Source) Watch(ctx context.Context) error {
 }
 
 func (s *Source) installHooks(ctx context.Context) error {
+	return s.installHooksWithWarning(ctx, true)
+}
+
+func (s *Source) installHooksQuiet(ctx context.Context) error {
+	return s.installHooksWithWarning(ctx, false)
+}
+
+func (s *Source) installHooksWithWarning(ctx context.Context, warnFocusEvents bool) error {
 	focusEvents, err := s.runner.Run(ctx, "tmux", "show-option", "-gqv", "focus-events")
 	if err != nil {
 		return fmt.Errorf("read tmux focus events: %w", err)
@@ -576,7 +584,6 @@ func (s *Source) installHooks(ctx context.Context) error {
 		binary = os.Args[0]
 	}
 	command := focusHookCommand(binary, configPath)
-	hadNexoHook := false
 	for _, hook := range []string{"pane-focus-in", "client-session-changed"} {
 		output, err := s.runner.Run(ctx, "tmux", "show-hooks", "-g", hook)
 		if err != nil {
@@ -584,7 +591,6 @@ func (s *Source) installHooks(ctx context.Context) error {
 		}
 		index := nexoHookIndex(string(output), hook)
 		if index >= 0 {
-			hadNexoHook = true
 			if _, err := s.runner.Run(ctx, "tmux", "set-hook", "-g", fmt.Sprintf("%s[%d]", hook, index), command); err != nil {
 				return err
 			}
@@ -594,7 +600,7 @@ func (s *Source) installHooks(ctx context.Context) error {
 			return err
 		}
 	}
-	if !focusEventsEnabled && !hadNexoHook {
+	if !focusEventsEnabled && warnFocusEvents {
 		const warning = "nexo: agent seen-marking needs 'set -g focus-events on'"
 		if _, err := s.runner.Run(ctx, "tmux", "display-message", warning); err != nil {
 			return fmt.Errorf("report tmux focus events requirement: %w", err)

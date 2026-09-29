@@ -409,6 +409,77 @@ func TestTmuxAdapterFocusEventsOffPreserved(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(focus)) != "off" {
 		t.Fatalf("focus-events after Init/Watch = %q, err = %v, want off", focus, err)
 	}
+	// Init must warn again even though the first run already installed nexo's
+	// hooks. The option remains off; nexo never changes it.
+	if output, err := runTmux("run-shell", command); err != nil {
+		t.Fatalf("run adapter with existing hooks: %v\n%s", err, output)
+	}
+	time.Sleep(500 * time.Millisecond)
+	focus, err = runTmux("show-option", "-gqv", "focus-events")
+	if err != nil || strings.TrimSpace(string(focus)) != "off" {
+		t.Fatalf("focus-events after repeated Init = %q, err = %v, want off", focus, err)
+	}
+	for _, hook := range []string{"pane-focus-in", "client-session-changed"} {
+		output, err := runTmux("show-hooks", "-g", hook)
+		if err != nil || !strings.Contains(string(output), "NEXO_AGENT_FOCUS_HOOK=1") {
+			t.Fatalf("%s after repeated Init = %q, err = %v, want nexo hook", hook, output, err)
+		}
+	}
+}
+
+func TestTmuxAdapterUnverifiedLegacyBindingPreserved(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for _, name := range []string{"TMUX", "TMUX_PANE", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"} {
+		_ = os.Unsetenv(name)
+	}
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "nexo")
+	build := exec.CommandContext(ctx, "go", "build", "-o", binary, "./cmd/nexo")
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build nexo: %v\n%s", err, output)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[tmux]\nplace-key = \"C-x\"\nagent-key = \"none\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := fmt.Sprintf("nexo-unverified-%d", time.Now().UnixNano())
+	runTmux := func(args ...string) ([]byte, error) {
+		commandArgs := append([]string{"-L", server, "-f", "/dev/null"}, args...)
+		return exec.CommandContext(ctx, "tmux", commandArgs...).CombinedOutput()
+	}
+	if output, err := runTmux("new-session", "-d", "-s", "work", "sleep", "60"); err != nil {
+		t.Fatalf("create throwaway tmux server: %v\n%s", err, output)
+	}
+	defer func() { _, _ = runTmux("kill-server") }()
+	if output, err := runTmux("bind-key", "-n", "C-s", "display-message", "legacy user binding"); err != nil {
+		t.Fatalf("install legacy binding: %v\n%s", err, output)
+	}
+	if output, err := runTmux("set-option", "-g", placeBindingOption, "root:C-s"); err != nil {
+		t.Fatalf("install legacy record: %v\n%s", err, output)
+	}
+	command := fmt.Sprintf("%s --backend=tmux --config-file=%s tmux init", shellQuote(binary), shellQuote(configPath))
+	if output, err := runTmux("run-shell", command); err != nil {
+		t.Fatalf("run adapter: %v\n%s", err, output)
+	}
+	time.Sleep(500 * time.Millisecond)
+	oldBinding, _ := runTmux("list-keys", "-T", "root", "C-s")
+	newBinding, _ := runTmux("list-keys", "-T", "root", "C-x")
+	if !strings.Contains(string(oldBinding), "legacy user binding") {
+		t.Fatalf("legacy binding = %q, want preserved binding", oldBinding)
+	}
+	if !strings.Contains(string(newBinding), "display-popup") {
+		t.Fatalf("configured binding = %q, want nexo popup", newBinding)
+	}
 }
 
 func TestTmuxAdapterSpecialKeys(t *testing.T) {

@@ -105,6 +105,49 @@ func TestBindingRecordRoundTripsExactLine(t *testing.T) {
 	}
 }
 
+func TestInitWarnsAndContinuesForUnverifiedRecordedBinding(t *testing.T) {
+	placeLine := "bind-key -T root C-x display-popup -E -h 80% -w 80% -x C -y C \"" + pickerCommand("") + "\"\n"
+	runner := &fakeRunner{
+		outputs: map[string][]byte{
+			"show-option -gqv @nexo-place-key": []byte("root:C-s\n"),
+			"show-option -gqv focus-events":    []byte("on\n"),
+		},
+		sequences: map[string][][]byte{
+			"list-keys -T root C-x": {nil, []byte(placeLine)},
+		},
+	}
+	if err := New(runner, true).Init(context.Background(), InitInput{Config: config.TmuxConfig{PlaceKey: "C-x", AgentKey: "none"}}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if !hasCall(runner.calls, "display-message", "nexo: couldn't verify its previous binding for key \"C-s\"; left it alone") {
+		t.Fatalf("calls = %#v, want unverified-binding warning", runner.calls)
+	}
+	if !hasCall(runner.calls, "bind-key", "-n", "C-x") {
+		t.Fatalf("calls = %#v, want configured key installed", runner.calls)
+	}
+	for _, current := range runner.calls {
+		if current.name == "tmux" && len(current.args) >= 4 && current.args[0] == "unbind-key" {
+			t.Fatalf("calls = %#v, want no unbind for unverified record", runner.calls)
+		}
+	}
+}
+
+func TestInitWarnsForUnverifiedBindingWhenHooksAlreadyExist(t *testing.T) {
+	hook := "pane-focus-in[0] run-shell \"NEXO_AGENT_FOCUS_HOOK=1 'nexo' --backend='tmux' agents seen #{pane_id}\"\n"
+	sessionHook := "client-session-changed[0] run-shell \"NEXO_AGENT_FOCUS_HOOK=1 'nexo' --backend='tmux' agents seen #{pane_id}\"\n"
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"show-option -gqv focus-events":        []byte("off\n"),
+		"show-hooks -g pane-focus-in":          []byte(hook),
+		"show-hooks -g client-session-changed": []byte(sessionHook),
+	}}
+	if err := New(runner, true).Init(context.Background(), InitInput{Config: config.TmuxConfig{PlaceKey: "none", AgentKey: "none"}}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if !hasCall(runner.calls, "display-message", "nexo: agent seen-marking needs 'set -g focus-events on'") {
+		t.Fatalf("calls = %#v, want focus-events warning with existing hooks", runner.calls)
+	}
+}
+
 func TestInitRejectsRecordedUnsupportedTable(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"show-option -gqv @nexo-place-key": []byte("custom:C-s\n"),
