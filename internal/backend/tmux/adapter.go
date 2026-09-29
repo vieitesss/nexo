@@ -39,10 +39,11 @@ func (b *Backend) Init(ctx context.Context, input InitInput) error {
 	if err := b.bind(ctx, "", "prefix", agentBindingOption, cfg.AgentKey, "tmux.agent-key", agentCommand, cfg); err != nil {
 		return err
 	}
+	b.agents.ConfigureHookCommand(os.Args[0], input.ConfigPath)
 	if err := b.agents.installHooks(ctx); err != nil {
 		return err
 	}
-	if _, err := b.run(ctx, "run-shell", "-b", "nexo --backend=tmux agents watch"); err != nil {
+	if _, err := b.run(ctx, "run-shell", "-b", watcherCommand(input.ConfigPath)); err != nil {
 		return fmt.Errorf("start tmux agent watcher: %w", err)
 	}
 	return nil
@@ -106,7 +107,7 @@ func (b *Backend) bind(ctx context.Context, mode, table, option, key, configOpti
 	if mode != "" {
 		bindArgs = append(bindArgs, mode)
 	}
-	bindArgs = append(bindArgs, key, "display-popup", "-E", "-w", cfg.PopupWidth, "-h", cfg.PopupHeight, "-x", cfg.PopupX, "-y", cfg.PopupY, command)
+	bindArgs = append(bindArgs, tmuxKey(key), "display-popup", "-E", "-w", cfg.PopupWidth, "-h", cfg.PopupHeight, "-x", cfg.PopupX, "-y", cfg.PopupY, command)
 	if _, err := b.run(ctx, "bind-key", bindArgs...); err != nil {
 		return err
 	}
@@ -114,7 +115,7 @@ func (b *Backend) bind(ctx context.Context, mode, table, option, key, configOpti
 }
 
 func (b *Backend) currentBinding(ctx context.Context, table, key string) (string, bool, error) {
-	binding, err := b.run(ctx, "list-keys", "-T", table, key)
+	binding, err := b.run(ctx, "list-keys", "-T", table, tmuxKey(key))
 	if err != nil {
 		// tmux exits non-zero when a key is not bound. Other failures (for
 		// example, a missing server) must not be mistaken for ownership.
@@ -138,10 +139,81 @@ func isMissingKey(err error) bool {
 }
 
 func isNexoBinding(binding string) bool {
-	return strings.Contains(binding, "NEXO_PLACE_PICKER_INLINE=1") ||
-		strings.Contains(binding, "NEXO_AGENT_NAVIGATOR_INLINE=1") ||
-		strings.Contains(binding, "nexo --backend=tmux") ||
-		strings.Contains(binding, "nexo --backend tmux")
+	words := tmuxWords(binding)
+	for index, word := range words {
+		if word != "display-popup" || index+1 >= len(words) {
+			continue
+		}
+		command := tmuxWords(words[len(words)-1])
+		if len(command) < 3 || command[2] != "--backend=tmux" {
+			continue
+		}
+		if command[0] == "NEXO_PLACE_PICKER_INLINE=1" && validConfigArgs(command[3:]) {
+			return true
+		}
+		if command[0] == "NEXO_AGENT_NAVIGATOR_INLINE=1" && len(command) >= 5 && command[len(command)-2] == "agents" && command[len(command)-1] == "pick" && validConfigArgs(command[3:len(command)-2]) {
+			return true
+		}
+	}
+	return false
+}
+
+// tmuxWords tokenizes the command serialization returned by list-keys. It is
+// deliberately small: tmux's quoting is sufficient here because we only need
+// to distinguish the final display-popup command from arbitrary user text.
+func validConfigArgs(args []string) bool {
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "--config-file=") {
+			return false
+		}
+	}
+	return true
+}
+
+func tmuxWords(value string) []string {
+	var words []string
+	var word strings.Builder
+	var quote byte
+	escaped := false
+	flush := func() {
+		if word.Len() > 0 {
+			words = append(words, word.String())
+			word.Reset()
+		}
+	}
+	for i := 0; i < len(value); i++ {
+		char := value[i]
+		if escaped {
+			word.WriteByte(char)
+			escaped = false
+			continue
+		}
+		if quote == '"' && char == '\\' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if char == quote {
+				quote = 0
+			} else {
+				word.WriteByte(char)
+			}
+			continue
+		}
+		switch char {
+		case '\'', '"':
+			quote = char
+		case ' ', '\t', '\r', '\n':
+			flush()
+		default:
+			word.WriteByte(char)
+		}
+	}
+	if escaped {
+		word.WriteByte('\\')
+	}
+	flush()
+	return words
 }
 
 func (b *Backend) reportConflict(ctx context.Context, table, key, configOption string) error {
@@ -172,24 +244,25 @@ func (b *Backend) recordedBinding(ctx context.Context, option, defaultTable stri
 	if !ok {
 		return defaultTable, normalizeKey(value), nil
 	}
+	if table != "root" && table != "prefix" {
+		return "", "", fmt.Errorf("unsupported recorded tmux key table %q", table)
+	}
 	return table, normalizeKey(key), nil
 }
 
 func (b *Backend) recordBinding(ctx context.Context, option, table, key string) error {
 	value := table + ":" + key
-	if _, err := b.run(ctx, "set-option", "-g", option, value); err != nil {
+	if _, err := b.run(ctx, "set-option", "-g", option, tmuxKey(value)); err != nil {
 		return fmt.Errorf("record tmux binding: %w", err)
 	}
 	return nil
 }
 
 func (b *Backend) unbind(ctx context.Context, table, key string) error {
-	args := []string{}
-	if table == "root" {
-		args = append(args, "-n")
+	if table != "root" && table != "prefix" {
+		return fmt.Errorf("unsupported tmux key table %q", table)
 	}
-	args = append(args, key)
-	if _, err := b.run(ctx, "unbind-key", args...); err != nil {
+	if _, err := b.run(ctx, "unbind-key", "-T", table, tmuxKey(key)); err != nil {
 		return fmt.Errorf("remove previous tmux binding: %w", err)
 	}
 	return nil
@@ -209,6 +282,18 @@ func agentPickerCommand(configPath string) string {
 		command += " --config-file=" + shellQuote(configPath)
 	}
 	return command + " agents pick"
+}
+
+func watcherCommand(configPath string) string {
+	command := fmt.Sprintf("%s --backend=%s", shellQuote(os.Args[0]), shellQuote("tmux"))
+	if configPath != "" {
+		command += " --config-file=" + shellQuote(configPath)
+	}
+	return command + " agents watch"
+}
+
+func tmuxKey(key string) string {
+	return strings.ReplaceAll(key, ";", `\;`)
 }
 
 func shellQuote(value string) string {

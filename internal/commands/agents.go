@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -33,6 +34,11 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 		case "pick":
 			return runAgentPicker(ctx, invocation)
 		case "watch":
+			if configurable, ok := invocation.Adapter.(interface {
+				ConfigureAgentCommand(string, string)
+			}); ok {
+				configurable.ConfigureAgentCommand(os.Args[0], invocation.ConfigPath)
+			}
 			if watcher, ok := invocation.Adapter.(interface{ WatchAgents(context.Context) error }); ok {
 				return watcher.WatchAgents(ctx)
 			}
