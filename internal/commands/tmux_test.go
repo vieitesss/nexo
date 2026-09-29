@@ -5,15 +5,18 @@ import (
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/backend"
+	tmuxbackend "github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/config"
 )
 
 type fakeTmuxInitializer struct {
-	config config.TmuxConfig
+	config     config.TmuxConfig
+	configPath string
 }
 
-func (f *fakeTmuxInitializer) Init(_ context.Context, cfg config.TmuxConfig) error {
-	f.config = cfg
+func (f *fakeTmuxInitializer) Init(_ context.Context, input tmuxbackend.InitInput) error {
+	f.config = input.Config
+	f.configPath = input.ConfigPath
 	return nil
 }
 
@@ -27,15 +30,16 @@ func TestTmuxInitPassesTmuxConfigToAdapter(t *testing.T) {
 	}
 	cfg := config.TmuxConfig{PlaceKey: "C-x"}
 	if err := command.Run(context.Background(), Invocation{
-		Selection: backend.Selection{Kind: backend.Tmux},
-		Config:    config.Config{Tmux: cfg},
-		Adapter:   initializer,
-		Args:      []string{"init"},
+		Selection:  backend.Selection{Kind: backend.Tmux},
+		Config:     config.Config{Tmux: cfg},
+		ConfigPath: "/tmp/nexo.toml",
+		Adapter:    initializer,
+		Args:       []string{"init"},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if initializer.config.PlaceKey != "C-x" {
-		t.Fatalf("config = %#v, want tmux settings", initializer.config)
+	if initializer.config.PlaceKey != "C-x" || initializer.configPath != "/tmp/nexo.toml" {
+		t.Fatalf("input = %#v, want tmux settings and config path", initializer)
 	}
 }
 

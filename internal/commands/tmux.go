@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/vieitesss/nexo/internal/backend"
+	tmuxbackend "github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/config"
 )
 
@@ -25,7 +26,7 @@ func (tmuxCommand) Run(ctx context.Context, invocation Invocation) error {
 		return errors.New("tmux init requires the tmux backend")
 	}
 	initializer, ok := invocation.Adapter.(interface {
-		Init(context.Context, config.TmuxConfig) error
+		Init(context.Context, tmuxbackend.InitInput) error
 	})
 	if !ok {
 		return errors.New("selected backend does not support tmux adapter initialization")
@@ -33,5 +34,5 @@ func (tmuxCommand) Run(ctx context.Context, invocation Invocation) error {
 	if configurable, ok := invocation.Adapter.(interface{ ConfigureAgents(config.AgentsConfig) }); ok {
 		configurable.ConfigureAgents(invocation.Config.Agents)
 	}
-	return initializer.Init(ctx, invocation.Config.Tmux)
+	return initializer.Init(ctx, tmuxbackend.InitInput{Config: invocation.Config.Tmux, ConfigPath: invocation.ConfigPath})
 }

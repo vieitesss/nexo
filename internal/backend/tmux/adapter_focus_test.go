@@ -22,7 +22,7 @@ func (r *focusEventsRunner) Run(ctx context.Context, name string, args ...string
 func TestInitLeavesExistingFocusEventsEnabled(t *testing.T) {
 	runner := &focusEventsRunner{}
 	backend := New(runner, true)
-	if err := backend.Init(context.Background(), config.TmuxConfig{}); err != nil {
+	if err := backend.Init(context.Background(), InitInput{Config: config.TmuxConfig{}}); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
 	for _, current := range runner.calls {
