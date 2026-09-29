@@ -216,12 +216,22 @@ func tmuxOwnsTTY(ctx context.Context, tty string, commandRunner runner.CommandRu
 // WithCapabilities attaches the selected backend adapter and reports the
 // capabilities it implements. The adapter itself is passed to commands so a
 // feature can type-assert the small interfaces it needs.
-func (s Selection) WithCapabilities(commandRunner runner.CommandRunner) Selection {
+func (s Selection) WithCapabilities(commandRunner runner.CommandRunner, environments ...Environment) Selection {
 	s.Capabilities = []string{}
 	s.Adapter = nil
 	switch s.Kind {
 	case Tmux:
-		s.Adapter = tmux.New(commandRunner)
+		inside := os.Getenv("TMUX") != "" || os.Getenv("TMUX_PANE") != ""
+		if len(environments) > 0 && environments[0] != nil {
+			inside = false
+			if value, ok := environments[0].LookupEnv("TMUX"); ok && value != "" {
+				inside = true
+			}
+			if value, ok := environments[0].LookupEnv("TMUX_PANE"); ok && value != "" {
+				inside = true
+			}
+		}
+		s.Adapter = tmux.New(commandRunner, inside)
 	case Herdr:
 		s.Adapter = herdr.New(commandRunner)
 	}

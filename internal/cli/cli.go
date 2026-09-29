@@ -147,7 +147,7 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		writeError(stderr, err)
 		return 2
 	}
-	selection = selection.WithCapabilities(commandRunner)
+	selection = selection.WithCapabilities(commandRunner, environment)
 	if err := command.Run(context.Background(), commands.Invocation{
 		Selection: selection,
 		Config:    cfg,
