@@ -40,8 +40,30 @@ func TestAgentSourceMapsNativeStatuses(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("agents = %#v, want %#v", got, want)
 	}
-	if !reflect.DeepEqual(runner.calls, []call{{name: "herdr", args: []string{"agent", "list"}}}) {
-		t.Fatalf("calls = %#v, want only native agent list", runner.calls)
+	wantCalls := []call{
+		{name: "herdr", args: []string{"agent", "list"}},
+		{name: "herdr", args: []string{"workspace", "list"}},
+		{name: "herdr", args: []string{"tab", "list"}},
+	}
+	if !reflect.DeepEqual(runner.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want read-only location lists: %#v", runner.calls, wantCalls)
+	}
+}
+
+func TestAgentSourceFillsLocationLabels(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"agent list":     []byte(`{"result":{"type":"agent_list","agents":[{"pane_id":"w:p1","workspace_id":"w1","tab_id":"w1:t1","agent":"pi","agent_status":"working","state_change_seq":1}]}}`),
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"project"}]}}`),
+		"tab list":       []byte(`{"result":{"type":"tab_list","tabs":[{"workspace_id":"w1","tab_id":"w1:t1","label":"editor"}]}}`),
+	}}
+	source := NewAgentSource(runner)
+	source.SetStateDir(t.TempDir())
+	got, err := source.ListAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ListAgents() error = %v", err)
+	}
+	if got[0].Container != "project" || got[0].Window != "editor" {
+		t.Fatalf("location = %#v, want project/editor", got[0])
 	}
 }
 
@@ -179,6 +201,8 @@ func TestAgentSourceFillsBranchFromForegroundCWD(t *testing.T) {
 	}
 	wantCalls := []call{
 		{name: "herdr", args: []string{"agent", "list"}},
+		{name: "herdr", args: []string{"workspace", "list"}},
+		{name: "herdr", args: []string{"tab", "list"}},
 		{name: "git", args: []string{"-C", "/work/repo/worktree", "branch", "--show-current"}},
 	}
 	if !reflect.DeepEqual(runner.calls, wantCalls) {

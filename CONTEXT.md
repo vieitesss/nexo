@@ -113,3 +113,8 @@ The picker that lists every agent pane, unseen-stopped first, and jumps to
 the chosen one. Separate from the place picker because it answers "who needs
 me?", not "where do I go?".
 _Avoid_: popup, switcher
+
+**Agent display labels**:
+Optional backend-neutral `container` and `window` labels shown by the agent
+navigator. They are display values only; `target` remains opaque and is passed
+to the selected backend for focus.

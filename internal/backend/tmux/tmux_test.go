@@ -18,6 +18,7 @@ type call struct {
 type fakeRunner struct {
 	calls            []call
 	interactiveCalls int
+	interactiveCheck func()
 	fail             map[string]error
 }
 
@@ -33,6 +34,9 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 func (f *fakeRunner) RunInteractive(_ context.Context, name string, args ...string) error {
 	f.interactiveCalls++
 	f.calls = append(f.calls, call{name: name, args: append([]string(nil), args...)})
+	if f.interactiveCheck != nil {
+		f.interactiveCheck()
+	}
 	key := strings.Join(args, " ")
 	return f.fail[key]
 }
@@ -98,6 +102,69 @@ func TestOpenProjectReportsTypedTmuxErrorWithStderr(t *testing.T) {
 	var tmuxErr *Error
 	if !errors.As(err, &tmuxErr) || !strings.Contains(tmuxErr.Stderr, "permission denied") {
 		t.Fatalf("error = %v, want typed error carrying stderr", err)
+	}
+}
+
+func seedStoppedAgent(t *testing.T, backend *Backend, paneID string) {
+	t.Helper()
+	backend.agents.SetStateDir(t.TempDir())
+	backend.agents.server = "test-server"
+	if err := backend.agents.updateStates(func(states map[string]agentState) error {
+		states[paneID] = agentState{State: "stopped"}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed agent state: %v", err)
+	}
+}
+
+func TestFocusPaneSwitchesContainerWindowAndPaneByExactID(t *testing.T) {
+	runner := &fakeRunner{}
+	backend := New(runner, true)
+	seedStoppedAgent(t, backend, "%7")
+	if err := backend.FocusPane(context.Background(), "%7"); err != nil {
+		t.Fatalf("FocusPane() error = %v", err)
+	}
+	want := []call{
+		{name: "tmux", args: []string{"switch-client", "-t", "%7"}},
+		{name: "tmux", args: []string{"select-window", "-t", "%7"}},
+		{name: "tmux", args: []string{"select-pane", "-t", "%7"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+	states, err := backend.agents.readStates()
+	if err != nil || !states["%7"].Seen {
+		t.Fatalf("agent state after focus = %#v, err=%v; want seen", states["%7"], err)
+	}
+}
+
+func TestFocusPaneSelectsAndAttachesOutsideTmux(t *testing.T) {
+	runner := &fakeRunner{}
+	backend := New(runner, false)
+	seedStoppedAgent(t, backend, "%7")
+	seenBeforeAttach := false
+	runner.interactiveCheck = func() {
+		states, err := backend.agents.readStates()
+		if err == nil {
+			seenBeforeAttach = states["%7"].Seen
+		}
+	}
+	if err := backend.FocusPane(context.Background(), "%7"); err != nil {
+		t.Fatalf("FocusPane() error = %v", err)
+	}
+	want := []call{
+		{name: "tmux", args: []string{"select-window", "-t", "%7"}},
+		{name: "tmux", args: []string{"select-pane", "-t", "%7"}},
+		{name: "tmux", args: []string{"attach-session", "-t", "%7"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+	if runner.interactiveCalls != 1 {
+		t.Fatalf("interactive calls = %d, want one attach", runner.interactiveCalls)
+	}
+	if !seenBeforeAttach {
+		t.Fatal("agent was not marked seen before blocking attach")
 	}
 }
 

@@ -37,7 +37,23 @@ func (b *Backend) ListAgents(ctx context.Context) ([]capabilities.Agent, error) 
 	return b.agents.ListAgents(ctx)
 }
 
+// FocusPane focuses the exact agent pane ID through Herdr's agent command.
+// Herdr accepts pane IDs as agent targets and marks the pane seen as part of
+// the native focus operation.
+func (b *Backend) FocusPane(ctx context.Context, paneID string) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("herdr pane focuser requires a command runner")
+	}
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return errors.New("herdr pane focuser requires a pane id")
+	}
+	_, err := b.run(ctx, "agent", "focus", paneID)
+	return err
+}
+
 var _ capabilities.AgentSource = (*Backend)(nil)
+var _ capabilities.PaneFocuser = (*Backend)(nil)
 
 // Name identifies this backend.
 func (Backend) Name() string { return "herdr" }

@@ -301,4 +301,38 @@ func (b *Backend) WatchAgents(ctx context.Context) error {
 	return b.agents.Watch(ctx)
 }
 
+// FocusPane switches to the exact tmux pane target. Each operation receives
+// the pane ID so tmux resolves its owning container and window before the
+// final pane selection.
+func (b *Backend) FocusPane(ctx context.Context, paneID string) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("tmux pane focuser requires a command runner")
+	}
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return errors.New("tmux pane focuser requires a pane id")
+	}
+	if b.Inside {
+		for _, operation := range []string{"switch-client", "select-window", "select-pane"} {
+			if _, err := b.run(ctx, operation, "-t", paneID); err != nil {
+				return err
+			}
+		}
+		if err := b.MarkAgentSeen(ctx, paneID); err != nil {
+			return err
+		}
+		return nil
+	}
+	for _, operation := range []string{"select-window", "select-pane"} {
+		if _, err := b.run(ctx, operation, "-t", paneID); err != nil {
+			return err
+		}
+	}
+	if err := b.MarkAgentSeen(ctx, paneID); err != nil {
+		return err
+	}
+	return b.runInteractive(ctx, "attach-session", "-t", paneID)
+}
+
 var _ capabilities.AgentSource = (*Backend)(nil)
+var _ capabilities.PaneFocuser = (*Backend)(nil)

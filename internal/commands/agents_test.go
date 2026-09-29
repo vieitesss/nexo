@@ -3,10 +3,13 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/capabilities"
 )
 
@@ -16,6 +19,38 @@ type fakeAgentSource struct {
 
 func (f fakeAgentSource) ListAgents(context.Context) ([]capabilities.Agent, error) {
 	return f.agents, nil
+}
+
+type fakeAgentPopup struct {
+	command string
+}
+
+func (f *fakeAgentPopup) ShowPopup(_ context.Context, command string) error {
+	f.command = command
+	return nil
+}
+
+func (f *fakeAgentPopup) ListAgents(context.Context) ([]capabilities.Agent, error) { return nil, nil }
+
+func TestAgentsPickOpensNavigatorInPopup(t *testing.T) {
+	popup := &fakeAgentPopup{}
+	command, ok := NewRegistry().Lookup("agents")
+	if !ok {
+		t.Fatal("agents command is not registered")
+	}
+	if err := command.Run(context.Background(), Invocation{
+		Selection:  backend.Selection{Kind: backend.Tmux},
+		ConfigPath: "/tmp/custom config.toml",
+		Adapter:    popup,
+		Stdout:     io.Discard,
+		Args:       []string{"pick"},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	want := "NEXO_AGENT_NAVIGATOR_INLINE=1 '" + os.Args[0] + "' --backend='tmux' --config-file='/tmp/custom config.toml' agents pick"
+	if popup.command != want {
+		t.Fatalf("popup command = %q, want %q", popup.command, want)
+	}
 }
 
 func TestAgentsCommandJSONUsesAgentSchema(t *testing.T) {

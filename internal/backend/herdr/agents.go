@@ -43,6 +43,8 @@ type herdrAgent struct {
 	PaneID         string  `json:"pane_id"`
 	WorkspaceID    string  `json:"workspace_id"`
 	TabID          string  `json:"tab_id"`
+	WorkspaceLabel string  `json:"workspace_label"`
+	TabLabel       string  `json:"tab_label"`
 	Agent          *string `json:"agent"`
 	DisplayAgent   *string `json:"display_agent"`
 	Status         string  `json:"agent_status"`
@@ -95,6 +97,10 @@ func (s *Source) ListAgents(ctx context.Context) ([]capabilities.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	workspaceLabels, tabLabels, err := s.locationLabels(ctx, native)
+	if err != nil {
+		return nil, err
+	}
 	if s.server == "" {
 		s.server = herdrServerIdentity()
 	}
@@ -140,9 +146,19 @@ func (s *Source) ListAgents(ctx context.Context) ([]capabilities.Agent, error) {
 			}
 			states[current.PaneID] = tracked
 			branch := s.branch(ctx, current)
+			container := strings.TrimSpace(current.WorkspaceLabel)
+			if container == "" {
+				container = workspaceLabels[current.WorkspaceID]
+			}
+			window := strings.TrimSpace(current.TabLabel)
+			if window == "" {
+				window = tabLabels[current.TabID]
+			}
 			agents = append(agents, capabilities.Agent{
 				PaneID:       current.PaneID,
 				Target:       current.PaneID,
+				Container:    container,
+				Window:       window,
 				Harness:      agentName(current),
 				State:        state,
 				Seen:         tracked.Seen,
@@ -186,6 +202,75 @@ func nativeSeen(agent herdrAgent) bool {
 	default:
 		return false
 	}
+}
+
+type herdrTab struct {
+	ID          string `json:"tab_id"`
+	WorkspaceID string `json:"workspace_id"`
+	Label       string `json:"label"`
+}
+
+func (s *Source) locationLabels(ctx context.Context, agents []herdrAgent) (map[string]string, map[string]string, error) {
+	workspaceLabels := make(map[string]string)
+	tabLabels := make(map[string]string)
+	needLookup := false
+	for _, agent := range agents {
+		if (strings.TrimSpace(agent.WorkspaceLabel) == "" && strings.TrimSpace(agent.WorkspaceID) != "") ||
+			(strings.TrimSpace(agent.TabLabel) == "" && strings.TrimSpace(agent.TabID) != "") {
+			needLookup = true
+			break
+		}
+	}
+	if !needLookup {
+		return workspaceLabels, tabLabels, nil
+	}
+	workspaceOutput, err := s.runner.Run(ctx, "herdr", "workspace", "list")
+	if err != nil {
+		return nil, nil, fmt.Errorf("list herdr workspaces: %w", err)
+	}
+	workspaces, err := decodeWorkspaceList(workspaceOutput)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, workspace := range workspaces {
+		workspaceLabels[workspace.ID] = workspace.Label
+	}
+	tabOutput, err := s.runner.Run(ctx, "herdr", "tab", "list")
+	if err != nil {
+		return nil, nil, fmt.Errorf("list herdr tabs: %w", err)
+	}
+	tabs, err := decodeTabList(tabOutput)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, tab := range tabs {
+		tabLabels[tab.ID] = tab.Label
+	}
+	return workspaceLabels, tabLabels, nil
+}
+
+func decodeTabList(output []byte) ([]herdrTab, error) {
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(output, &envelope); err != nil {
+		return nil, fmt.Errorf("decode herdr tab list: %w", err)
+	}
+	raw := output
+	if len(envelope.Result) != 0 && string(envelope.Result) != "null" {
+		raw = envelope.Result
+	}
+	var result struct {
+		Type string     `json:"type"`
+		Tabs []herdrTab `json:"tabs"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("decode herdr tab list: %w", err)
+	}
+	if result.Type != "" && result.Type != "tab_list" {
+		return nil, fmt.Errorf("decode herdr tab list: unexpected result type %q", result.Type)
+	}
+	return result.Tabs, nil
 }
 
 func decodeAgentList(output []byte) ([]herdrAgent, error) {

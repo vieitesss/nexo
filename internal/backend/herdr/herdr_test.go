@@ -26,7 +26,18 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	if err := f.errors[key]; err != nil {
 		return nil, err
 	}
-	return f.outputs[key], nil
+	if output, ok := f.outputs[key]; ok {
+		return output, nil
+	}
+	// Agent location labels are read through Herdr's list commands. Keep the
+	// older fixtures focused on state behavior by returning empty snapshots.
+	switch key {
+	case "workspace list":
+		return []byte(`{"result":{"type":"workspace_list","workspaces":[]}}`), nil
+	case "tab list":
+		return []byte(`{"result":{"type":"tab_list","tabs":[]}}`), nil
+	}
+	return nil, nil
 }
 
 func TestOpenProjectFocusesWorkspaceWithExactTargetLabel(t *testing.T) {
@@ -117,6 +128,18 @@ func TestOpenProjectDoesNotUseOtherWorkspaceTabPath(t *testing.T) {
 
 	if len(runner.calls) != 2 || !reflect.DeepEqual(runner.calls[1], call{name: "herdr", args: []string{"workspace", "create", "--cwd", "/work/acme/app", "--label", "acme_app", "--focus"}}) {
 		t.Fatalf("calls = %#v, want list followed by create", runner.calls)
+	}
+}
+
+func TestFocusPaneUsesExactAgentPaneID(t *testing.T) {
+	runner := &fakeRunner{}
+	backend := New(runner)
+	if err := backend.FocusPane(context.Background(), "w1:p2"); err != nil {
+		t.Fatalf("FocusPane() error = %v", err)
+	}
+	want := []call{{name: "herdr", args: []string{"agent", "focus", "w1:p2"}}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
 }
 
