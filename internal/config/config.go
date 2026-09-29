@@ -24,6 +24,7 @@ type Config struct {
 	Backend        string `toml:"backend"`
 	ProjectsConfig `toml:",inline"`
 	Agents         AgentsConfig `toml:"agents"`
+	Remote         RemoteConfig `toml:"remote"`
 }
 
 // Load reads a required configuration file.
@@ -75,6 +76,9 @@ func parse(contents []byte, path string) (Config, error) {
 	}
 	if err := validateBackend(cfg.Backend); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "backend")
+	}
+	if err := validateRemote(cfg.Remote); err != nil {
+		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "remote.machines")
 	}
 	cfg.Agents = cfg.Agents.WithDefaults()
 	return cfg, nil
