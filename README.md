@@ -38,8 +38,8 @@ agent navigator are built with Bubble Tea and use nexo's own fuzzy ranking.
 <table>
   <tr>
     <td valign="top" width="33%"><h4>📍 Place picker</h4><p>Search project candidates and open local or remote containers from one grouped picker. Git context, previews, agent dots, rename, and batch close actions stay in the same view.</p></td>
-    <td valign="top" width="33%"><h4>🌐 Remote machines and proxies</h4><p>List configured machines over SSH and open their containers natively on Herdr or through a local tmux/Herdr proxy. SSH, mosh, and Eternal Terminal attachment transports are supported.</p></td>
-    <td valign="top" width="33%"><h4>🧭 Agent navigator</h4><p>Find every detected agent pane, with unseen stopped agents first. Search by harness, location, target, or branch, then focus the exact pane.</p></td>
+    <td valign="top" width="33%"><h4>🌐 Remote machines and proxies</h4><p>List configured machines over SSH and open tmux containers through a local tmux or Herdr proxy. For a Herdr remote, nexo saves the machine if needed and points you to the container under it in Herdr's sidebar. SSH, mosh, and Eternal Terminal attachment transports are supported.</p></td>
+    <td valign="top" width="33%"><h4>🧭 Agent navigator</h4><p>Find every detected agent pane, with unseen stopped agents first. Search by harness, target, or branch, then focus the exact pane.</p></td>
   </tr>
   <tr>
     <td valign="top" width="33%"><h4>🔔 Notifications</h4><p>The tmux watcher sends durable working-to-stopped desktop notifications with optional sound. Herdr's native agent state and notification settings remain authoritative.</p></td>
@@ -60,9 +60,9 @@ Agent rows use one dot and a state that is easy to scan:
 
 | Dot | State | Meaning |
 | --- | --- | --- |
-| <span style="color:#d97706">●</span> | `working` | The agent's working indicator is live. |
-| <span style="color:#dc2626">●</span> | `stopped` / unseen | The agent stopped and its exact pane has not been focused yet. |
-| <span style="color:#16a34a">●</span> | `stopped` / seen | The stopped agent has been seen. |
+| 🟡 yellow | `working` | The agent's working indicator is live. |
+| 🔴 red | `stopped` / unseen | The agent stopped and its exact pane has not been focused yet. |
+| 🟢 green | `stopped` / seen | The stopped agent has been seen. |
 
 Backends are native-first: when a multiplexer provides a capability, nexo uses
 it; nexo only fills gaps such as tmux screen polling or remote attachment.
@@ -71,10 +71,11 @@ See the settled design in [CONTEXT.md](CONTEXT.md) and
 
 ## Install
 
-> The repository is private and no release has been published yet. `go install`
-> is the installation method that works today. The Homebrew and release-binary
-> methods below apply once the first `v*` release is published; see
-> [docs/release.md](docs/release.md).
+> The repository is private and no release has been published yet. While it is
+> private, a Go install needs `GOPRIVATE` and authenticated Git access (for
+> example an SSH key or `gh auth login`). Once the repository is public, the
+> plain `go install` and the Homebrew and release-binary methods below apply;
+> see [docs/release.md](docs/release.md).
 
 <details open>
 <summary><strong>Homebrew (after the first release)</strong></summary>
@@ -86,7 +87,16 @@ brew install vieitesss/tap/nexo
 </details>
 
 <details open>
-<summary><strong>Go install (available today)</strong></summary>
+<summary><strong>Go install</strong></summary>
+
+While the repository is private, bypass the public module proxy with
+`GOPRIVATE` and rely on your authenticated Git access:
+
+```sh
+GOPRIVATE=github.com/vieitesss/nexo go install github.com/vieitesss/nexo/cmd/nexo@latest
+```
+
+Once the repository is public, the prefix is unnecessary:
 
 ```sh
 go install github.com/vieitesss/nexo/cmd/nexo@latest
@@ -237,7 +247,7 @@ statuses, and safe verification.
 | Type, `Backspace` / `Delete` | Fuzzy search, erase search | Fuzzy search, erase search |
 | `Tab` / `Shift-Tab` | Mark next / previous container | — |
 | `r` | Rename the current container when the search is empty | — |
-| `x` / `Delete` | Confirm batch close with `y`; cancel with `n` or `Esc` | — |
+| `x` (or `d`), when the search is empty | Confirm batch close with `y`; cancel with `n` or `Esc` | — |
 | `q` | Quit when the search is empty | — |
 
 ## Configuration
@@ -264,7 +274,8 @@ working-pattern = { pi = "⠋" }
 
 [remote]
 machines = ["devbox"]
-ssh-config = "~/.ssh/config"
+# Absolute path; "~" is not expanded here. Use "" for the normal SSH lookup.
+ssh-config = "/home/you/.ssh/config"
 transport = "ssh"
 reconnect-initial = "1s"
 reconnect-max = "30s"
@@ -293,7 +304,7 @@ popup-y = "C"
 | `agents.notify` | `true` | Queue tmux working-to-stopped desktop notifications. Herdr notifications are native and unaffected. |
 | `agents.sound` | `false` | Play a short sound with tmux notifications. |
 | `remote.machines` | `[]` | SSH aliases to list and open. `local`, the local hostname, and aliases beginning with `-` are rejected. |
-| `remote.ssh-config` | `""` | Optional SSH config path for listing and attachment. |
+| `remote.ssh-config` | `""` | Optional absolute SSH config path for listing and SSH attachment. `~` is not expanded, so use a full path such as `/home/you/.ssh/config`; empty uses the normal SSH lookup. |
 | `remote.transport` | `ssh` | Proxy attachment transport: `ssh`, `mosh`, or `et`. Listing always uses SSH. |
 | `remote.reconnect-initial` | `1s` | Initial retry delay for SSH proxy attachments; must be positive and no greater than `reconnect-max`. |
 | `remote.reconnect-max` | `30s` | Maximum retry delay for SSH proxy attachments; must be positive. |
@@ -314,7 +325,7 @@ config key, and an empty or `auto` selection detects the inner multiplexer.
 | Backend | v1 status | Implemented or checked capabilities |
 | --- | --- | --- |
 | **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, shows popups, focuses panes, creates Git worktrees, detects agents by process and screen polling, watches and notifies, and proxies remote tmux containers over SSH/mosh/et. |
-| **Herdr** | Implemented | Opens and manages native workspaces, reads pane screens, focuses panes, creates Git worktrees, consumes Herdr's native agent state and notifications, opens native Herdr machines, and fills the tmux-remote gap with a workspace proxy. The plugin manifest supplies the popup surface. |
+| **Herdr** | Implemented | Opens and manages native workspaces, reads pane screens, focuses panes, creates Git worktrees, consumes Herdr's native agent state and notifications, registers Herdr remote machines for its native sidebar, and fills the tmux-remote gap with a workspace proxy. The plugin manifest supplies the popup surface. |
 | **Zellij** | Planned | Capability interfaces checked on paper: native project/session actions, pane listing, screen reads, focus, and floating panes; nexo would fill agent, notification, and remote-proxy gaps. |
 | **WezTerm** | Planned | Capability interfaces checked on paper: native spawn/list/read/focus; no popup CLI operation, and workspace switching needs a Lua/user action. |
 | **Kitty** | Planned | Capability interfaces checked on paper: native tab launch, pane listing, screen reads, focus, and overlays; agent state, notifications, and remote proxies would be nexo gaps. |
