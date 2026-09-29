@@ -15,14 +15,18 @@ has this shape:
 }
 ```
 
-`state` is `working` or `stopped`. `seen` is meaningful for stopped agents and
-is true only after the exact pane has received focus. `stopped_since` is an
-RFC3339 timestamp and is omitted while an agent is working. `branch` is omitted
-when the pane is not in a named branch.
+`state` is `working` or `stopped`. `seen` is meaningful for stopped agents;
+on tmux it is true only after the exact pane has received focus. `stopped_since`
+is an RFC3339 timestamp and is omitted while an agent is working. `branch` is
+omitted when the pane is not in a named branch.
 
 The text form prints target, harness, state, seen/unseen, and branch as
-tab-separated columns. `nexo agents watch` runs the tmux poller; only one
-watcher is active for a server at a time. The watcher enables tmux
-`focus-events` before installing its focus hooks; without that server option,
-tmux does not emit pane focus transitions. This lets a focus transition mark
-that exact pane seen.
+tab-separated columns. On Herdr, agent status and seen state come from
+Herdr's native agent awareness: `idle` is a seen stopped agent and `done` is
+an unseen stopped agent; a focused pane is always seen. Herdr status is read
+through `herdr agent list`, never by scraping pane output.
+
+On tmux, `nexo agents watch` runs the poller; only one watcher is active for a
+server at a time. The watcher enables tmux `focus-events` before installing
+its focus hooks; without that server option, tmux does not emit pane focus
+transitions. This lets a focus transition mark that exact pane seen.
