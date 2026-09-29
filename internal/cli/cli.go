@@ -96,6 +96,17 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 // RunWith is the injectable process seam used by tests and embedding callers.
 func RunWith(args []string, stdout, stderr io.Writer, commandRunner runner.CommandRunner, environment backend.Environment, tty string) int {
+	return RunWithRegistry(commands.NewRegistry(), args, stdout, stderr, commandRunner, environment, tty)
+}
+
+// RunWithRegistry dispatches through a supplied registry. The seam lets tests
+// and feature packages verify the complete invocation context without
+// reaching into process globals.
+func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr io.Writer, commandRunner runner.CommandRunner, environment backend.Environment, tty string) int {
+	if registry == nil {
+		writeError(stderr, errors.New("command registry is nil"))
+		return 2
+	}
 	options, err := Parse(args)
 	if err != nil {
 		writeError(stderr, err)
@@ -106,7 +117,6 @@ func RunWith(args []string, stdout, stderr io.Writer, commandRunner runner.Comma
 		return 0
 	}
 
-	registry := commands.NewRegistry()
 	command, ok := registry.Lookup(options.Command)
 	if !ok {
 		writeError(stderr, fmt.Errorf("unknown subcommand %q", options.Command))
@@ -132,6 +142,9 @@ func RunWith(args []string, stdout, stderr io.Writer, commandRunner runner.Comma
 	selection = selection.WithCapabilities(commandRunner)
 	if err := command.Run(context.Background(), commands.Invocation{
 		Selection: selection,
+		Config:    cfg,
+		Runner:    commandRunner,
+		Adapter:   selection.Adapter,
 		Stdout:    stdout,
 		Stderr:    stderr,
 		JSON:      options.JSON,
@@ -161,6 +174,6 @@ func printHelp(stdout io.Writer) {
 		return
 	}
 	_, _ = fmt.Fprintln(stdout, "Usage: nexo [flags] <command> [args]")
-	_, _ = fmt.Fprintln(stdout, "\nCommands: backend, list, open, agents, worktree, remote")
+	_, _ = fmt.Fprintln(stdout, "\nCommands: backend (feature commands register independently)")
 	_, _ = fmt.Fprintln(stdout, "\nFlags: --backend auto|tmux|herdr, -c/--config-file PATH, --json")
 }

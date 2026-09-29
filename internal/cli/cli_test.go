@@ -2,10 +2,14 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/backend"
+	"github.com/vieitesss/nexo/internal/backend/tmux"
+	"github.com/vieitesss/nexo/internal/commands"
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
@@ -36,5 +40,50 @@ func TestRunWithReportsBackendOutsideMultiplexerAsJSON(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), `"backend":"none"`) {
 		t.Fatalf("output = %q", output.String())
+	}
+}
+
+type captureCommand struct {
+	invocation commands.Invocation
+}
+
+func (captureCommand) Name() string { return "capture" }
+
+func (c *captureCommand) Run(_ context.Context, invocation commands.Invocation) error {
+	c.invocation = invocation
+	return nil
+}
+
+func TestRunWithPassesConfigRunnerAndAdapter(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("backend = \"tmux\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	capture := &captureCommand{}
+	registry := commands.NewRegistry()
+	if err := registry.Register(capture); err != nil {
+		t.Fatal(err)
+	}
+	fakeRunner := runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("selected tmux backend should not need an external call")
+		return nil, nil
+	})
+
+	status := RunWithRegistry(registry, []string{"-c", configPath, "capture"}, &strings.Builder{}, &strings.Builder{}, fakeRunner, backend.MapEnvironment{}, "")
+	if status != 0 {
+		t.Fatalf("status = %d", status)
+	}
+	if capture.invocation.Config.Backend != "tmux" {
+		t.Fatalf("config = %#v, want typed config", capture.invocation.Config)
+	}
+	if capture.invocation.Runner == nil {
+		t.Fatal("runner = nil, want injected command runner")
+	}
+	adapter, ok := capture.invocation.Adapter.(*tmux.Backend)
+	if !ok || adapter == nil {
+		t.Fatalf("adapter = %#v, want *tmux.Backend", capture.invocation.Adapter)
+	}
+	if capture.invocation.Selection.Adapter != adapter {
+		t.Fatal("selection adapter and invocation adapter differ")
 	}
 }

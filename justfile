@@ -6,7 +6,7 @@ test:
 lint:
     test -z "$(gofmt -l .)"
     go vet ./...
-    golangci-lint run
+    go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run
 
 build:
     go build ./cmd/nexo

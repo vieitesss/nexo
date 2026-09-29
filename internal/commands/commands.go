@@ -10,11 +10,18 @@ import (
 	"sort"
 )
 
-import "github.com/vieitesss/nexo/internal/backend"
+import (
+	"github.com/vieitesss/nexo/internal/backend"
+	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/runner"
+)
 
 // Invocation is the public seam shared by registered subcommands.
 type Invocation struct {
 	Selection backend.Selection
+	Config    config.Config
+	Runner    runner.CommandRunner
+	Adapter   any
 	Stdout    io.Writer
 	Stderr    io.Writer
 	JSON      bool
@@ -46,7 +53,9 @@ func registerBuiltin(factory func() Command) {
 func NewRegistry() *Registry {
 	registry := &Registry{commands: make(map[string]Command)}
 	for _, factory := range builtinFactories {
-		_ = registry.Register(factory())
+		if err := registry.Register(factory()); err != nil {
+			panic(fmt.Sprintf("register builtin command: %v", err))
+		}
 	}
 	return registry
 }
@@ -117,22 +126,4 @@ func formatCapabilities(names []string) string {
 		return "none"
 	}
 	return fmt.Sprintf("%v", names)
-}
-
-type placeholderCommand struct{ name string }
-
-func init() {
-	for _, name := range []string{"list", "open", "agents", "worktree", "remote"} {
-		name := name
-		registerBuiltin(func() Command { return placeholderCommand{name: name} })
-	}
-}
-
-func (c placeholderCommand) Name() string { return c.name }
-
-func (c placeholderCommand) Run(_ context.Context, invocation Invocation) error {
-	if err := invocation.Selection.Require(); err != nil {
-		return err
-	}
-	return fmt.Errorf("%s command is not implemented", c.name)
 }

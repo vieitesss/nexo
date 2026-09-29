@@ -9,12 +9,31 @@ import (
 	"github.com/vieitesss/nexo/internal/backend"
 )
 
-func TestRegistryIncludesFoundationSubcommands(t *testing.T) {
+func TestRegistryLeavesFeatureNamesAvailable(t *testing.T) {
 	registry := NewRegistry()
-	for _, name := range []string{"backend", "list", "open", "agents", "worktree", "remote"} {
-		if _, ok := registry.Lookup(name); !ok {
-			t.Fatalf("Lookup(%q) not found", name)
+	if _, ok := registry.Lookup("backend"); !ok {
+		t.Fatal("backend command not registered")
+	}
+	for _, name := range []string{"list", "open", "agents", "worktree", "remote"} {
+		if _, ok := registry.Lookup(name); ok {
+			t.Fatalf("Lookup(%q) found a placeholder; feature registration must own the name", name)
 		}
+	}
+}
+
+type testCommand struct{ name string }
+
+func (c testCommand) Name() string { return c.name }
+
+func (testCommand) Run(context.Context, Invocation) error { return nil }
+
+func TestRegistryRejectsDuplicateNames(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(testCommand{name: "feature"}); err != nil {
+		t.Fatalf("first Register() error = %v", err)
+	}
+	if err := registry.Register(testCommand{name: "feature"}); err == nil {
+		t.Fatal("second Register() error = nil, want duplicate-name error")
 	}
 }
 

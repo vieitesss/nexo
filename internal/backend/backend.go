@@ -63,6 +63,7 @@ type Selection struct {
 	Source       string   `json:"source"`
 	Reason       string   `json:"reason"`
 	Capabilities []string `json:"capabilities"`
+	Adapter      any      `json:"-"`
 }
 
 // Require returns an error when a command needs a live multiplexer but none
@@ -212,16 +213,18 @@ func tmuxOwnsTTY(ctx context.Context, tty string, commandRunner runner.CommandRu
 	return false, nil
 }
 
-// WithCapabilities adds the capability names provided by the selected empty
-// backend adapter. Backend implementations can grow without changing the
-// selection model.
+// WithCapabilities attaches the selected backend adapter and reports the
+// capabilities it implements. The adapter itself is passed to commands so a
+// feature can type-assert the small interfaces it needs.
 func (s Selection) WithCapabilities(commandRunner runner.CommandRunner) Selection {
 	s.Capabilities = []string{}
+	s.Adapter = nil
 	switch s.Kind {
 	case Tmux:
-		s.Capabilities = capabilities.Names(tmux.New(commandRunner))
+		s.Adapter = tmux.New(commandRunner)
 	case Herdr:
-		s.Capabilities = capabilities.Names(herdr.New(commandRunner))
+		s.Adapter = herdr.New(commandRunner)
 	}
+	s.Capabilities = capabilities.Names(s.Adapter)
 	return s
 }
