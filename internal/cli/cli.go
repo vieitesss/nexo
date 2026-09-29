@@ -111,6 +111,9 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		writeError(stderr, errors.New("command registry is nil"))
 		return 2
 	}
+	if pickerArgs, ok := commands.PlacePickerArgs(args); ok {
+		args = pickerArgs
+	}
 	options, err := Parse(args)
 	if err != nil {
 		writeError(stderr, err)
