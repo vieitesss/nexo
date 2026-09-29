@@ -1,5 +1,7 @@
 # `nexo list --json`
 
+Agent automation reference: [the nexo structured CLI skill](../skills/nexo/SKILL.md).
+
 `nexo list --json` writes one JSON array to standard output. Candidates are
 ordered by configured path order, then filesystem name order. A candidate is
 emitted only once, using its canonical path; its first configured group wins.
