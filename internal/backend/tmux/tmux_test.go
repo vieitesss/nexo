@@ -117,6 +117,25 @@ func TestFocusPaneSwitchesContainerWindowAndPaneByExactID(t *testing.T) {
 	}
 }
 
+func TestFocusPaneSelectsAndAttachesOutsideTmux(t *testing.T) {
+	runner := &fakeRunner{}
+	backend := New(runner, false)
+	if err := backend.FocusPane(context.Background(), "%7"); err != nil {
+		t.Fatalf("FocusPane() error = %v", err)
+	}
+	want := []call{
+		{name: "tmux", args: []string{"select-window", "-t", "%7"}},
+		{name: "tmux", args: []string{"select-pane", "-t", "%7"}},
+		{name: "tmux", args: []string{"attach-session", "-t", "%7"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+	if runner.interactiveCalls != 1 {
+		t.Fatalf("interactive calls = %d, want one attach", runner.interactiveCalls)
+	}
+}
+
 func TestOpenProjectRejectsContainerSelectionOnTmux(t *testing.T) {
 	backend := New(&fakeRunner{})
 	err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{ContainerID: "container-1"})

@@ -14,6 +14,8 @@ type Pane struct {
 type Agent struct {
 	PaneID       string     `json:"pane_id"`
 	Target       string     `json:"target"`
+	Container    string     `json:"container,omitempty"`
+	Window       string     `json:"window,omitempty"`
 	Harness      string     `json:"harness"`
 	State        string     `json:"state"`
 	Seen         bool       `json:"seen"`

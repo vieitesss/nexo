@@ -47,7 +47,7 @@ type Model struct {
 	selected        *capabilities.Agent
 	cancelled       bool
 	err             error
-	refreshInFlight bool
+	refreshInFlight *bool
 }
 
 // NewModel constructs an agent navigator model.
@@ -58,13 +58,17 @@ func NewModel(source capabilities.AgentSource, theme picker.Theme, interval time
 	if interval <= 0 {
 		interval = 2 * time.Second
 	}
-	m := Model{source: source, ctx: context.Background(), theme: theme, interval: interval, now: time.Now}
+	m := Model{source: source, ctx: context.Background(), theme: theme, interval: interval, now: time.Now, refreshInFlight: new(bool)}
 	m.rebuild()
 	return m
 }
 
 // Init starts the first asynchronous refresh and its recurring timer.
 func (m Model) Init() tea.Cmd {
+	if m.refreshInFlight == nil {
+		m.refreshInFlight = new(bool)
+	}
+	*m.refreshInFlight = true
 	return tea.Batch(m.refresh(), m.tick())
 }
 
@@ -128,7 +132,9 @@ func (m *Model) SetQuery(query string) {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case RefreshMsg:
-		m.refreshInFlight = false
+		if m.refreshInFlight != nil {
+			*m.refreshInFlight = false
+		}
 		if msg.Err != nil {
 			m.err = msg.Err
 		} else {
@@ -136,10 +142,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case refreshTickMsg:
-		if m.refreshInFlight {
+		if m.refreshInFlight != nil && *m.refreshInFlight {
 			return m, m.tick()
 		}
-		m.refreshInFlight = true
+		if m.refreshInFlight == nil {
+			m.refreshInFlight = new(bool)
+		}
+		*m.refreshInFlight = true
 		return m, tea.Batch(m.refresh(), m.tick())
 	case tea.KeyMsg:
 		switch {
@@ -287,9 +296,8 @@ func (m Model) style(color string) lipgloss.Style {
 }
 
 func rowText(agent capabilities.Agent, now time.Time) string {
-	container, window, location := targetParts(agent)
 	parts := []string{agent.Harness}
-	for _, value := range []string{container, window, location} {
+	for _, value := range []string{agent.Container, agent.Window, agent.Target} {
 		if value != "" {
 			parts = append(parts, value)
 		}
@@ -302,21 +310,6 @@ func rowText(agent capabilities.Agent, now time.Time) string {
 		text += "  " + age(now, *agent.StoppedSince)
 	}
 	return text
-}
-
-func targetParts(agent capabilities.Agent) (container, window, location string) {
-	target := agent.Target
-	colon := strings.LastIndex(target, ":")
-	if colon < 0 {
-		return "", "", ":" + target
-	}
-	container = target[:colon]
-	remainder := target[colon+1:]
-	window = remainder
-	if dot := strings.LastIndex(remainder, "."); dot >= 0 {
-		window = remainder[:dot]
-	}
-	return container, window, ":" + remainder
 }
 
 func age(now, since time.Time) string {

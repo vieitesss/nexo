@@ -26,7 +26,18 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	if err := f.errors[key]; err != nil {
 		return nil, err
 	}
-	return f.outputs[key], nil
+	if output, ok := f.outputs[key]; ok {
+		return output, nil
+	}
+	// Agent location labels are read through Herdr's list commands. Keep the
+	// older fixtures focused on state behavior by returning empty snapshots.
+	switch key {
+	case "workspace list":
+		return []byte(`{"result":{"type":"workspace_list","workspaces":[]}}`), nil
+	case "tab list":
+		return []byte(`{"result":{"type":"tab_list","tabs":[]}}`), nil
+	}
+	return nil, nil
 }
 
 func TestOpenProjectFocusesWorkspaceWithExactTargetLabel(t *testing.T) {

@@ -19,13 +19,15 @@ import (
 )
 
 type pane struct {
-	id      string
-	target  string
-	pid     string
-	command string
-	path    string
-	harness string
-	branch  string
+	id        string
+	target    string
+	container string
+	window    string
+	pid       string
+	command   string
+	path      string
+	harness   string
+	branch    string
 }
 
 type agentState struct {
@@ -152,6 +154,8 @@ func (s *Source) listAgents(ctx context.Context) ([]capabilities.Agent, error) {
 			agents = append(agents, capabilities.Agent{
 				PaneID:       current.id,
 				Target:       current.target,
+				Container:    current.container,
+				Window:       current.window,
 				Harness:      current.harness,
 				State:        state.State,
 				Seen:         state.Seen,
@@ -168,7 +172,7 @@ func (s *Source) listAgents(ctx context.Context) ([]capabilities.Agent, error) {
 }
 
 func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pane, error) {
-	format := "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_current_path}"
+	format := "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_index}\t#{pane_current_path}"
 	output, err := s.runner.Run(ctx, "tmux", "list-panes", "-a", "-F", format)
 	if err != nil {
 		return nil, fmt.Errorf("list tmux panes: %w", err)
@@ -185,6 +189,17 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		fields := strings.Split(line, "\t")
 		if len(fields) < 7 {
 			continue
+		}
+		windowField := 4
+		windowIndexField := 5
+		paneIndexField := 6
+		pathField := 7
+		if len(fields) < 8 {
+			// Accept the pre-window-name format from older tmux adapters.
+			windowField = 4
+			windowIndexField = 4
+			paneIndexField = 5
+			pathField = 6
 		}
 		current := strings.TrimSpace(fields[2])
 		args := current
@@ -203,12 +218,14 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 			continue
 		}
 		p := pane{
-			id:      strings.TrimSpace(fields[0]),
-			pid:     strings.TrimSpace(fields[1]),
-			command: current,
-			path:    strings.TrimSpace(fields[6]),
-			target:  fmt.Sprintf("%s:%s.%s", fields[3], fields[4], fields[5]),
-			harness: harness,
+			id:        strings.TrimSpace(fields[0]),
+			pid:       strings.TrimSpace(fields[1]),
+			command:   current,
+			path:      strings.TrimSpace(fields[pathField]),
+			container: strings.TrimSpace(fields[3]),
+			window:    strings.TrimSpace(fields[windowField]),
+			target:    fmt.Sprintf("%s:%s.%s", fields[3], fields[windowIndexField], fields[paneIndexField]),
+			harness:   harness,
 		}
 		p.branch = s.branch(ctx, p.path)
 		result = append(result, p)

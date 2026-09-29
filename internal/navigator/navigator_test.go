@@ -55,12 +55,27 @@ func TestGoldenView(t *testing.T) {
 	model := NewModel(nil, picker.Theme{}, time.Second)
 	model.SetClock(func() time.Time { return now })
 	model.SetAgents([]capabilities.Agent{
-		{PaneID: "%1", Target: "work:1.2", Harness: "pi", State: "stopped", StoppedSince: &stopped, Branch: "feature/demo"},
-		{PaneID: "%2", Target: "work:1.3", Harness: "claude", State: "working"},
+		{PaneID: "%1", Target: "work:1.2", Container: "work", Window: "1", Harness: "pi", State: "stopped", StoppedSince: &stopped, Branch: "feature/demo"},
+		{PaneID: "%2", Target: "work:1.3", Container: "work", Window: "1", Harness: "claude", State: "working"},
 	})
-	want := "> \n● pi · work · 1 · :1.2 · ⎇ feature/demo  30s\n● claude · work · 1 · :1.3"
+	want := "> \n● pi · work · 1 · work:1.2 · ⎇ feature/demo  30s\n● claude · work · 1 · work:1.3"
 	if got := model.View(); got != want {
 		t.Fatalf("View() = %q, want %q", got, want)
+	}
+}
+
+func TestInitMarksRefreshInFlightBeforeFirstCommand(t *testing.T) {
+	model := NewModel(nil, picker.Theme{}, time.Second)
+	if *model.refreshInFlight {
+		t.Fatal("new model starts with refresh in flight")
+	}
+	model.Init()
+	if !*model.refreshInFlight {
+		t.Fatal("Init did not mark refresh in flight")
+	}
+	updated, cmd := model.Update(refreshTickMsg{})
+	if cmd == nil || !*updated.(Model).refreshInFlight {
+		t.Fatal("tick started a concurrent initial refresh")
 	}
 }
 
@@ -106,7 +121,7 @@ func (f fakeSource) ListAgents(context.Context) ([]capabilities.Agent, error) { 
 func TestRowFormattingUsesTargetContainerAndWindow(t *testing.T) {
 	model := NewModel(nil, picker.Theme{}, time.Second)
 	model.SetAgents([]capabilities.Agent{{PaneID: "pane-1", Target: "workspace:tab.1", Harness: "pi", State: "working"}})
-	if got, want := strings.TrimSpace(model.View()), "> \n● pi · workspace · tab · :tab.1"; got != want {
+	if got, want := strings.TrimSpace(model.View()), "> \n● pi · workspace:tab.1"; got != want {
 		t.Fatalf("View() = %q, want %q", got, want)
 	}
 }

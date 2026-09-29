@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -19,6 +20,33 @@ type fakeAgentSource struct {
 
 func (f fakeAgentSource) ListAgents(context.Context) ([]capabilities.Agent, error) {
 	return f.agents, nil
+}
+
+type fakeAgentMarker struct {
+	paneID string
+	err    error
+}
+
+func (f *fakeAgentMarker) MarkAgentSeen(_ context.Context, paneID string) error {
+	f.paneID = paneID
+	return f.err
+}
+
+func TestMarkAgentSeenAfterFocus(t *testing.T) {
+	marker := &fakeAgentMarker{}
+	if err := markAgentSeen(context.Background(), marker, "%7"); err != nil {
+		t.Fatalf("markAgentSeen() error = %v", err)
+	}
+	if marker.paneID != "%7" {
+		t.Fatalf("pane id = %q, want %%7", marker.paneID)
+	}
+}
+
+func TestMarkAgentSeenSurfacesErrors(t *testing.T) {
+	marker := &fakeAgentMarker{err: errors.New("state unavailable")}
+	if err := markAgentSeen(context.Background(), marker, "%7"); err == nil || !strings.Contains(err.Error(), "state unavailable") {
+		t.Fatalf("markAgentSeen() error = %v, want state error", err)
+	}
 }
 
 type fakeAgentPopup struct {

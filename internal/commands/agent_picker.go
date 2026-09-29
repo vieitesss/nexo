@@ -52,7 +52,23 @@ func runAgentPicker(ctx context.Context, invocation Invocation) error {
 	if !ok {
 		return fmt.Errorf("backend %q does not support focusing panes", invocation.Selection.Kind)
 	}
-	return focuser.FocusPane(ctx, agent.PaneID)
+	if err := focuser.FocusPane(ctx, agent.PaneID); err != nil {
+		return err
+	}
+	return markAgentSeen(ctx, invocation.Adapter, agent.PaneID)
+}
+
+func markAgentSeen(ctx context.Context, adapter any, paneID string) error {
+	marker, ok := adapter.(interface {
+		MarkAgentSeen(context.Context, string) error
+	})
+	if !ok {
+		return nil
+	}
+	if err := marker.MarkAgentSeen(ctx, paneID); err != nil {
+		return fmt.Errorf("mark agent %q seen: %w", paneID, err)
+	}
+	return nil
 }
 
 func agentPickerCommand(kind, configPath string) string {

@@ -312,12 +312,20 @@ func (b *Backend) FocusPane(ctx context.Context, paneID string) error {
 	if paneID == "" {
 		return errors.New("tmux pane focuser requires a pane id")
 	}
-	for _, operation := range []string{"switch-client", "select-window", "select-pane"} {
+	if b.Inside {
+		for _, operation := range []string{"switch-client", "select-window", "select-pane"} {
+			if _, err := b.run(ctx, operation, "-t", paneID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, operation := range []string{"select-window", "select-pane"} {
 		if _, err := b.run(ctx, operation, "-t", paneID); err != nil {
 			return err
 		}
 	}
-	return nil
+	return b.runInteractive(ctx, "attach-session", "-t", paneID)
 }
 
 var _ capabilities.AgentSource = (*Backend)(nil)
