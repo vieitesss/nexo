@@ -73,8 +73,9 @@ func (l Lister) ListMachine(ctx context.Context, machine string) MachineResult {
 		if errors.Is(machineCtx.Err(), context.DeadlineExceeded) {
 			result.Error = fmt.Sprintf("timed out after %s", timeout)
 		} else {
-			result.Error = strings.TrimSpace(err.Error())
+			result.Error = err.Error()
 		}
+		result.Error = normalizeError(result.Error)
 		if result.Error == "" {
 			result.Error = "remote listing failed"
 		}
@@ -88,7 +89,7 @@ func (l Lister) ListMachine(ctx context.Context, machine string) MachineResult {
 		containers, err = decodeHerdr(output, machine)
 	}
 	if err != nil {
-		result.Error = err.Error()
+		result.Error = normalizeError(err.Error())
 		return result
 	}
 	result.Containers = containers
@@ -133,9 +134,9 @@ func (l Lister) run(ctx context.Context, machine string) ([]byte, error) {
 	}
 	args = append(args, machine)
 	if l.Backend == backend.Tmux {
-		args = append(args, "tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
+		args = append(args, shellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}"))
 	} else {
-		args = append(args, "herdr", "workspace", "list")
+		args = append(args, shellCommand("herdr", "workspace", "list"))
 	}
 	output, err := l.Runner.Run(ctx, "ssh", args...)
 	if err != nil {
@@ -156,7 +157,34 @@ func (l Lister) run(ctx context.Context, machine string) ([]byte, error) {
 
 func isNoServer(err error, output []byte) bool {
 	message := strings.ToLower(string(output) + " " + err.Error())
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		message += " " + strings.ToLower(string(exitErr.Stderr))
+	}
 	return strings.Contains(message, "no server running") || strings.Contains(message, "failed to connect to server")
+}
+
+func shellCommand(args ...string) string {
+	quoted := make([]string, len(args))
+	for index, arg := range args {
+		quoted[index] = "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
+	}
+	return strings.Join(quoted, " ")
+}
+
+func normalizeError(message string) string {
+	for _, line := range strings.Split(message, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		runes := []rune(line)
+		if len(runes) > 80 {
+			return string(runes[:77]) + "..."
+		}
+		return line
+	}
+	return ""
 }
 
 func decodeTmux(output []byte, machine string) ([]capabilities.Container, error) {

@@ -134,6 +134,37 @@ func TestLoadParsesRemoteSettings(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsRemoteLocalMachineAliases(t *testing.T) {
+	for _, machine := range []string{"local", "-oStrictHostKeyChecking=no"} {
+		t.Run(machine, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			contents := []byte("[remote]\nmachines = [\"" + machine + "\"]\n")
+			if err := os.WriteFile(path, contents, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), "remote.machines") || !strings.Contains(err.Error(), machine) {
+				t.Fatalf("Load() error = %v, want remote.machines validation for %q", err, machine)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsRemoteLocalHostnameAlias(t *testing.T) {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		t.Skip("hostname unavailable")
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[remote]\nmachines = [\""+hostname+"\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Load(path)
+	if err == nil || !strings.Contains(err.Error(), "remote.machines") {
+		t.Fatalf("Load() error = %v, want hostname alias validation", err)
+	}
+}
+
 func TestLoadParsesBackend(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("backend = \"tmux\"\n"), 0o600); err != nil {

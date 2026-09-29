@@ -2,12 +2,22 @@ package remote
 
 import (
 	"context"
+	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/vieitesss/nexo/internal/backend"
 )
+
+func TestShellCommandQuotesEachArgument(t *testing.T) {
+	got := shellCommand("tmux", "list-sessions", "a'b")
+	want := `'tmux' 'list-sessions' 'a'"'"'b'`
+	if got != want {
+		t.Fatalf("shellCommand() = %q, want %q", got, want)
+	}
+}
 
 func TestListMachineUsesSSHBatchModeAndOptionalConfig(t *testing.T) {
 	var gotName string
@@ -24,9 +34,29 @@ func TestListMachineUsesSSHBatchModeAndOptionalConfig(t *testing.T) {
 	if gotName != "ssh" {
 		t.Fatalf("runner name = %q, want ssh", gotName)
 	}
-	want := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-F", "/tmp/ssh config", "devbox", "tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}"}
+	want := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-F", "/tmp/ssh config", "devbox", "'tmux' 'list-sessions' '-F' '#{session_id}\t#{session_name}'"}
 	if strings.Join(gotArgs, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("ssh args = %#v, want %#v", gotArgs, want)
+	}
+}
+
+func TestListMachineTreatsTmuxNoServerStderrAsEmpty(t *testing.T) {
+	lister := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
+		return nil, &exec.ExitError{Stderr: []byte("no server running on /tmp/tmux-1000/default\n")}
+	}), backend.Tmux, "")
+	result := lister.ListMachine(context.Background(), "devbox")
+	if result.Error != "" || len(result.Containers) != 0 {
+		t.Fatalf("result = %#v, want empty successful result", result)
+	}
+}
+
+func TestListMachineNormalizesMultilineErrors(t *testing.T) {
+	lister := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("first reason\nsecond reason\n"), errors.New("command failed")
+	}), backend.Tmux, "")
+	result := lister.ListMachine(context.Background(), "devbox")
+	if result.Error != "ssh devbox: first reason" {
+		t.Fatalf("error = %q, want first normalized line", result.Error)
 	}
 }
 
