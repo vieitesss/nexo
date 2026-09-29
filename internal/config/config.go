@@ -1,15 +1,19 @@
 // Package config loads nexo's single TOML configuration file.
+//
+// Each feature owns its configuration type and defaults in a separate file in
+// this package, then adds one tagged field to Config.
 package config
 
 import (
-	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // Config is the typed configuration shared by all features.
@@ -64,89 +68,31 @@ func DefaultPathFrom(home, xdgConfigHome string) string {
 
 func parse(contents []byte, path string) (Config, error) {
 	var cfg Config
-	section := ""
-	seenBackend := false
-	scanner := bufio.NewScanner(strings.NewReader(string(contents)))
-	lineNumber := 0
-	for scanner.Scan() {
-		lineNumber++
-		line := strings.TrimSpace(stripComment(scanner.Text()))
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "[") {
-			if !strings.HasSuffix(line, "]") {
-				return Config{}, parseError(path, lineNumber, "invalid table header")
-			}
-			section = strings.TrimSpace(line[1 : len(line)-1])
-			if section == "" {
-				return Config{}, parseError(path, lineNumber, "empty table name")
-			}
-			return Config{}, fmt.Errorf("config %s: unknown key %q (line %d)", path, section, lineNumber)
-		}
-
-		keyValue := strings.SplitN(line, "=", 2)
-		if len(keyValue) != 2 {
-			return Config{}, parseError(path, lineNumber, "expected key = value")
-		}
-		key := strings.TrimSpace(keyValue[0])
-		if key == "" {
-			return Config{}, parseError(path, lineNumber, "empty key")
-		}
-		keyPath := key
-		if section != "" {
-			keyPath = section + "." + key
-		}
-		if keyPath != "backend" {
-			return Config{}, fmt.Errorf("config %s: unknown key %q (line %d)", path, keyPath, lineNumber)
-		}
-		if seenBackend {
-			return Config{}, parseError(path, lineNumber, "duplicate key backend")
-		}
-		value, err := parseString(strings.TrimSpace(keyValue[1]))
-		if err != nil {
-			return Config{}, fmt.Errorf("config %s: invalid value for key %q (line %d): %w", path, keyPath, lineNumber, err)
-		}
-		if value != "" && value != "auto" && value != "tmux" && value != "herdr" {
-			return Config{}, fmt.Errorf("config %s: invalid backend %q for key %q (line %d)", path, value, keyPath, lineNumber)
-		}
-		cfg.Backend = value
-		seenBackend = true
+	if err := decode(contents, path, &cfg); err != nil {
+		return Config{}, err
 	}
-	if err := scanner.Err(); err != nil {
-		return Config{}, fmt.Errorf("read config %s: %w", path, err)
+	if err := validateBackend(cfg.Backend); err != nil {
+		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "backend")
 	}
 	return cfg, nil
 }
 
-func parseString(value string) (string, error) {
-	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
-		return strconv.Unquote(value)
+func decode(contents []byte, path string, target any) error {
+	err := toml.NewDecoder(bytes.NewReader(contents)).
+		DisallowUnknownFields().Decode(target)
+	if err == nil {
+		return nil
 	}
-	if value == "auto" || value == "tmux" || value == "herdr" {
-		return value, nil
-	}
-	return "", fmt.Errorf("expected a quoted string")
-}
 
-func stripComment(line string) string {
-	quoted := false
-	escaped := false
-	for i, r := range line {
-		switch {
-		case escaped:
-			escaped = false
-		case r == '\\' && quoted:
-			escaped = true
-		case r == '"':
-			quoted = !quoted
-		case r == '#' && !quoted:
-			return line[:i]
-		}
+	if strict, ok := err.(*toml.StrictMissingError); ok && len(strict.Errors) > 0 {
+		unknown := strict.Errors[0]
+		line, _ := unknown.Position()
+		keyPath := strings.Join(unknown.Key(), ".")
+		return fmt.Errorf("config %s: unknown key %q (line %d)", path, keyPath, line)
 	}
-	return line
-}
-
-func parseError(path string, line int, message string) error {
-	return fmt.Errorf("config %s: %s (line %d)", path, message, line)
+	if decoded, ok := err.(*toml.DecodeError); ok {
+		line, _ := decoded.Position()
+		return fmt.Errorf("config %s: %v (line %d)", path, err, line)
+	}
+	return fmt.Errorf("config %s: %w", path, err)
 }

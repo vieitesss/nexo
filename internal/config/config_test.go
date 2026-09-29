@@ -7,6 +7,52 @@ import (
 	"testing"
 )
 
+func TestDecodeSupportsNestedFeatureSections(t *testing.T) {
+	type workingPattern struct {
+		Name string `toml:"name"`
+	}
+	type featureConfig struct {
+		Paths          []string       `toml:"paths"`
+		Enabled        bool           `toml:"enabled"`
+		Retries        int            `toml:"retries"`
+		WorkingPattern workingPattern `toml:"working-pattern"`
+	}
+	type testConfig struct {
+		Agents featureConfig `toml:"agents"`
+	}
+
+	var got testConfig
+	err := decode([]byte(`[agents]
+paths = ["~/work/*"]
+enabled = true
+retries = 3
+
+[agents.working-pattern]
+name = "focused"
+`), "test.toml", &got)
+	if err != nil {
+		t.Fatalf("decode() error = %v", err)
+	}
+	if got.Agents.Paths[0] != "~/work/*" || !got.Agents.Enabled || got.Agents.Retries != 3 || got.Agents.WorkingPattern.Name != "focused" {
+		t.Fatalf("decoded config = %#v, want nested feature values", got)
+	}
+}
+
+func TestDecodeUnknownNestedKeyNamesFullPath(t *testing.T) {
+	type agentsConfig struct {
+		Paths []string `toml:"paths"`
+	}
+	type testConfig struct {
+		Agents agentsConfig `toml:"agents"`
+	}
+
+	var got testConfig
+	err := decode([]byte("[agents]\nworking-pattern = true\n"), "test.toml", &got)
+	if err == nil || !strings.Contains(err.Error(), "agents.working-pattern") {
+		t.Fatalf("decode() error = %v, want full nested key path", err)
+	}
+}
+
 func TestLoadParsesBackend(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("backend = \"tmux\"\n"), 0o600); err != nil {
@@ -19,6 +65,30 @@ func TestLoadParsesBackend(t *testing.T) {
 	}
 	if got.Backend != "tmux" {
 		t.Fatalf("Backend = %q, want tmux", got.Backend)
+	}
+}
+
+func TestLoadRejectsInvalidBackend(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("backend = \"screen\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "invalid backend") {
+		t.Fatalf("Load() error = %v, want invalid backend error", err)
+	}
+}
+
+func TestLoadRejectsUnquotedBackend(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("backend = tmux\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid TOML error")
 	}
 }
 
