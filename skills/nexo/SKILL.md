@@ -6,9 +6,9 @@ description: Use when an agent needs nexo's structured CLI for backend selection
 # nexo structured CLI
 
 Use nexo's JSON mode when another program or agent needs a stable result instead
-of terminal-oriented text. Select exactly one backend for each invocation:
-`--backend` wins over the config default, which wins over auto-detection. A
-backend is either `tmux` or `herdr` in v1; the command never combines them.
+of terminal-oriented text. The [Global flags and errors](#global-flags-and-errors)
+section defines backend selection, `--json`, config resolution, and exit
+statuses.
 
 ## Recipe
 
@@ -31,8 +31,7 @@ the shape documented below, and stderr was handled separately.
 
 ## JSON operations
 
-The global `--json` flag is recognized before or after the subcommand. These
-are the command paths that emit JSON; other subcommands keep their normal
+The following command paths emit JSON; other subcommands keep their normal
 text/action behavior.
 
 ### Backend selection
@@ -44,9 +43,12 @@ capabilities available before choosing a backend-specific operation.
 nexo --backend=tmux --json backend
 ```
 
-The output is one object. `backend` is the selected backend, `source` is
-`flag`, `config`, or `auto-detect`, `reason` explains that selection, and
-`capabilities` is the sorted list of capability interfaces on that backend.
+The output is one object. `backend` is the selected backend: `tmux`, `herdr`,
+or `none`. `none` is a successful auto-detection result when no multiplexer
+markers are present; it carries no capabilities, so no backend-specific
+operation can follow. `source` is `flag`, `config`, or `auto-detect`, `reason`
+explains that selection, and `capabilities` is the sorted list of capability
+interfaces on that backend (empty for `none`).
 
 ```json
 {
@@ -67,6 +69,17 @@ The output is one object. `backend` is the selected backend, `source` is
     "ScreenReader",
     "WorktreeCreator"
   ]
+}
+```
+
+When no multiplexer marker exists, auto-detection succeeds with `none`:
+
+```json
+{
+  "backend": "none",
+  "source": "auto-detect",
+  "reason": "no supported multiplexer detected",
+  "capabilities": []
 }
 ```
 
@@ -190,9 +203,16 @@ one unreachable machine does not discard other results.
 nexo --backend=tmux --json remote list
 ```
 
-The output is one array of per-machine objects. Each has `machine`. A reachable
-machine has `containers`, whose entries have `id`, `name`, and `machine`; an
-unreachable machine has `error` and omits `containers`.
+The output is one array of per-machine objects, each with `machine`. A machine
+whose listing succeeded has `containers` — omitted when that list is empty —
+with entries carrying `id`, `name`, and `machine`. A machine whose listing
+failed carries `error` (a normalized single-line message) and no `containers`.
+Because `containers` is `omitempty`, `{"machine":"empty"}` is a successful
+empty listing, not a failure; only `error` signals failure.
+
+Per-machine `error` values live in this stdout JSON: the process still exits
+`0` and stderr stays empty, so automation must inspect each `error` field
+rather than the process status.
 
 ```json
 [
@@ -209,6 +229,21 @@ unreachable machine has `error` and omits `containers`.
 ]
 ```
 
+An empty successful listing omits `containers`; a failed machine reports
+`error` instead:
+
+```json
+[
+  {
+    "machine": "empty"
+  },
+  {
+    "machine": "offline",
+    "error": "timed out after 5s"
+  }
+]
+```
+
 ### Git worktrees: `worktree create`
 
 Use this when creating a worktree and handing its canonical result to the next
@@ -220,6 +255,12 @@ destination's parent to the configured project paths.
 nexo --backend=tmux --json worktree create --new-branch \
   /home/me/repo feature/example /home/me/worktrees/example
 ```
+
+`--json` changes only the output: creation still opens the new worktree as a
+container and focuses it. Inside tmux, the client switches to the new session.
+Outside tmux, the command attaches to it interactively and inherits the process
+stdout, so run it from a real terminal; a piped invocation outside tmux fails
+the attach, rolls back the worktree, and returns status `1` with no JSON.
 
 The output is one object with only `path` and `branch`. The encoder deliberately
 omits the input repository, the `--new-branch` choice, backend container ID,
@@ -251,9 +292,14 @@ and session name.
 - `--version` prints the version and exits `0`; `--help` prints command and
   flag help and exits `0`.
 
-Every diagnostic is written as one line to stderr with the `nexo:` prefix. It
-is not a JSON error envelope. For example, an unknown global option is a parse
-failure:
+stderr is plain text, not a JSON error envelope and not a per-line framing
+protocol. Most CLI diagnostics are one line prefixed with `nexo:`, but
+interactive children (such as a tmux attach) write their own stderr directly
+before the CLI also prefixes the returned error, and a joined error can span
+multiple lines. Do not parse stderr; treat it as human diagnostics. A remote
+machine listing failure is different: it is a per-machine `error` field in the
+stdout JSON, not a stderr diagnostic. For example, an unknown global option is
+a parse failure:
 
 ```text
 $ nexo --unknown
@@ -271,9 +317,6 @@ nexo: unknown list option "--unknown"
 $ echo $?
 1
 ```
-
-For automation, preserve both streams, check the exit status first, and only
-then decode stdout as the operation's one JSON value.
 
 ## Safe verification
 
