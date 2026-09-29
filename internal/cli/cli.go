@@ -12,6 +12,7 @@ import (
 	"github.com/vieitesss/nexo/internal/commands"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
+	"github.com/vieitesss/nexo/internal/version"
 )
 
 // Options contains parsed process arguments.
@@ -21,6 +22,7 @@ type Options struct {
 	ConfigExplicit bool
 	JSON           bool
 	Help           bool
+	Version        bool
 	Command        string
 	Args           []string
 }
@@ -42,6 +44,8 @@ func Parse(args []string) (Options, error) {
 			options.JSON = true
 		case arg == "--help", arg == "-h":
 			options.Help = true
+		case arg == "--version":
+			options.Version = true
 		case arg == "--backend":
 			value, next, err := nextValue(args, i, "--backend")
 			if err != nil {
@@ -76,7 +80,7 @@ func Parse(args []string) (Options, error) {
 			options.Args = append(options.Args, arg)
 		}
 	}
-	if options.Command == "" && !options.Help {
+	if options.Command == "" && !options.Help && !options.Version {
 		return Options{}, errors.New("a subcommand is required")
 	}
 	return options, nil
@@ -114,6 +118,10 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 	}
 	if options.Help {
 		printHelp(stdout)
+		return 0
+	}
+	if options.Version {
+		printVersion(stdout)
 		return 0
 	}
 
@@ -169,11 +177,18 @@ func writeError(stderr io.Writer, err error) {
 	}
 }
 
+func printVersion(stdout io.Writer) {
+	if stdout == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(stdout, "nexo %s\n", version.String())
+}
+
 func printHelp(stdout io.Writer) {
 	if stdout == nil {
 		return
 	}
 	_, _ = fmt.Fprintln(stdout, "Usage: nexo [flags] <command> [args]")
 	_, _ = fmt.Fprintln(stdout, "\nCommands: backend (feature commands register independently)")
-	_, _ = fmt.Fprintln(stdout, "\nFlags: --backend auto|tmux|herdr, -c/--config-file PATH, --json")
+	_, _ = fmt.Fprintln(stdout, "\nFlags: --backend auto|tmux|herdr, -c/--config-file PATH, --json, --version")
 }
