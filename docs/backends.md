@@ -22,14 +22,14 @@ reachable. They are not a promise that a backend is installed.
 
 | Interface | Zellij 0.44+ | WezTerm | Kitty |
 | --- | --- | --- | --- |
-| `ProjectOpener` | **Native** — `attach --create-background` and `action switch-session` provide a project container and switching. | **nexo fills gap** — `cli spawn --workspace --cwd` creates the workspace/tab, but the CLI cannot switch the GUI to an existing workspace. Opening a new project is possible; selecting an existing workspace needs a Lua-side/user action. | **Native** for opening a project tab — `@ launch --type=tab --cwd`. Kitty has no persistent project container, so reopening after Kitty exits is not part of this capability. |
+| `ProjectOpener` | **Native** — `attach --create-background` and `action switch-session` provide a project container and switching. | **nexo fills gap** — `wezterm cli spawn --new-window --workspace <name> --cwd <dir>` creates a workspace in a new window; `--workspace` requires `--new-window` and applies only to that newly created window. The CLI cannot switch the GUI to an existing workspace, so selecting one needs a Lua-side/user action. | **Native** for opening a project tab — `@ launch --type=tab --cwd`. Kitty has no live daemon persistence, but explicit session files can recreate tabs and layouts after exit. |
 | `PaneLister` | **Native** — `action list-panes --all --json`. | **Native** — `cli list --format json`. | **Native** — `@ ls`, including `foreground_processes`. |
 | `ScreenReader` | **Native** — `action dump-screen` (targeted with `--pane-id`). | **Native** — `cli get-text`. | **Native** — `@ get-text`. |
 | `PaneFocuser` | **Native** — `action focus-pane-id`. | **Native** — `cli activate-pane --pane-id`. This focuses a pane, not an arbitrary workspace. | **Native** — `@ focus-window --match id:N`. |
 | `Popup` | **Native** — `run`/`new-pane --floating` provides a floating pane. | **Unsupported** — there is no popup/floating-pane CLI operation. | **Native** with a limitation — `@ launch --type=overlay` is an overlay rather than a persistent pane. |
 | `AgentSource` | **nexo fills gap** — pane JSON has command/title data but no PID or agent working state. Combine pane listing and screen reads with nexo's agent detection. | **nexo fills gap** — `cli list --format json` does not expose a foreground process or agent state; use screen reads and nexo's detection. | **nexo fills gap** — `foreground_processes` makes process identification native, but working/stopped and seen-stopped state still needs nexo polling and screen inspection. |
 | `Notifier` | **nexo fills gap** — `zellij pipe` can feed a status plugin, but the status bridge and notification semantics belong to nexo. | **nexo fills gap** — Lua `set_right_status` is a status surface, not a CLI notification API; a Lua bridge is required. | **nexo fills gap** — `tab_bar.py` can render status, but requires a nexo status bridge. |
-| `RemoteProxy` | **nexo fills gap** — launch an `ssh` attach command in a native pane; Zellij has no remote-container primitive. | **nexo fills gap** — launch an `ssh` attach command with `cli spawn`; this does not solve the separate GUI-workspace switching limitation. | **nexo fills gap** — launch an `ssh` attach command in a tab; Kitty has no native remote-container or persistence primitive. |
+| `RemoteProxy` | **nexo fills gap** — launch an `ssh` attach command in a native pane; Zellij has no remote-container primitive. | **nexo fills gap** — launch an `ssh` attach command with `cli spawn`; this does not solve the separate GUI-workspace switching limitation. | **nexo fills gap** — launch an `ssh` attach command in a tab; Kitty has no native remote-container primitive. |
 
 No interface change is required. The gaps are implementation work behind the
 existing small interfaces; the only truly absent operation is WezTerm's
@@ -44,16 +44,19 @@ The following are the facts used by the matrix:
   provide a PID; `dump-screen`, `focus-pane-id`, floating panes, and session
   actions are documented. WASM plugins receive subscribed events, and
   `zellij pipe` sends messages to a plugin. Zellij's session state persists.
-- **WezTerm:** `cli spawn` accepts `--workspace` and `--cwd`; `cli list` has a
-  JSON format; `cli get-text` and `cli activate-pane` are documented CLI
-  operations. Workspaces resemble sessions but are not an exact session
-  equivalent, and the CLI has no GUI-workspace switch operation. Status is
-  configured through Lua (`set_right_status`); there is no popup operation.
-  CLI control is through a Unix domain socket.
+- **WezTerm:** `cli spawn --new-window --workspace <name> --cwd <dir>` creates
+  a new workspace window; `--workspace` requires `--new-window` and applies
+  only to that newly created window. `cli list` has a JSON format; `cli
+  get-text` and `cli activate-pane` are documented CLI operations. Workspaces
+  resemble sessions but are not an exact session equivalent, and the CLI has
+  no GUI-workspace switch operation. Status is configured through Lua
+  (`set_right_status`); there is no popup operation. CLI control is through a
+  Unix domain socket.
 - **Kitty:** remote control exposes `@ launch`, `@ ls`, `@ get-text`, and
   `@ focus-window`; `launch` supports tabs and overlays, and `ls` exposes
   foreground processes. Status is rendered by the Python tab-bar hook. Kitty
-  does not persist containers after exit.
+  has no live daemon persistence, while explicit session files can recreate
+  tabs and layouts after exit.
 
 ## Versions and sources
 
@@ -77,5 +80,6 @@ Checked 2026-09-29 against the official documentation and release pages:
 - **Kitty:** v0.49.1. Sources:
   [remote control](https://sw.kovidgoyal.net/kitty/remote-control/),
   [launch](https://sw.kovidgoyal.net/kitty/launch/),
+  [sessions](https://sw.kovidgoyal.net/kitty/sessions/),
   [tab-bar configuration](https://sw.kovidgoyal.net/kitty/conf/#tab-bar),
   [v0.49.1 release](https://github.com/kovidgoyal/kitty/releases/tag/v0.49.1).
