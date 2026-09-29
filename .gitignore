@@ -1,0 +1,5 @@
+https://gh.nahida.ren/dist/
+/nexo
+*.test
+*.out
+.DS_Store
