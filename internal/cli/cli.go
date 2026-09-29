@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/backend"
@@ -151,6 +152,11 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		return 2
 	}
 	selection = selection.WithCapabilities(commandRunner, environment)
+	if configurator, ok := selection.Adapter.(interface {
+		ConfigureRemoteConfig(config.RemoteConfig, string)
+	}); ok {
+		configurator.ConfigureRemoteConfig(cfg.Remote, options.ConfigPath)
+	}
 	if err := command.Run(context.Background(), commands.Invocation{
 		Selection:  selection,
 		Config:     cfg,
@@ -159,6 +165,7 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		Adapter:    selection.Adapter,
 		Stdout:     stdout,
 		Stderr:     stderr,
+		Stdin:      os.Stdin,
 		JSON:       options.JSON,
 		Args:       options.Args,
 	}); err != nil {

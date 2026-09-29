@@ -163,13 +163,22 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 		if err != nil {
 			return err
 		}
-		return actions.OpenContainer(ctx, place.ContainerID)
+		return actions.OpenContainer(ctx, containerOpenID(place))
 	}
 	opener, ok := invocation.Adapter.(capabilities.ProjectOpener)
 	if !ok {
 		return fmt.Errorf("backend %q does not support opening projects", invocation.Selection.Kind)
 	}
 	return opener.OpenProject(ctx, place.Path, capabilities.OpenOptions{})
+}
+
+func containerOpenID(place picker.Place) string {
+	if !isLocalContainer(place.Machine) && strings.TrimSpace(place.ContainerName) != "" {
+		// Remote tmux IDs are stable backend handles, but proxies attach by
+		// the displayed session name and use it for their local identity.
+		return place.ContainerName
+	}
+	return place.ContainerID
 }
 
 type containerTargetGroup struct {
@@ -185,9 +194,14 @@ func containerActionResolver(invocation Invocation) capabilities.ContainerAction
 	if invocation.ContainerResolver != nil {
 		return invocation.ContainerResolver
 	}
+	var proxy capabilities.RemoteProxy
+	if candidate, ok := invocation.Adapter.(capabilities.RemoteProxy); ok {
+		proxy = candidate
+	}
 	return configuredContainerResolver{
 		local:  localContainerResolver{adapter: invocation.Adapter},
 		remote: configuredRemoteMachines(invocation.Config.Remote.Machines),
+		proxy:  proxy,
 	}
 }
 
@@ -205,6 +219,7 @@ func configuredRemoteMachines(machines []string) map[string]bool {
 type configuredContainerResolver struct {
 	local  localContainerResolver
 	remote map[string]bool
+	proxy  capabilities.RemoteProxy
 }
 
 func (r configuredContainerResolver) ResolveContainerActions(ctx context.Context, machine string) (capabilities.ContainerActions, error) {
@@ -212,9 +227,29 @@ func (r configuredContainerResolver) ResolveContainerActions(ctx context.Context
 		return r.local.ResolveContainerActions(ctx, machine)
 	}
 	if r.remote[machine] {
+		if r.proxy != nil {
+			return remoteContainerActions{machine: machine, proxy: r.proxy}, nil
+		}
 		return unsupportedRemoteContainerActions{machine: machine}, nil
 	}
 	return nil, fmt.Errorf("container machine %q is not configured", machine)
+}
+
+type remoteContainerActions struct {
+	machine string
+	proxy   capabilities.RemoteProxy
+}
+
+func (a remoteContainerActions) OpenContainer(ctx context.Context, id string) error {
+	return a.proxy.Proxy(ctx, a.machine, id)
+}
+
+func (a remoteContainerActions) RenameContainer(context.Context, string, string) error {
+	return fmt.Errorf("renaming remote containers is not yet supported for machine %q", a.machine)
+}
+
+func (a remoteContainerActions) KillContainer(context.Context, string) error {
+	return fmt.Errorf("killing remote containers is not yet supported for machine %q", a.machine)
 }
 
 type unsupportedRemoteContainerActions struct {

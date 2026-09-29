@@ -22,6 +22,7 @@ type fakeRunner struct {
 	fail             map[string]error
 	outputs          map[string][]byte
 	sequences        map[string][][]byte
+	outputFunc       func(string, []string) ([]byte, bool)
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -34,6 +35,11 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 		output := sequence[0]
 		f.sequences[key] = sequence[1:]
 		return output, nil
+	}
+	if f.outputFunc != nil {
+		if output, ok := f.outputFunc(name, args); ok {
+			return output, nil
+		}
 	}
 	return f.outputs[key], nil
 }

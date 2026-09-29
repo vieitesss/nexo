@@ -23,6 +23,9 @@ type Backend struct {
 	Inside   bool
 	agents   *Source
 	notifier *Notifier
+
+	proxyConfig     config.RemoteConfig
+	proxyConfigPath string
 }
 
 // New constructs a tmux backend using the supplied command runner. The

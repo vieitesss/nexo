@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDecodeSupportsNestedFeatureSections(t *testing.T) {
@@ -131,6 +132,39 @@ func TestLoadParsesRemoteSettings(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Remote, RemoteConfig{Machines: []string{"devbox", "gpu1"}, SSHConfig: "/tmp/ssh-config"}) {
 		t.Fatalf("Remote = %#v, want configured machines", got.Remote)
+	}
+}
+
+func TestLoadParsesRemoteProxySettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[remote]\ntransport = \"mosh\"\nreconnect-initial = \"2s\"\nreconnect-max = \"12s\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Remote.Transport != "mosh" || got.Remote.ReconnectInitial != 2*time.Second || got.Remote.ReconnectMax != 12*time.Second {
+		t.Fatalf("Remote = %#v, want mosh and durations", got.Remote)
+	}
+	if got.Remote.EffectiveTransport() != "mosh" {
+		t.Fatalf("EffectiveTransport() = %q, want mosh", got.Remote.EffectiveTransport())
+	}
+}
+
+func TestLoadRejectsInvalidRemoteProxySettings(t *testing.T) {
+	for _, contents := range []string{
+		"[remote]\ntransport = \"telnet\"\n",
+		"[remote]\nreconnect-initial = \"0s\"\n",
+		"[remote]\nreconnect-max = \"500ms\"\nreconnect-initial = \"1s\"\n",
+	} {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Fatalf("Load(%q) error = nil, want validation error", contents)
+		}
 	}
 }
 

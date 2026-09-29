@@ -67,6 +67,13 @@ func TestLocalContainerResolverRejectsRemoteMachine(t *testing.T) {
 	}
 }
 
+func TestRemotePickerOpensDisplayedContainerName(t *testing.T) {
+	place := picker.Place{Machine: "devbox", ContainerID: "$1", ContainerName: "api"}
+	if got, want := containerOpenID(place), "api"; got != want {
+		t.Fatalf("container open target = %q, want displayed name %q", got, want)
+	}
+}
+
 func TestPlacePickerPassesBackendAndExplicitConfigToPopupChild(t *testing.T) {
 	popup := &fakePopup{}
 	command := placePickerCommand{}

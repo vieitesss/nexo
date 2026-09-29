@@ -147,5 +147,7 @@ func isNoServer(err error) bool {
 		return false
 	}
 	message := strings.ToLower(fmt.Sprint(tmuxErr.Stderr))
-	return strings.Contains(message, "no server running") || strings.Contains(message, "failed to connect to server")
+	return strings.Contains(message, "no server running") ||
+		strings.Contains(message, "failed to connect to server") ||
+		strings.Contains(message, "no such file or directory")
 }

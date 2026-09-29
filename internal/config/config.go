@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -71,15 +72,61 @@ func DefaultPathFrom(home, xdgConfigHome string) string {
 }
 
 func parse(contents []byte, path string) (Config, error) {
-	var cfg Config
-	if err := decode(contents, path, &cfg); err != nil {
+	// TOML durations are strings while the runtime config uses time.Duration.
+	// Decode through a small wire shape so malformed values can identify their
+	// own config key instead of failing as a generic type mismatch.
+	var raw struct {
+		Backend string `toml:"backend"`
+		ProjectsConfig
+		Agents AgentsConfig `toml:"agents"`
+		Tmux   TmuxConfig   `toml:"tmux"`
+		Remote struct {
+			Machines         []string `toml:"machines"`
+			SSHConfig        string   `toml:"ssh-config"`
+			Transport        string   `toml:"transport"`
+			ReconnectInitial *string  `toml:"reconnect-initial"`
+			ReconnectMax     *string  `toml:"reconnect-max"`
+		} `toml:"remote"`
+	}
+	if err := decode(contents, path, &raw); err != nil {
 		return Config{}, err
+	}
+	cfg := Config{
+		Backend:        raw.Backend,
+		ProjectsConfig: raw.ProjectsConfig,
+		Agents:         raw.Agents,
+		Tmux:           raw.Tmux,
+		Remote: RemoteConfig{
+			Machines:  raw.Remote.Machines,
+			SSHConfig: raw.Remote.SSHConfig,
+			Transport: raw.Remote.Transport,
+		},
+	}
+	if raw.Remote.ReconnectInitial != nil {
+		duration, err := time.ParseDuration(*raw.Remote.ReconnectInitial)
+		if err != nil {
+			return Config{}, fmt.Errorf("config %s: invalid duration %q for key %q", path, *raw.Remote.ReconnectInitial, "remote.reconnect-initial")
+		}
+		if duration <= 0 {
+			return Config{}, fmt.Errorf("config %s: reconnect-initial must be greater than zero", path)
+		}
+		cfg.Remote.ReconnectInitial = duration
+	}
+	if raw.Remote.ReconnectMax != nil {
+		duration, err := time.ParseDuration(*raw.Remote.ReconnectMax)
+		if err != nil {
+			return Config{}, fmt.Errorf("config %s: invalid duration %q for key %q", path, *raw.Remote.ReconnectMax, "remote.reconnect-max")
+		}
+		if duration <= 0 {
+			return Config{}, fmt.Errorf("config %s: reconnect-max must be greater than zero", path)
+		}
+		cfg.Remote.ReconnectMax = duration
 	}
 	if err := validateBackend(cfg.Backend); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "backend")
 	}
 	if err := validateRemote(cfg.Remote); err != nil {
-		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "remote.machines")
+		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, remoteValidationKey(err))
 	}
 	cfg.Agents = cfg.Agents.WithDefaults()
 	cfg.Tmux = cfg.Tmux.WithDefaults()
