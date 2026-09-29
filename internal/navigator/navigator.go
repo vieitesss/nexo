@@ -308,7 +308,7 @@ func (m Model) View() string {
 		selected := index == m.cursor
 		items = append(items, shell.Item{
 			Primary:    m.primaryText(row.Agent),
-			Secondary:  m.secondaryText(row.Agent),
+			Secondary:  m.secondaryText(row.Agent, index+1 < len(m.rows)),
 			Selectable: true,
 			Selected:   selected,
 		})
@@ -360,24 +360,177 @@ func (m Model) primaryText(agent capabilities.Agent) string {
 	return strings.Join(parts, " ")
 }
 
-func (m Model) secondaryText(agent capabilities.Agent) string {
-	parts := make([]string, 0, 4)
+func (m Model) secondaryText(agent capabilities.Agent, continuing ...bool) string {
+	continues := true
+	if len(continuing) > 0 {
+		continues = continuing[0]
+	}
+	indent := "  "
+	if continues {
+		indent += m.style(m.theme.Muted).Render("│ ")
+	} else {
+		indent += m.style(m.theme.Muted).Render("  ")
+	}
+	width := m.width - shell.StringWidth(indent)
+	if m.width <= 0 {
+		width = 1 << 20
+	}
+	if width < 0 {
+		width = 0
+	}
+	parts := make([]metadataPart, 0, 4)
 	if agent.Window != "" {
-		parts = append(parts, agent.Window)
+		parts = append(parts, metadataPart{value: agent.Window, flexible: true})
 	}
 	if agent.Target != "" {
-		parts = append(parts, agent.Target)
+		parts = append(parts, metadataPart{value: agent.Target, flexible: true})
 	}
 	if agent.Branch != "" {
-		parts = append(parts, "⎇ "+agent.Branch)
+		parts = append(parts, metadataPart{value: "⎇ " + agent.Branch})
 	}
 	if strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && agent.StoppedSince != nil {
-		parts = append(parts, age(m.now(), *agent.StoppedSince))
+		parts = append(parts, metadataPart{value: age(m.now(), *agent.StoppedSince)})
 	}
-	if len(parts) == 0 {
-		return m.style(m.theme.Muted).Render("no metadata")
+	metadata := fitMetadata(parts, width)
+	if metadata == "" {
+		metadata = "no metadata"
 	}
-	return m.style(m.theme.Muted).Render(strings.Join(parts, " · "))
+	return indent + m.style(m.theme.Muted).Render(metadata)
+}
+
+type metadataPart struct {
+	value    string
+	flexible bool
+}
+
+// fitMetadata budgets each navigator field independently. Window and target
+// may consume the flexible space, while branch and age are reserved first so
+// a long location cannot hide the identifying suffix.
+func fitMetadata(parts []metadataPart, width int) string {
+	if len(parts) == 0 || width <= 0 {
+		return ""
+	}
+	budgets := make([]int, len(parts))
+	for index, part := range parts {
+		budgets[index] = shell.StringWidth(part.value)
+	}
+	separators := (len(parts) - 1) * shell.StringWidth(" · ")
+	available := width - separators
+	if available <= 0 {
+		values := make([]string, 0, len(parts))
+		for _, part := range parts {
+			values = append(values, part.value)
+		}
+		return shell.Truncate(strings.Join(values, " · "), width, "")
+	}
+	used := metadataBudgetTotal(budgets)
+	if used > available {
+		flexible := make([]int, 0, len(parts))
+		protected := make([]int, 0, len(parts))
+		for index, part := range parts {
+			if part.flexible {
+				flexible = append(flexible, index)
+			} else {
+				protected = append(protected, index)
+			}
+		}
+		reserve := 0
+		for _, index := range protected {
+			reserve += budgets[index]
+		}
+		flexibleWidth := available - reserve
+		if flexibleWidth < 0 {
+			flexibleWidth = 0
+		}
+		allocateFlexibleBudgets(budgets, flexible, flexibleWidth)
+		used = metadataBudgetTotal(budgets)
+		if used > available {
+			reduceMetadataBudgets(budgets, used-available, protected)
+		}
+	}
+	fitted := make([]string, 0, len(parts))
+	for index, part := range parts {
+		if budgets[index] <= 0 {
+			continue
+		}
+		fitted = append(fitted, truncateMetadataField(part.value, budgets[index]))
+	}
+	result := strings.Join(fitted, " · ")
+	if shell.StringWidth(result) > width {
+		return shell.Truncate(result, width, "")
+	}
+	return result
+}
+
+func allocateFlexibleBudgets(budgets, flexible []int, available int) {
+	desired := append([]int(nil), budgets...)
+	for _, index := range flexible {
+		budgets[index] = 1
+	}
+	available -= len(flexible)
+	if available <= 0 {
+		return
+	}
+	// Fill short fields first, then share whatever remains between long
+	// fields. This keeps a short target intact beside a long window.
+	for _, index := range flexible {
+		need := desired[index]
+		if need-1 > available {
+			continue
+		}
+		budgets[index] += need - 1
+		available -= need - 1
+	}
+	for available > 0 {
+		index := -1
+		for _, candidate := range flexible {
+			if budgets[candidate] >= desired[candidate] {
+				continue
+			}
+			if index < 0 || budgets[candidate] < budgets[index] {
+				index = candidate
+			}
+		}
+		if index < 0 {
+			return
+		}
+		budgets[index]++
+		available--
+	}
+}
+
+func metadataBudgetTotal(budgets []int) int {
+	total := 0
+	for _, budget := range budgets {
+		total += budget
+	}
+	return total
+}
+
+func reduceMetadataBudgets(budgets []int, excess int, candidates []int) {
+	for excess > 0 {
+		index := -1
+		for _, candidate := range candidates {
+			if candidate >= len(budgets) || budgets[candidate] <= 1 {
+				continue
+			}
+			if index < 0 || budgets[candidate] > budgets[index] {
+				index = candidate
+			}
+		}
+		if index < 0 {
+			return
+		}
+		budgets[index]--
+		excess--
+	}
+}
+
+func truncateMetadataField(value string, width int) string {
+	if width <= 1 {
+		return shell.Truncate(value, width, "")
+	}
+	return shell.Truncate(value, width, "…")
 }
 
 func (m Model) hints() []shell.Hint {

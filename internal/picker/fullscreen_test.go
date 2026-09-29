@@ -1,6 +1,7 @@
 package picker
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -33,6 +34,48 @@ func TestFullScreenViewHonorsWindowSizeAndKeepsSelectionVisible(t *testing.T) {
 	}
 }
 
+func TestFullScreenViewManyRowsScrollsAndBatchesKeepSelection(t *testing.T) {
+	containers := make([]capabilities.Container, 12)
+	for index := range containers {
+		containers[index] = capabilities.Container{ID: fmt.Sprintf("id-%02d", index), Name: fmt.Sprintf("container-%02d", index), Machine: "host"}
+	}
+	model := NewModel(ContainerPlaces(containers), Theme{})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.WindowSizeMsg{Width: 40, Height: 6})
+	model = updated.(Model)
+	for range 9 {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model = updated.(Model)
+	}
+	selected := model.Rows()[model.Cursor()].Place.ContainerID
+	selectedName := model.Rows()[model.Cursor()].Place.ContainerName
+	view := model.View()
+	if !strings.Contains(view, selectedName) {
+		t.Fatalf("scrolled view hides selected container %q: %q", selectedName, view)
+	}
+	if strings.Contains(view, "container-00") {
+		t.Fatalf("scrolled view still starts at the first container: %q", view)
+	}
+	updated, _ = model.Update(PreviewBatch{Previews: map[ContainerRef]string{{Machine: "host", ID: selected}: "preview"}})
+	model = updated.(Model)
+	assertSelectedContainer(t, model, selected, "preview batch")
+	updated, _ = model.Update(AgentBatch{Agents: []capabilities.Agent{{ContainerID: selected, Harness: "pi", State: "working"}}})
+	model = updated.(Model)
+	assertSelectedContainer(t, model, selected, "agent batch")
+	updated, _ = model.Update(RemoteBatch{Machine: "remote", Places: []Place{{Kind: ContainerKind, Machine: "remote", Group: "remote", ContainerID: "remote-id", ContainerName: "remote-container", DisplayRemainder: "remote-container"}}})
+	model = updated.(Model)
+	assertSelectedContainer(t, model, selected, "remote batch")
+}
+
+func assertSelectedContainer(t *testing.T, model Model, want, batch string) {
+	t.Helper()
+	rows := model.Rows()
+	if len(rows) == 0 || model.Cursor() >= len(rows) || rows[model.Cursor()].Place.ContainerID != want {
+		t.Fatalf("selected container rows=%#v cursor=%d after %s, want %q", rows, model.Cursor(), batch, want)
+	}
+}
+
 func TestFullScreenViewKeepsContainerSelectionByIdentityOnBatch(t *testing.T) {
 	places := ContainerPlaces([]capabilities.Container{{ID: "one", Name: "api", Machine: "host"}, {ID: "two", Name: "web", Machine: "host"}})
 	model := NewModel(places, Theme{})
@@ -47,6 +90,28 @@ func TestFullScreenViewKeepsContainerSelectionByIdentityOnBatch(t *testing.T) {
 	model = updated.(Model)
 	if got := model.Rows()[model.Cursor()].Place.ContainerID; got != selected {
 		t.Fatalf("selected container = %q, want %q after resize and batch", got, selected)
+	}
+}
+
+func TestFullScreenViewHidesRenameHintWhileFiltering(t *testing.T) {
+	model := NewModel(ContainerPlaces([]capabilities.Container{{ID: "one", Name: "api", Machine: "host"}}), Theme{})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	model.SetQuery("api")
+	updated, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+	model = updated.(Model)
+	if !strings.Contains(model.View(), "Search: api") {
+		t.Fatalf("filtered view lost query: %q", model.View())
+	}
+	if strings.Contains(model.View(), "rename") {
+		t.Fatalf("filtered view advertises an unavailable rename action: %q", model.View())
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	model = updated.(Model)
+	if model.Query() != "apir" {
+		t.Fatalf("filtered r key changed rename state instead of query: %q", model.Query())
 	}
 }
 

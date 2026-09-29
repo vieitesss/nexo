@@ -1541,7 +1541,7 @@ func (m Model) hints() []shell.Hint {
 	if len(m.query) == 0 && (len(m.markedTargets()) > 0 || m.currentContainer()) {
 		hints = append(hints, m.hint(defaultKeyMap.Kill, "kill"))
 	}
-	if m.currentContainer() {
+	if len(m.query) == 0 && m.currentContainer() {
 		hints = append(hints, m.hint(defaultKeyMap.Rename, "rename"), m.hint(defaultKeyMap.MarkNext, "mark"))
 	}
 	return hints

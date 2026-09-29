@@ -29,6 +29,28 @@ func TestRenderFitsGraphemesAndSanitizesControls(t *testing.T) {
 	}
 }
 
+func TestNormalizeDropsUnsafeANSISequencesAndTheirPayloads(t *testing.T) {
+	osc := "x\x1b]0;title\nnext\x07y"
+	if got := Plain(osc); got != "xy" {
+		t.Fatalf("OSC payload escaped into text: %q", got)
+	}
+	if got := Plain("x\x1b[2Jy"); got != "xy" {
+		t.Fatalf("erase CSI escaped into text: %q", got)
+	}
+	styled := "\x1b[31mx\x1b[0m"
+	if got := normalize(styled); got != styled {
+		t.Fatalf("SGR styling was not retained: %q", got)
+	}
+	view := Render(Options{Width: 10, Height: 4, Search: osc, Items: []Item{{Primary: "x\x1b[2Jy"}}})
+	lines := strings.Split(view, "\n")
+	if len(lines) != 4 {
+		t.Fatalf("unsafe sequence changed row count: %d, want 4: %q", len(lines), view)
+	}
+	if strings.Contains(view, "\x1b[2J") || strings.Contains(view, "next") {
+		t.Fatalf("unsafe sequence reached rendered frame: %q", view)
+	}
+}
+
 func TestRenderKeepsSelectedSecondaryVisible(t *testing.T) {
 	view := Render(Options{
 		Width:  40,

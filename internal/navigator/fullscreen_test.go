@@ -1,6 +1,7 @@
 package navigator
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,39 @@ func TestFullScreenViewHonorsWindowSize(t *testing.T) {
 	}
 }
 
+func TestNavigatorManyRowsScrollsAndRefreshKeepsSelection(t *testing.T) {
+	agents := make([]capabilities.Agent, 12)
+	for index := range agents {
+		agents[index] = capabilities.Agent{PaneID: fmt.Sprintf("pane-%02d", index), Target: fmt.Sprintf("api:%02d.0", index), Harness: "pi", State: "working"}
+	}
+	model := NewModel(nil, picker.Theme{}, time.Second)
+	model.SetAgents(agents)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 6})
+	model = updated.(Model)
+	for range 9 {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model = updated.(Model)
+	}
+	selected := model.Rows()[model.Cursor()].Agent.PaneID
+	selectedTarget := model.Rows()[model.Cursor()].Agent.Target
+	view := model.View()
+	if !strings.Contains(view, selectedTarget) {
+		t.Fatalf("scrolled view hides selected agent %q: %q", selectedTarget, view)
+	}
+	if strings.Contains(view, "api:00.0") {
+		t.Fatalf("scrolled view still starts at the first agent: %q", view)
+	}
+	reversed := append([]capabilities.Agent(nil), agents...)
+	for left, right := 0, len(reversed)-1; left < right; left, right = left+1, right-1 {
+		reversed[left], reversed[right] = reversed[right], reversed[left]
+	}
+	updated, _ = model.Update(RefreshMsg{Agents: reversed})
+	model = updated.(Model)
+	if got := model.Rows()[model.Cursor()].Agent.PaneID; got != selected {
+		t.Fatalf("selected pane = %q after refresh, want %q", got, selected)
+	}
+}
+
 func TestRefreshKeepsNavigatorSelectionByPaneIdentity(t *testing.T) {
 	model := NewModel(nil, picker.Theme{}, time.Second)
 	model.SetAgents([]capabilities.Agent{
@@ -45,6 +79,43 @@ func TestRefreshKeepsNavigatorSelectionByPaneIdentity(t *testing.T) {
 	model = updated.(Model)
 	if got := model.Rows()[model.Cursor()].Agent.PaneID; got != selected {
 		t.Fatalf("selected pane = %q, want %q after refresh", got, selected)
+	}
+}
+
+func TestNavigatorMetadataIsIndentedAndFieldBudgeted(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 3, 0, 0, time.UTC)
+	stopped := now.Add(-3 * time.Minute)
+	model := NewModel(nil, picker.Theme{}, time.Second)
+	model.SetClock(func() time.Time { return now })
+	model.SetAgents([]capabilities.Agent{
+		{PaneID: "one", Target: "api:0.0", Harness: "pi", Container: "api", Window: "window", State: "working", Branch: "main"},
+		{PaneID: "two", Target: "api:1.0", Harness: "claude", Container: "api", Window: "window", State: "stopped", StoppedSince: &stopped, Branch: "main"},
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+	model = updated.(Model)
+	lines := strings.Split(model.View(), "\n")
+	if !strings.HasPrefix(lines[2], "  │ ") {
+		t.Fatalf("continuing metadata lacks muted indentation prefix: %q", lines[2])
+	}
+	if !strings.HasPrefix(lines[5], "    ") {
+		t.Fatalf("last metadata is not aligned under the primary item: %q", lines[5])
+	}
+
+	long := NewModel(nil, picker.Theme{}, time.Second)
+	long.SetClock(func() time.Time { return now })
+	long.SetAgents([]capabilities.Agent{{
+		PaneID: "long", Target: "api-target-api-target-api-target", Harness: "pi",
+		Window: "long-window-long-window-long-window-long-window", State: "stopped",
+		StoppedSince: &stopped, Branch: "main",
+	}})
+	updated, _ = long.Update(tea.WindowSizeMsg{Width: 40, Height: 6})
+	long = updated.(Model)
+	secondary := strings.Split(long.View(), "\n")[2]
+	if !strings.HasPrefix(secondary, "    ") {
+		t.Fatalf("single-row metadata lacks alignment prefix: %q", secondary)
+	}
+	if !strings.Contains(secondary, "l") || !strings.Contains(secondary, "a") || !strings.Contains(secondary, "⎇ main") || !strings.Contains(secondary, "3m") {
+		t.Fatalf("metadata fields were not independently budgeted: %q", secondary)
 	}
 }
 
