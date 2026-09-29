@@ -34,6 +34,25 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	}
 
 	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
+	places := picker.ProjectPlaces(discovery.Candidates)
+	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
+		containers, err := lister.ListContainers(ctx)
+		if err != nil {
+			return fmt.Errorf("list containers: %w", err)
+		}
+		if reader, ok := invocation.Adapter.(capabilities.ScreenReader); ok {
+			for index := range containers {
+				if containers[index].ActivePaneID == "" {
+					continue
+				}
+				preview, err := reader.ReadScreen(ctx, containers[index].ActivePaneID)
+				if err == nil {
+					containers[index].Preview = preview
+				}
+			}
+		}
+		places = append(places, picker.ContainerPlaces(containers)...)
+	}
 	for _, warning := range discovery.Warnings {
 		if invocation.Stderr != nil {
 			if _, err := fmt.Fprintf(invocation.Stderr, "nexo: warning: %s\n", warning); err != nil {
@@ -49,7 +68,7 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	}
 
 	theme := picker.ThemeFromTerminal(ctx, picker.ThemeQuery{Reader: os.Stdin, Writer: os.Stdout}, 100*time.Millisecond)
-	model := picker.NewModel(picker.ProjectPlaces(discovery.Candidates), theme)
+	model := picker.NewModel(places, theme)
 	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
 	result, err := program.Run()
 	if err != nil {
@@ -62,6 +81,30 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	if final.Cancelled() {
 		return nil
 	}
+	if id, name, ok := final.RenameRequest(); ok {
+		renamer, supported := invocation.Adapter.(capabilities.ContainerRenamer)
+		if !supported {
+			return fmt.Errorf("backend %q does not support renaming containers", invocation.Selection.Kind)
+		}
+		return renamer.RenameContainer(ctx, id, name)
+	}
+	if ids, ok := final.KillRequest(); ok {
+		if killer, supported := invocation.Adapter.(capabilities.ContainerBatchKiller); supported {
+			// The batch capability receives the whole selection exactly once;
+			// the backend may issue one native close command per container.
+			return killer.KillContainers(ctx, ids)
+		}
+		killer, supported := invocation.Adapter.(capabilities.ContainerKiller)
+		if !supported {
+			return fmt.Errorf("backend %q does not support killing containers", invocation.Selection.Kind)
+		}
+		for _, id := range ids {
+			if err := killer.KillContainer(ctx, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	place, ok := final.Selected()
 	if !ok {
 		return nil
@@ -69,8 +112,19 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	if place.OpenAction != nil {
 		return place.OpenAction(ctx, place)
 	}
-	if place.Kind != picker.ProjectKind {
+	if place.Kind != picker.ProjectKind && place.Kind != picker.ContainerKind {
 		return fmt.Errorf("place kind %q is not openable yet", place.Kind)
+	}
+	if place.Kind == picker.ContainerKind {
+		if containerOpener, supported := invocation.Adapter.(capabilities.ContainerOpener); supported {
+			return containerOpener.OpenContainer(ctx, place.ContainerID)
+		}
+		// Keep the existing project-opener seam usable for adapters that model
+		// an existing container as an OpenOptions selection.
+		if opener, supported := invocation.Adapter.(capabilities.ProjectOpener); supported {
+			return opener.OpenProject(ctx, "", capabilities.OpenOptions{ContainerID: place.ContainerID})
+		}
+		return fmt.Errorf("backend %q does not support opening containers", invocation.Selection.Kind)
 	}
 	opener, ok := invocation.Adapter.(capabilities.ProjectOpener)
 	if !ok {

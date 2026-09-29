@@ -28,6 +28,18 @@ func New(r runner.CommandRunner) *Backend {
 	return &Backend{Runner: r, agents: NewAgentSource(r)}
 }
 
+// OpenContainer focuses an existing Herdr workspace by stable workspace ID.
+func (b *Backend) OpenContainer(ctx context.Context, id string) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("herdr container opener requires a command runner")
+	}
+	if strings.TrimSpace(id) == "" {
+		return errors.New("herdr container opener requires an id")
+	}
+	_, err := b.run(ctx, "workspace", "focus", id)
+	return err
+}
+
 // ListAgents implements capabilities.AgentSource with Herdr's native agent
 // awareness.
 func (b *Backend) ListAgents(ctx context.Context) ([]capabilities.Agent, error) {
@@ -186,8 +198,11 @@ func (b *Backend) OpenProject(ctx context.Context, path string, options capabili
 }
 
 type workspace struct {
-	ID    string `json:"workspace_id"`
-	Label string `json:"label"`
+	ID          string `json:"workspace_id"`
+	Label       string `json:"label"`
+	Focused     bool   `json:"focused"`
+	ActiveTabID string `json:"active_tab_id"`
+	PaneCount   int    `json:"pane_count"`
 }
 
 // decodeWorkspaceList accepts the JSON envelope emitted by the Herdr CLI and

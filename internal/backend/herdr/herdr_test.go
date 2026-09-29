@@ -40,6 +40,56 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	return nil, nil
 }
 
+func TestListContainersUsesWorkspaceAndFocusedPane(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list":                    []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-1","label":"dev","focused":true},{"workspace_id":"workspace-2","label":"work"}]}}`),
+		"pane list --workspace workspace-1": []byte(`{"result":{"type":"pane_list","panes":[{"pane_id":"pane-1","focused":false},{"pane_id":"pane-2","focused":true}]}}`),
+		"pane list --workspace workspace-2": []byte(`{"result":{"type":"pane_list","panes":[{"pane_id":"pane-3","focused":false}]}}`),
+	}}
+	backend := New(runner)
+	containers, err := backend.ListContainers(context.Background())
+	if err != nil {
+		t.Fatalf("ListContainers() error = %v", err)
+	}
+	if len(containers) != 2 || containers[0].ID != "workspace-1" || containers[0].ActivePaneID != "pane-2" || containers[1].ActivePaneID != "pane-3" {
+		t.Fatalf("containers = %#v, want focused panes", containers)
+	}
+}
+
+func TestContainerActionsUseNativeHerdrCommands(t *testing.T) {
+	runner := &fakeRunner{}
+	backend := New(runner)
+	if err := backend.OpenContainer(context.Background(), "workspace-1"); err != nil {
+		t.Fatalf("OpenContainer() error = %v", err)
+	}
+	if err := backend.RenameContainer(context.Background(), "workspace-1", "renamed"); err != nil {
+		t.Fatalf("RenameContainer() error = %v", err)
+	}
+	if err := backend.KillContainers(context.Background(), []string{"workspace-1", "workspace-2"}); err != nil {
+		t.Fatalf("KillContainers() error = %v", err)
+	}
+	want := []call{
+		{name: "herdr", args: []string{"workspace", "focus", "workspace-1"}},
+		{name: "herdr", args: []string{"workspace", "rename", "workspace-1", "renamed"}},
+		{name: "herdr", args: []string{"workspace", "close", "workspace-1"}},
+		{name: "herdr", args: []string{"workspace", "close", "workspace-2"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestReadScreenDecodesNativePaneRead(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"pane read pane-1 --source visible": []byte(`{"result":{"text":"hello"}}`),
+	}}
+	backend := New(runner)
+	got, err := backend.ReadScreen(context.Background(), "pane-1")
+	if err != nil || got != "hello" {
+		t.Fatalf("ReadScreen() = %q, %v", got, err)
+	}
+}
+
 func TestOpenProjectFocusesWorkspaceWithExactTargetLabel(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"workspace list": []byte(`{"id":"cli:workspace:list","result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-exact","label":"acme_app"}]}}`),

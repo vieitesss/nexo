@@ -20,6 +20,7 @@ type fakeRunner struct {
 	interactiveCalls int
 	interactiveCheck func()
 	fail             map[string]error
+	outputs          map[string][]byte
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -28,7 +29,7 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	if err, ok := f.fail[key]; ok {
 		return []byte(err.Error()), err
 	}
-	return nil, nil
+	return f.outputs[key], nil
 }
 
 func (f *fakeRunner) RunInteractive(_ context.Context, name string, args ...string) error {
@@ -39,6 +40,54 @@ func (f *fakeRunner) RunInteractive(_ context.Context, name string, args ...stri
 	}
 	key := strings.Join(args, " ")
 	return f.fail[key]
+}
+
+func TestListContainersUsesStableIDsAndActivePane(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"list-sessions -F #{session_id}\t#{session_name}": []byte("$1\tdev\n$2\twork\n"),
+		"list-panes -t $1 -F #{pane_id}\t#{pane_active}":  []byte("%1\t0\n%2\t1\n"),
+		"list-panes -t $2 -F #{pane_id}\t#{pane_active}":  []byte("%3\t1\n"),
+	}}
+	backend := New(runner)
+	containers, err := backend.ListContainers(context.Background())
+	if err != nil {
+		t.Fatalf("ListContainers() error = %v", err)
+	}
+	if len(containers) != 2 || containers[0].ID != "$1" || containers[0].Name != "dev" || containers[0].ActivePaneID != "%2" || containers[1].ActivePaneID != "%3" {
+		t.Fatalf("containers = %#v, want stable IDs and active panes", containers)
+	}
+}
+
+func TestContainerActionsUseBackendNativeCommands(t *testing.T) {
+	runner := &fakeRunner{}
+	backend := New(runner, true)
+	if err := backend.OpenContainer(context.Background(), "$1"); err != nil {
+		t.Fatalf("OpenContainer() error = %v", err)
+	}
+	if err := backend.RenameContainer(context.Background(), "$1", "renamed"); err != nil {
+		t.Fatalf("RenameContainer() error = %v", err)
+	}
+	if err := backend.KillContainers(context.Background(), []string{"$1", "$2"}); err != nil {
+		t.Fatalf("KillContainers() error = %v", err)
+	}
+	want := []call{
+		{name: "tmux", args: []string{"switch-client", "-t", "$1"}},
+		{name: "tmux", args: []string{"rename-session", "-t", "$1", "renamed"}},
+		{name: "tmux", args: []string{"kill-session", "-t", "$1"}},
+		{name: "tmux", args: []string{"kill-session", "-t", "$2"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestReadScreenCapturesPane(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{"capture-pane -p -t %2": []byte("hello\n")}}
+	backend := New(runner)
+	got, err := backend.ReadScreen(context.Background(), "%2")
+	if err != nil || got != "hello\n" {
+		t.Fatalf("ReadScreen() = %q, %v", got, err)
+	}
 }
 
 func TestSessionNameUsesParentAndBaseAndIsTmuxSafe(t *testing.T) {

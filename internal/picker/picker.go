@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/projects"
 )
 
@@ -22,6 +23,10 @@ type PlaceKind string
 const (
 	// ProjectKind is a configured project candidate.
 	ProjectKind PlaceKind = "project"
+	// ContainerKind is an open local (or future remote) container.
+	ContainerKind PlaceKind = "container"
+	// NewContainerKind is the per-machine create affordance.
+	NewContainerKind PlaceKind = "new-container"
 )
 
 // Decoration is an optional piece of metadata supplied by a future place
@@ -49,16 +54,20 @@ type OpenAction func(context.Context, Place) error
 // DisplayRemainder keep ranking and rendering independent of filesystem paths;
 // Path and Group remain populated for project places.
 type Place struct {
-	Kind             PlaceKind
-	Path             string
-	Group            string
-	SearchText       string
-	DisplayRemainder string
-	Payload          any
-	OpenAction       OpenAction
-	Git              bool
-	LinkedWorktree   bool
-	Decorations      []Decoration
+	Kind             PlaceKind    `json:"kind"`
+	Path             string       `json:"path,omitempty"`
+	Group            string       `json:"group,omitempty"`
+	Machine          string       `json:"machine,omitempty"`
+	SearchText       string       `json:"search_text,omitempty"`
+	DisplayRemainder string       `json:"display_remainder,omitempty"`
+	ContainerID      string       `json:"container_id,omitempty"`
+	ContainerName    string       `json:"container_name,omitempty"`
+	Preview          string       `json:"preview,omitempty"`
+	Payload          any          `json:"-"`
+	OpenAction       OpenAction   `json:"-"`
+	Git              bool         `json:"git,omitempty"`
+	LinkedWorktree   bool         `json:"linked_worktree,omitempty"`
+	Decorations      []Decoration `json:"decorations,omitempty"`
 }
 
 // ProjectPlaces converts project discovery results into picker places while
@@ -75,6 +84,31 @@ func ProjectPlaces(candidates []projects.Candidate) []Place {
 			Payload:          candidate,
 			Git:              candidate.Git,
 			LinkedWorktree:   candidate.LinkedWorktree,
+		})
+	}
+	return places
+}
+
+// ContainerPlaces converts backend containers to machine-grouped picker
+// places. The machine field is deliberately separate from the group so remote
+// sources can add more machines without changing the row model.
+func ContainerPlaces(containers []capabilities.Container) []Place {
+	places := make([]Place, 0, len(containers))
+	for _, container := range containers {
+		machine := container.Machine
+		if machine == "" {
+			machine = "local"
+		}
+		places = append(places, Place{
+			Kind:             ContainerKind,
+			Group:            machine,
+			Machine:          machine,
+			SearchText:       container.Name,
+			DisplayRemainder: container.Name,
+			ContainerID:      container.ID,
+			ContainerName:    container.Name,
+			Preview:          container.Preview,
+			Payload:          container,
 		})
 	}
 	return places
@@ -152,8 +186,9 @@ var DefaultTheme = Theme{
 type RowKind string
 
 const (
-	HeaderRow RowKind = "header"
-	PlaceRow  RowKind = "place"
+	HeaderRow       RowKind = "header"
+	PlaceRow        RowKind = "place"
+	NewContainerRow RowKind = "new-container"
 )
 
 // Row is an observable picker row. It is useful for model tests and for
@@ -167,6 +202,7 @@ type Row struct {
 	Score      int
 	Expanded   bool
 	ChildCount int
+	Marked     bool
 }
 
 type group struct {
@@ -187,10 +223,16 @@ type Model struct {
 
 	// expanded is used for empty-query groups. collapsed is an explicit user
 	// collapse in a non-empty query, where matching groups otherwise unfold.
-	expanded  map[string]bool
-	collapsed map[string]bool
-	selected  *Place
-	cancelled bool
+	expanded    map[string]bool
+	collapsed   map[string]bool
+	selected    *Place
+	cancelled   bool
+	marked      map[string]bool
+	renameMode  bool
+	renameInput []rune
+	renameReady bool
+	confirmKill bool
+	killReady   bool
 }
 
 // NewModel constructs a picker model with all groups folded.
@@ -203,6 +245,7 @@ func NewModel(places []Place, theme Theme) Model {
 		theme:     theme,
 		expanded:  make(map[string]bool),
 		collapsed: make(map[string]bool),
+		marked:    make(map[string]bool),
 	}
 	m.rebuild()
 	return m
@@ -232,6 +275,50 @@ func (m Model) Selected() (Place, bool) {
 		return Place{}, false
 	}
 	return *m.selected, true
+}
+
+// RenameRequest reports the confirmed rename entered in the picker.
+func (m Model) RenameRequest() (string, string, bool) {
+	if !m.renameReady || len(m.rows) == 0 || m.cursor >= len(m.rows) {
+		return "", "", false
+	}
+	row := m.rows[m.cursor]
+	if row.Kind != PlaceRow || row.Place.Kind != ContainerKind {
+		return "", "", false
+	}
+	return row.Place.ContainerID, string(m.renameInput), true
+}
+
+// KillRequest reports the complete confirmed selection. It is one request so
+// callers perform one confirmation and one capability call for all containers.
+func (m Model) KillRequest() ([]string, bool) {
+	if !m.killReady {
+		return nil, false
+	}
+	ids := m.markedIDs()
+	if len(ids) == 0 && len(m.rows) > 0 && m.cursor < len(m.rows) {
+		row := m.rows[m.cursor]
+		if row.Kind == PlaceRow && row.Place.Kind == ContainerKind && row.Place.ContainerID != "" {
+			ids = []string{row.Place.ContainerID}
+		}
+	}
+	return ids, len(ids) > 0
+}
+
+// Marked returns the selected container IDs in display order.
+func (m Model) Marked() []string { return m.markedIDs() }
+
+func (m Model) markedIDs() []string {
+	var ids []string
+	seen := make(map[string]bool)
+	for _, place := range m.places {
+		if place.Kind != ContainerKind || !m.marked[place.ContainerID] || place.ContainerID == "" || seen[place.ContainerID] {
+			continue
+		}
+		seen[place.ContainerID] = true
+		ids = append(ids, place.ContainerID)
+	}
+	return ids
 }
 
 // SetQuery is primarily useful to model tests and embedding callers.
@@ -273,6 +360,9 @@ func (m *Model) rebuild() {
 			if m.expanded[g.name] {
 				for index, place := range g.places {
 					m.rows = append(m.rows, m.placeRow(place, 0, nil, index == len(g.places)-1))
+				}
+				if groupHasContainers(g) {
+					m.rows = append(m.rows, Row{Kind: NewContainerRow, Group: g.name, Place: Place{Kind: NewContainerKind, Group: g.name, Machine: g.name, SearchText: "+ new container", DisplayRemainder: "+ new container…"}})
 				}
 			}
 		}
@@ -337,9 +427,46 @@ func (m *Model) rebuild() {
 		if !hit.remOK {
 			positions = nil
 		}
-		m.rows = append(m.rows, m.placeRow(hit.place, hit.full.Score, positions, false))
+		row := m.placeRow(hit.place, hit.full.Score, positions, false)
+		m.rows = append(m.rows, row)
+	}
+	// A machine's create affordance is rendered after its visible containers.
+	// It is intentionally not a ranked candidate of its own.
+	for index := len(m.rows) - 1; index >= 0; index-- {
+		if m.rows[index].Kind != HeaderRow {
+			continue
+		}
+		groupName := m.rows[index].Group
+		if !m.groupHasContainerPlace(groupName) || !m.rows[index].Expanded {
+			continue
+		}
+		insertAt := index + 1
+		for insertAt < len(m.rows) && m.rows[insertAt].Group == groupName {
+			insertAt++
+		}
+		m.rows = append(m.rows, Row{})
+		copy(m.rows[insertAt+1:], m.rows[insertAt:])
+		m.rows[insertAt] = Row{Kind: NewContainerRow, Group: groupName, Place: Place{Kind: NewContainerKind, Group: groupName, Machine: groupName, SearchText: "+ new container", DisplayRemainder: "+ new container…"}}
 	}
 	m.clampCursor()
+}
+
+func groupHasContainers(g group) bool {
+	for _, place := range g.places {
+		if place.Kind == ContainerKind {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) groupHasContainerPlace(name string) bool {
+	for _, place := range m.places {
+		if place.Group == name && place.Kind == ContainerKind {
+			return true
+		}
+	}
+	return false
 }
 
 func (m Model) groupCount(groups []group, name string) int {
@@ -352,7 +479,7 @@ func (m Model) groupCount(groups []group, name string) int {
 }
 
 func (m Model) placeRow(place Place, score int, positions []int, _ bool) Row {
-	return Row{Kind: PlaceRow, Group: place.Group, Place: place, Remainder: visibleRemainder(place), Matches: append([]int(nil), positions...), Score: score}
+	return Row{Kind: PlaceRow, Group: place.Group, Place: place, Remainder: visibleRemainder(place), Matches: append([]int(nil), positions...), Score: score, Marked: m.marked[place.ContainerID]}
 }
 
 func searchText(place Place) string {
@@ -396,24 +523,66 @@ func (m *Model) clampCursor() {
 // KeyMap documents the picker key bindings using Bubbles' key package.
 type KeyMap struct {
 	Up, Down, Accept, Expand, Collapse, Clear key.Binding
+	MarkNext, MarkPrevious                    key.Binding
+	Rename, Kill                              key.Binding
 }
 
 var defaultKeyMap = KeyMap{
-	Up:       key.NewBinding(key.WithKeys("up", "ctrl+k")),
-	Down:     key.NewBinding(key.WithKeys("down", "ctrl+j")),
-	Accept:   key.NewBinding(key.WithKeys("enter")),
-	Expand:   key.NewBinding(key.WithKeys("right", tea.KeySpace.String())),
-	Collapse: key.NewBinding(key.WithKeys("left")),
-	Clear:    key.NewBinding(key.WithKeys("esc")),
+	Up:           key.NewBinding(key.WithKeys("up", "ctrl+k")),
+	Down:         key.NewBinding(key.WithKeys("down", "ctrl+j")),
+	Accept:       key.NewBinding(key.WithKeys("enter")),
+	Expand:       key.NewBinding(key.WithKeys("right", tea.KeySpace.String())),
+	Collapse:     key.NewBinding(key.WithKeys("left")),
+	Clear:        key.NewBinding(key.WithKeys("esc")),
+	MarkNext:     key.NewBinding(key.WithKeys("tab")),
+	MarkPrevious: key.NewBinding(key.WithKeys("shift+tab")),
+	Rename:       key.NewBinding(key.WithKeys("r")),
+	Kill:         key.NewBinding(key.WithKeys("x", "delete")),
 }
 
-// Update handles search input, folding, navigation and accepting a project.
+// Update handles search input, folding, navigation, container actions and
+// accepting a place.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.SetSize(msg.Width, msg.Height)
 		return m, nil
 	case tea.KeyMsg:
+		if m.renameMode {
+			switch {
+			case msg.Type == tea.KeyEsc:
+				m.renameMode = false
+				return m, nil
+			case key.Matches(msg, defaultKeyMap.Accept):
+				if strings.TrimSpace(string(m.renameInput)) != "" {
+					m.renameReady = true
+					m.renameMode = false
+					return m, tea.Quit
+				}
+				return m, nil
+			case msg.Type == tea.KeyBackspace, msg.Type == tea.KeyDelete:
+				if len(m.renameInput) > 0 {
+					m.renameInput = m.renameInput[:len(m.renameInput)-1]
+				}
+				return m, nil
+			case msg.Type == tea.KeyRunes:
+				m.renameInput = append(m.renameInput, msg.Runes...)
+				return m, nil
+			}
+		}
+		if m.confirmKill {
+			switch {
+			case msg.Type == tea.KeyEsc, (msg.Type == tea.KeyRunes && strings.EqualFold(string(msg.Runes), "n")):
+				m.confirmKill = false
+				return m, nil
+			case msg.Type == tea.KeyRunes && strings.EqualFold(string(msg.Runes), "y"):
+				m.confirmKill = false
+				m.killReady = true
+				return m, tea.Quit
+			default:
+				return m, nil
+			}
+		}
 		switch {
 		case msg.Type == tea.KeyCtrlC, msg.Type == tea.KeyEsc:
 			m.cancelled = true
@@ -421,15 +590,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.Type == tea.KeyRunes && len(m.query) == 0 && string(msg.Runes) == "q":
 			m.cancelled = true
 			return m, tea.Quit
+		case msg.Type == tea.KeyRunes && len(m.query) == 0 && string(msg.Runes) == "r":
+			if m.currentContainer() {
+				m.renameMode = true
+				m.renameInput = nil
+			}
+			return m, nil
+		case msg.Type == tea.KeyRunes && len(m.query) == 0 && (string(msg.Runes) == "x" || string(msg.Runes) == "d"):
+			if len(m.markedIDs()) > 0 || m.currentContainer() {
+				m.confirmKill = true
+			}
+			return m, nil
+		case key.Matches(msg, defaultKeyMap.MarkNext):
+			m.markCurrent()
+			m.moveCursor(1)
+			return m, nil
+		case key.Matches(msg, defaultKeyMap.MarkPrevious):
+			m.markCurrent()
+			m.moveCursor(-1)
+			return m, nil
 		case key.Matches(msg, defaultKeyMap.Clear):
 			return m, nil
 		case key.Matches(msg, defaultKeyMap.Up):
-			m.cursor--
-			m.clampCursor()
+			m.moveCursor(-1)
 			return m, nil
 		case key.Matches(msg, defaultKeyMap.Down):
-			m.cursor++
-			m.clampCursor()
+			m.moveCursor(1)
 			return m, nil
 		case key.Matches(msg, defaultKeyMap.Collapse):
 			return m.collapseCurrent()
@@ -442,6 +628,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			row := m.rows[m.cursor]
 			if row.Kind == HeaderRow {
 				return m.expandCurrent()
+			}
+			if row.Kind == NewContainerRow {
+				return m, nil
 			}
 			selected := row.Place
 			m.selected = &selected
@@ -465,6 +654,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) currentContainer() bool {
+	return len(m.rows) > 0 && m.cursor < len(m.rows) && m.rows[m.cursor].Kind == PlaceRow && m.rows[m.cursor].Place.Kind == ContainerKind && m.rows[m.cursor].Place.ContainerID != ""
+}
+
+func (m *Model) markCurrent() {
+	if !m.currentContainer() {
+		return
+	}
+	id := m.rows[m.cursor].Place.ContainerID
+	m.marked[id] = !m.marked[id]
+	m.rebuild()
+}
+
+func (m *Model) moveCursor(direction int) {
+	if len(m.rows) == 0 {
+		return
+	}
+	m.cursor += direction
+	m.clampCursor()
 }
 
 func (m Model) expandCurrent() (tea.Model, tea.Cmd) {
@@ -517,7 +727,11 @@ func (m Model) collapseCurrent() (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	var lines []string
 	queryStyle := m.style(m.theme.Foreground)
-	lines = append(lines, queryStyle.Render("> "+string(m.query)))
+	if m.renameMode {
+		lines = append(lines, queryStyle.Render("rename: "+string(m.renameInput)))
+	} else {
+		lines = append(lines, queryStyle.Render("> "+string(m.query)))
+	}
 	for index, row := range m.rows {
 		selected := index == m.cursor
 		if row.Kind == HeaderRow {
@@ -536,6 +750,11 @@ func (m Model) View() string {
 			}
 			continue
 		}
+		if row.Kind == NewContainerRow {
+			spineStyle := m.style(m.theme.Muted)
+			lines = append(lines, m.rowStyle(selected, false).Render("  ")+spineStyle.Render("└ ")+m.rowStyle(selected, false).Render(row.Place.DisplayRemainder))
+			continue
+		}
 		spine := "├"
 		if index+1 >= len(m.rows) || m.rows[index+1].Kind == HeaderRow || m.rows[index+1].Group != row.Group {
 			spine = "└"
@@ -543,9 +762,32 @@ func (m Model) View() string {
 		spineStyle := m.style(m.theme.Muted)
 		body := m.highlight(row.Remainder, row.Matches, selected)
 		body = strings.ReplaceAll(body, "/", spineStyle.Render(" │ "))
+		if row.Place.Kind == ContainerKind {
+			mark := "☐"
+			if row.Marked {
+				mark = "☑"
+			}
+			body = mark + " " + body
+			if preview := previewLine(row.Place.Preview); preview != "" {
+				body += "  " + spineStyle.Render(preview)
+			}
+		}
 		lines = append(lines, m.rowStyle(selected, false).Render("  ")+spineStyle.Render(spine+" ")+m.rowStyle(selected, false).Render(body))
 	}
+	if m.confirmKill {
+		lines = append(lines, queryStyle.Render("kill selected containers? [y/N]"))
+	}
 	return strings.Join(lines, "\n")
+}
+
+func previewLine(preview string) string {
+	for _, line := range strings.Split(preview, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 func itoa(value int) string {

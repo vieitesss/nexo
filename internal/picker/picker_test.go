@@ -2,11 +2,13 @@ package picker
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/projects"
 )
 
@@ -156,6 +158,72 @@ func TestEnterAcceptsPlaceButNotHeader(t *testing.T) {
 	}
 	if selected, ok := model.Selected(); !ok || selected.Path != "/work/alpha/app" {
 		t.Fatalf("selected = %#v, ok=%v", selected, ok)
+	}
+}
+
+func TestContainerPlacesFoldByMachineAndRenderCreateRowAndPreview(t *testing.T) {
+	places := ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "dev", Machine: "laptop", Preview: "shell$"}})
+	model := NewModel(places, Theme{})
+	if got, want := model.View(), "> \n▸ laptop (1)"; got != want {
+		t.Fatalf("folded view = %q, want %q", got, want)
+	}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = updated.(Model)
+	rows := model.Rows()
+	if len(rows) != 3 || rows[1].Place.ContainerID != "$1" || rows[2].Kind != NewContainerRow {
+		t.Fatalf("rows = %#v, want machine child and create row", rows)
+	}
+	if got := model.View(); !strings.Contains(got, "dev  shell$") || !strings.Contains(got, "+ new container…") {
+		t.Fatalf("view = %q, want preview and create row", got)
+	}
+}
+
+func TestContainerMarksAndKillConfirmOnceForSelection(t *testing.T) {
+	places := ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "one", Machine: "host"}, {ID: "$2", Name: "two", Machine: "host"}})
+	model := NewModel(places, Theme{})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if got, want := model.Marked(), []string{"$1", "$2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("marked = %#v, want %#v", got, want)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	model = updated.(Model)
+	if _, ok := model.KillRequest(); ok {
+		t.Fatal("kill request available before confirmation")
+	}
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("confirmation did not quit")
+	}
+	if got, ok := model.KillRequest(); !ok || !reflect.DeepEqual(got, []string{"$1", "$2"}) {
+		t.Fatalf("kill request = %#v, %v", got, ok)
+	}
+}
+
+func TestContainerRenameRequest(t *testing.T) {
+	model := NewModel(ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "one", Machine: "host"}}), Theme{})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("renamed")})
+	model = updated.(Model)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("rename did not quit")
+	}
+	if id, name, ok := model.RenameRequest(); !ok || id != "$1" || name != "renamed" {
+		t.Fatalf("rename request = %q, %q, %v", id, name, ok)
 	}
 }
 
