@@ -318,12 +318,18 @@ func (b *Backend) FocusPane(ctx context.Context, paneID string) error {
 				return err
 			}
 		}
+		if err := b.MarkAgentSeen(ctx, paneID); err != nil {
+			return err
+		}
 		return nil
 	}
 	for _, operation := range []string{"select-window", "select-pane"} {
 		if _, err := b.run(ctx, operation, "-t", paneID); err != nil {
 			return err
 		}
+	}
+	if err := b.MarkAgentSeen(ctx, paneID); err != nil {
+		return err
 	}
 	return b.runInteractive(ctx, "attach-session", "-t", paneID)
 }
