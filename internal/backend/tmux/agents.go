@@ -552,14 +552,20 @@ func (s *Source) Watch(ctx context.Context) error {
 }
 
 func (s *Source) installHooks(ctx context.Context) error {
-	if _, err := s.runner.Run(ctx, "tmux", "set-option", "-g", "focus-events", "on"); err != nil {
-		return fmt.Errorf("enable tmux focus events: %w", err)
+	focusEvents, err := s.runner.Run(ctx, "tmux", "show-option", "-gqv", "focus-events")
+	if err != nil {
+		return fmt.Errorf("read tmux focus events: %w", err)
+	}
+	if strings.TrimSpace(string(focusEvents)) != "on" {
+		if _, err := s.runner.Run(ctx, "tmux", "set-option", "-g", "focus-events", "on"); err != nil {
+			return fmt.Errorf("enable tmux focus events: %w", err)
+		}
 	}
 	command := "run-shell 'nexo --backend tmux agents seen #{pane_id}'"
 	if _, err := s.runner.Run(ctx, "tmux", "set-hook", "-g", "pane-focus-in", command); err != nil {
 		return err
 	}
-	_, err := s.runner.Run(ctx, "tmux", "set-hook", "-g", "client-session-changed", command)
+	_, err = s.runner.Run(ctx, "tmux", "set-hook", "-g", "client-session-changed", command)
 	return err
 }
 

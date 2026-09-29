@@ -165,6 +165,21 @@ func TestLoadRejectsRemoteLocalHostnameAlias(t *testing.T) {
 	}
 }
 
+func TestLoadParsesTmuxSettingsAndDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[tmux]\nplace-key = \"none\"\npopup-width = \"70%\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Tmux.PlaceKey != "none" || got.Tmux.AgentKey != "a" || got.Tmux.PopupWidth != "70%" || got.Tmux.PopupHeight != "80%" || got.Tmux.PopupX != "C" || got.Tmux.PopupY != "C" {
+		t.Fatalf("Tmux = %#v, want configured key and defaults", got.Tmux)
+	}
+}
+
 func TestLoadParsesBackend(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("backend = \"tmux\"\n"), 0o600); err != nil {
