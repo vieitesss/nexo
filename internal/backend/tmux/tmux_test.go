@@ -21,6 +21,7 @@ type fakeRunner struct {
 	interactiveCheck func()
 	fail             map[string]error
 	outputs          map[string][]byte
+	sequences        map[string][][]byte
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -28,6 +29,11 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	key := strings.Join(args, " ")
 	if err, ok := f.fail[key]; ok {
 		return []byte(err.Error()), err
+	}
+	if sequence := f.sequences[key]; len(sequence) > 0 {
+		output := sequence[0]
+		f.sequences[key] = sequence[1:]
+		return output, nil
 	}
 	return f.outputs[key], nil
 }

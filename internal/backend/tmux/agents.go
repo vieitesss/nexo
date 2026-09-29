@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -57,13 +58,15 @@ var errWatcherAlreadyRunning = errors.New("tmux agent watcher already running")
 // Source discovers agent panes in a tmux server and polls their visible
 // screens for harness working indicators.
 type Source struct {
-	runner   runner.CommandRunner
-	config   config.AgentsConfig
-	now      func() time.Time
-	stateDir string
-	server   string
-	notifier capabilities.Notifier
-	mu       sync.Mutex
+	runner     runner.CommandRunner
+	config     config.AgentsConfig
+	now        func() time.Time
+	stateDir   string
+	server     string
+	notifier   capabilities.Notifier
+	hookBinary string
+	hookConfig string
+	mu         sync.Mutex
 }
 
 // NewAgentSource creates a tmux AgentSource with the default configuration.
@@ -106,6 +109,15 @@ func (s *Source) SetNotifier(notifier capabilities.Notifier) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.notifier = notifier
+}
+
+// ConfigureHookCommand selects the executable and config file used by focus
+// hooks installed for this tmux server.
+func (s *Source) ConfigureHookCommand(binary, configPath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hookBinary = binary
+	s.hookConfig = configPath
 }
 
 // ListAgents implements capabilities.AgentSource.
@@ -522,7 +534,7 @@ func (s *Source) Watch(ctx context.Context) error {
 		watchersMu.Unlock()
 		release()
 	}()
-	if err := s.installHooks(ctx); err != nil {
+	if err := s.installHooksQuiet(ctx); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -552,15 +564,80 @@ func (s *Source) Watch(ctx context.Context) error {
 }
 
 func (s *Source) installHooks(ctx context.Context) error {
-	if _, err := s.runner.Run(ctx, "tmux", "set-option", "-g", "focus-events", "on"); err != nil {
-		return fmt.Errorf("enable tmux focus events: %w", err)
+	return s.installHooksWithWarning(ctx, true)
+}
+
+func (s *Source) installHooksQuiet(ctx context.Context) error {
+	return s.installHooksWithWarning(ctx, false)
+}
+
+func (s *Source) installHooksWithWarning(ctx context.Context, warnFocusEvents bool) error {
+	focusEvents, err := s.runner.Run(ctx, "tmux", "show-option", "-gqv", "focus-events")
+	if err != nil {
+		return fmt.Errorf("read tmux focus events: %w", err)
 	}
-	command := "run-shell 'nexo --backend tmux agents seen #{pane_id}'"
-	if _, err := s.runner.Run(ctx, "tmux", "set-hook", "-g", "pane-focus-in", command); err != nil {
-		return err
+	focusEventsEnabled := strings.TrimSpace(string(focusEvents)) == "on"
+	s.mu.Lock()
+	binary, configPath := s.hookBinary, s.hookConfig
+	s.mu.Unlock()
+	if binary == "" {
+		binary = os.Args[0]
 	}
-	_, err := s.runner.Run(ctx, "tmux", "set-hook", "-g", "client-session-changed", command)
-	return err
+	command := focusHookCommand(binary, configPath)
+	for _, hook := range []string{"pane-focus-in", "client-session-changed"} {
+		output, err := s.runner.Run(ctx, "tmux", "show-hooks", "-g", hook)
+		if err != nil {
+			return fmt.Errorf("read tmux %s hooks: %w", hook, err)
+		}
+		index := nexoHookIndex(string(output), hook)
+		if index >= 0 {
+			if _, err := s.runner.Run(ctx, "tmux", "set-hook", "-g", fmt.Sprintf("%s[%d]", hook, index), command); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := s.runner.Run(ctx, "tmux", "set-hook", "-ag", hook, command); err != nil {
+			return err
+		}
+	}
+	if !focusEventsEnabled && warnFocusEvents {
+		const warning = "nexo: agent seen-marking needs 'set -g focus-events on'"
+		if _, err := s.runner.Run(ctx, "tmux", "display-message", warning); err != nil {
+			return fmt.Errorf("report tmux focus events requirement: %w", err)
+		}
+	}
+	return nil
+}
+
+const focusHookMarker = "NEXO_AGENT_FOCUS_HOOK=1"
+
+func focusHookCommand(binary, configPath string) string {
+	command := focusHookMarker + " " + shellQuote(binary) + " --backend=" + shellQuote("tmux")
+	if configPath != "" {
+		command += " --config-file=" + shellQuote(configPath)
+	}
+	command += " agents seen #{pane_id}"
+	return "run-shell " + shellQuote(command)
+}
+
+func nexoHookIndex(output, hook string) int {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		prefix := hook + "["
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		end := strings.IndexByte(line[len(prefix):], ']')
+		if end < 0 {
+			continue
+		}
+		index, err := strconv.Atoi(line[len(prefix) : len(prefix)+end])
+		if err != nil || !strings.HasPrefix(strings.TrimSpace(line[len(prefix)+end+1:]), `run-shell "`+focusHookMarker+" ") {
+			continue
+		}
+		return index
+	}
+	return -1
 }
 
 func acquireWatcherLock(path string) (func(), error) {

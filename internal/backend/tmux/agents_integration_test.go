@@ -22,6 +22,14 @@ func TestTmuxAgentIntegration(t *testing.T) {
 	server := "nexo-test-" + strings.ReplaceAll(time.Now().Format("150405.000000000"), ".", "")
 	stateDir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateDir)
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	if err := os.MkdirAll(filepath.Join(configHome, "nexo"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configHome, "nexo", "config.toml"), []byte("[agents]\nprocesses = [\"pi\"]\nidle-seconds = 1\npoll-interval = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	pi := filepath.Join(t.TempDir(), "pi")
 	if err := os.WriteFile(pi, []byte("#!/bin/sh\nprintf '⠋ working\\n'\nsleep 1\nprintf '\\033[2J\\033[Hprompt> \\n'\nsleep 30\n"), 0o700); err != nil {
@@ -70,6 +78,7 @@ func TestTmuxAgentIntegration(t *testing.T) {
 		return runner.ExecRunner{}.Run(ctx, name, args...)
 	}))
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 1, PollInterval: 1})
+	source.ConfigureHookCommand(binary, "")
 
 	agents, err := source.ListAgents(ctx)
 	if err != nil {
@@ -77,6 +86,9 @@ func TestTmuxAgentIntegration(t *testing.T) {
 	}
 	if len(agents) != 1 || agents[0].Harness != "pi" {
 		t.Fatalf("discovery = %#v, want one pi agent", agents)
+	}
+	if output, err := runTmux("set-option", "-g", "focus-events", "on"); err != nil {
+		t.Fatalf("enable focus events for focus-hook test: %v: %s", err, output)
 	}
 	if err := source.installHooks(ctx); err != nil {
 		t.Fatal(err)

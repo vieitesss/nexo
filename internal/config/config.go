@@ -25,6 +25,7 @@ type Config struct {
 	ProjectsConfig `toml:",inline"`
 	Agents         AgentsConfig `toml:"agents"`
 	Remote         RemoteConfig `toml:"remote"`
+	Tmux           TmuxConfig   `toml:"tmux"`
 }
 
 // Load reads a required configuration file.
@@ -81,6 +82,7 @@ func parse(contents []byte, path string) (Config, error) {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "remote.machines")
 	}
 	cfg.Agents = cfg.Agents.WithDefaults()
+	cfg.Tmux = cfg.Tmux.WithDefaults()
 	return cfg, nil
 }
 

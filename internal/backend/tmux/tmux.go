@@ -306,6 +306,12 @@ func (b *Backend) ConfigureAgents(cfg config.AgentsConfig) {
 	b.notifier.ConfigureSound(cfg.Sound)
 }
 
+// ConfigureAgentCommand selects the executable and config file used by focus
+// hooks installed by the agent watcher.
+func (b *Backend) ConfigureAgentCommand(binary, configPath string) {
+	b.agents.ConfigureHookCommand(binary, configPath)
+}
+
 // Notify implements capabilities.Notifier for tmux desktop notifications.
 func (b *Backend) Notify(ctx context.Context, message string) error {
 	if b == nil || b.notifier == nil {

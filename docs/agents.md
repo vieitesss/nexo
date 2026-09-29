@@ -43,9 +43,10 @@ read with `git branch --show-current` from Herdr's native foreground or pane
 working directory.
 
 On tmux, `nexo agents watch` runs the poller; only one watcher is active for a
-server at a time. The watcher enables tmux `focus-events` before installing
-its focus hooks; without that server option, tmux does not emit pane focus
-transitions. This lets a focus transition mark that exact pane seen.
+server at a time. The watcher installs its focus hooks without changing tmux
+server options. If `focus-events` is off, it shows a message explaining that
+agent seen-marking needs `set -g focus-events on`; users may enable that option
+themselves when they want focus transitions to mark the exact pane seen.
 
 ## Notifications
 
