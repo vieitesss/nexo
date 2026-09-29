@@ -1,13 +1,342 @@
-# nexo
+<p align="center">
+  <img src="assets/logo.svg" alt="nexo" width="120">
+</p>
+<h1 align="center">nexo</h1>
+<p align="center"><strong>Find your projects, containers, and coding agents in one fast terminal UI.</strong></p>
 
-Go to your projects, your sessions on any machine, and the coding agents that
-need you, from tmux or Herdr.
+<p align="center">
+  <a href="https://github.com/vieitesss/nexo/releases"><img src="https://img.shields.io/github/v/release/vieitesss/nexo?style=flat-square&label=latest%20release" alt="Latest release"></a>
+  <a href="https://github.com/vieitesss/nexo/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/vieitesss/nexo/ci.yml?style=flat-square&label=tests" alt="Tests"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/vieitesss/nexo?style=flat-square" alt="MIT license"></a>
+  <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/vieitesss/nexo?style=flat-square" alt="Go version"></a>
+  <img src="https://img.shields.io/badge/backend-tmux%20%7C%20herdr-5b6472?style=flat-square" alt="tmux and Herdr backends">
+  <a href="https://github.com/vieitesss/nexo/commits/main"><img src="https://img.shields.io/github/last-commit/vieitesss/nexo?style=flat-square" alt="Last commit"></a>
+</p>
 
-Work in progress. See [CONTEXT.md](CONTEXT.md) for the domain language and
-[docs/adr](docs/adr) for design decisions.
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#backends">Backends</a> ·
+  <a href="#contributing">Contributing</a>
+</p>
 
-The tmux adapter entry file reports a missing binary or initialization error;
-all other setup runs through `nexo tmux init`.
+<!-- Demo: record assets/demo.gif with `vhs assets/demo.tape`, then uncomment.
+<p align="center">
+  <img src="assets/demo.gif" alt="nexo place picker and agent navigator demo" width="900">
+</p>
+-->
+
+nexo is a Go CLI and terminal UI for moving between project candidates, open
+containers, remote containers, and coding-agent panes. It drives exactly one
+selected backend per invocation: tmux or Herdr in v1. The place picker and
+agent navigator are built with Bubble Tea and use nexo's own fuzzy ranking.
+
+## Features
+
+<table>
+  <tr>
+    <td valign="top" width="33%"><h4>📍 Place picker</h4><p>Search project candidates and open local or remote containers from one grouped picker. Git context, previews, agent dots, rename, and batch close actions stay in the same view.</p></td>
+    <td valign="top" width="33%"><h4>🌐 Remote machines and proxies</h4><p>List configured machines over SSH and open their containers natively on Herdr or through a local tmux/Herdr proxy. SSH, mosh, and Eternal Terminal attachment transports are supported.</p></td>
+    <td valign="top" width="33%"><h4>🧭 Agent navigator</h4><p>Find every detected agent pane, with unseen stopped agents first. Search by harness, location, target, or branch, then focus the exact pane.</p></td>
+  </tr>
+  <tr>
+    <td valign="top" width="33%"><h4>🔔 Notifications</h4><p>The tmux watcher sends durable working-to-stopped desktop notifications with optional sound. Herdr's native agent state and notification settings remain authoritative.</p></td>
+    <td valign="top" width="33%"><h4>🌿 Git context</h4><p>Project rows can show branch or short SHA identity, additions and deletions, dirty state, and cached local ahead/behind divergence without fetching.</p></td>
+    <td valign="top" width="33%"><h4>⚙️ Two backends</h4><p>Use tmux or Herdr through one backend-neutral CLI and one TOML configuration. Thin adapters call the binary while each multiplexer keeps its native capabilities.</p></td>
+  </tr>
+</table>
+
+## How it works
+
+nexo chooses one backend in this order: the `--backend` flag, the `backend`
+config key, then auto-detection of the inner multiplexer. It never aggregates
+multiplexers or controls one from another. The place picker answers “where do I
+go?”; the agent navigator answers “who needs me?”. Both are full-screen Bubble
+Tea programs with asynchronous discovery and no `fzf` dependency.
+
+Agent rows use one dot and a state that is easy to scan:
+
+| Dot | State | Meaning |
+| --- | --- | --- |
+| <span style="color:#d97706">●</span> | `working` | The agent's working indicator is live. |
+| <span style="color:#dc2626">●</span> | `stopped` / unseen | The agent stopped and its exact pane has not been focused yet. |
+| <span style="color:#16a34a">●</span> | `stopped` / seen | The stopped agent has been seen. |
+
+Backends are native-first: when a multiplexer provides a capability, nexo uses
+it; nexo only fills gaps such as tmux screen polling or remote attachment.
+See the settled design in [CONTEXT.md](CONTEXT.md) and
+[docs/adr](docs/adr).
+
+## Install
+
+> The repository is private and no release has been published yet. `go install`
+> is the installation method that works today. The Homebrew and release-binary
+> methods below apply once the first `v*` release is published; see
+> [docs/release.md](docs/release.md).
+
+<details open>
+<summary><strong>Homebrew (after the first release)</strong></summary>
+
+```sh
+brew install vieitesss/tap/nexo
+```
+
+</details>
+
+<details open>
+<summary><strong>Go install (available today)</strong></summary>
+
+```sh
+go install github.com/vieitesss/nexo/cmd/nexo@latest
+```
+
+</details>
+
+<details open>
+<summary><strong>Release binary (after the first release)</strong></summary>
+
+Download the darwin or linux archive for amd64 or arm64 from the
+[releases page](https://github.com/vieitesss/nexo/releases), unpack `nexo`, and
+put it on `PATH`. Tagged releases include checksums and a Homebrew formula.
+
+</details>
+
+### tmux adapter
+
+With [TPM](https://github.com/tmux-plugins/tpm), add the plugin to
+`~/.tmux.conf`:
+
+```tmux
+set -g @plugin 'vieitesss/nexo'
+```
+
+Press TPM's install key (`prefix` + `I`). The committed `nexo.tmux` adapter
+only checks for the binary and invokes `nexo tmux init`; all bindings, hooks,
+and the agent watcher are configured by the binary. To run it manually from a
+checkout:
+
+```sh
+tmux run-shell /path/to/nexo/nexo.tmux
+```
+
+The default place-picker binding is `C-s` in tmux's root table (no prefix), and
+the default agent-navigator binding is `a` in the prefix table. See
+[docs/agents.md](docs/agents.md) for watcher behavior and notification details.
+
+### Herdr adapter
+
+Install the binary first, then install the plugin (Herdr `0.9.0` or newer):
+
+```sh
+herdr plugin install vieitesss/nexo
+```
+
+For a checkout under development, link the manifest instead:
+
+```sh
+herdr plugin link /path/to/nexo
+```
+
+The manifest opens `nexo --backend=herdr` and
+`nexo --backend=herdr agents pick` in Herdr's native popup panes. Add the
+plugin actions to Herdr's key configuration if desired:
+
+```toml
+[[keys.command]]
+key = "ctrl+s"
+type = "plugin_action"
+command = "nexo.place-picker"
+description = "open nexo place picker"
+
+[[keys.command]]
+key = "prefix+a"
+type = "plugin_action"
+command = "nexo.agent-navigator"
+description = "open nexo agent navigator"
+```
+
+Reload the configuration after editing it:
+
+```sh
+herdr server reload-config
+```
+
+See [docs/herdr.md](docs/herdr.md) for the complete adapter setup and
+[docs/remote.md](docs/remote.md) for native Herdr remote containers.
+
+## Usage
+
+Running `nexo` with only global flags opens the place picker. Global flags can
+appear before or after a command:
+
+```console
+nexo
+nexo --backend=tmux
+nexo --backend=herdr -c ~/.config/nexo/config.toml
+nexo --backend=tmux --json backend
+nexo --version
+nexo --help
+```
+
+### Commands
+
+| Command | Purpose |
+| --- | --- |
+| `nexo backend` | Print the selected backend and its capabilities; add `--json` for structured output. |
+| `nexo list` | List configured project candidates; use `--places` to include local and configured remote containers. |
+| `nexo agents` | List agent panes; add `pick`, `watch`, or `seen PANE_ID`. |
+| `nexo open PATH` | Open a discovered project candidate; Herdr also accepts `--workspace-id ID`. |
+| `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, or `close [MACHINE/CONTAINER]`. |
+| `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch` or `--add-parent`. |
+| `nexo tmux init` | Install the configured tmux bindings, focus hooks, and watcher (tmux backend only). |
+
+Examples:
+
+```console
+# Discover projects as a script-friendly JSON array.
+nexo --backend=tmux --json list
+
+# Include open local and remote containers.
+nexo --backend=tmux list --places --json
+
+# Inspect agents, or open the full-screen navigator.
+nexo --backend=herdr agents --json
+nexo --backend=tmux agents pick
+nexo --backend=tmux agents watch
+nexo --backend=tmux agents seen %4
+
+# Open a project already found by `list`.
+nexo --backend=tmux open ~/src/api
+
+# List and open configured remote containers.
+nexo --backend=tmux remote list --json
+nexo --backend=tmux remote open devbox/api
+nexo --backend=herdr remote new devbox feature-api
+nexo --backend=tmux remote close devbox/api
+
+# Create a worktree and add its parent to project discovery.
+nexo --backend=tmux worktree create --new-branch --add-parent \
+  ~/src/api feature/api ~/worktrees/api
+```
+
+See [docs/list-json.md](docs/list-json.md) for JSON shapes and
+[skills/nexo/SKILL.md](skills/nexo/SKILL.md) for automation recipes, exit
+statuses, and safe verification.
+
+### Picker keys
+
+| Key | Place picker | Agent navigator |
+| --- | --- | --- |
+| `↑` / `↓`, `Ctrl-K` / `Ctrl-J` | Move | Move |
+| `Enter` | Expand a group or open a place | Focus the selected agent pane |
+| `→` / `Space` | Expand a group | — |
+| `←` | Fold a group | — |
+| `Esc` / `Ctrl-C` | Cancel | Cancel |
+| Type, `Backspace` / `Delete` | Fuzzy search, erase search | Fuzzy search, erase search |
+| `Tab` / `Shift-Tab` | Mark next / previous container | — |
+| `r` | Rename the current container when the search is empty | — |
+| `x` / `Delete` | Confirm batch close with `y`; cancel with `n` or `Esc` | — |
+| `q` | Quit when the search is empty | — |
+
+## Configuration
+
+nexo reads one TOML file. Without `-c` or `--config-file`, it reads
+`$XDG_CONFIG_HOME/nexo/config.toml`, or `$HOME/.config/nexo/config.toml` when
+`XDG_CONFIG_HOME` is unset. The default path is optional; an explicit path must
+exist and parse successfully. Unknown keys are rejected.
+
+A complete example:
+
+```toml
+backend = "auto"
+paths = ["~/src", "~/work/*"]
+git-from-home = false
+
+[agents]
+processes = ["pi", "claude", "codex", "opencode", "hermes", "aider", "cursor"]
+idle-seconds = 3
+poll-interval = 2
+notify = true
+sound = false
+working-pattern = { pi = "⠋" }
+
+[remote]
+machines = ["devbox"]
+ssh-config = "~/.ssh/config"
+transport = "ssh"
+reconnect-initial = "1s"
+reconnect-max = "30s"
+
+[tmux]
+place-key = "C-s"
+agent-key = "a"
+popup-width = "100%"
+popup-height = "100%"
+popup-x = "C"
+popup-y = "C"
+```
+
+<details>
+<summary><strong>All configuration options and defaults</strong></summary>
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `backend` | auto-detect (empty) | Select `auto`, `tmux`, or `herdr`; a flag takes precedence over this key. |
+| `paths` | `[]` | Parent directories whose immediate children are project candidates. A trailing `/*` discovers one more directory level; `~` and `$HOME` expand. |
+| `git-from-home` | `false` | Also discover Git directories directly under `$HOME`. |
+| `agents.processes` | `pi`, `claude`, `codex`, `opencode`, `hermes`, `aider`, `cursor` | Allowlisted executable names used to identify agent panes. |
+| `agents.idle-seconds` | `3` | Seconds without a working indicator before a tmux agent is `stopped`. Values `0` or less use the default. |
+| `agents.poll-interval` | `2` | Seconds between tmux watcher and navigator refreshes. Values `0` or less use the default. |
+| `agents.working-pattern` | `{}` | Per-harness literal screen substring used as the working indicator; configured patterns take precedence over built-ins. |
+| `agents.notify` | `true` | Queue tmux working-to-stopped desktop notifications. Herdr notifications are native and unaffected. |
+| `agents.sound` | `false` | Play a short sound with tmux notifications. |
+| `remote.machines` | `[]` | SSH aliases to list and open. `local`, the local hostname, and aliases beginning with `-` are rejected. |
+| `remote.ssh-config` | `""` | Optional SSH config path for listing and attachment. |
+| `remote.transport` | `ssh` | Proxy attachment transport: `ssh`, `mosh`, or `et`. Listing always uses SSH. |
+| `remote.reconnect-initial` | `1s` | Initial retry delay for SSH proxy attachments; must be positive and no greater than `reconnect-max`. |
+| `remote.reconnect-max` | `30s` | Maximum retry delay for SSH proxy attachments; must be positive. |
+| `tmux.place-key` | `C-s` | Root-table key that opens the place picker; `none` leaves it unbound. |
+| `tmux.agent-key` | `a` | Prefix-table key that opens the agent navigator; `none` leaves it unbound. |
+| `tmux.popup-width` | `100%` | tmux popup width passed to `display-popup`. |
+| `tmux.popup-height` | `100%` | tmux popup height passed to `display-popup`. |
+| `tmux.popup-x` | `C` | tmux popup horizontal position passed to `display-popup`. |
+| `tmux.popup-y` | `C` | tmux popup vertical position passed to `display-popup`. |
+
+</details>
+
+## Backends
+
+Exactly one backend is active for each invocation. `--backend` wins over the
+config key, and an empty or `auto` selection detects the inner multiplexer.
+
+| Backend | v1 status | Implemented or checked capabilities |
+| --- | --- | --- |
+| **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, shows popups, focuses panes, creates Git worktrees, detects agents by process and screen polling, watches and notifies, and proxies remote tmux containers over SSH/mosh/et. |
+| **Herdr** | Implemented | Opens and manages native workspaces, reads pane screens, focuses panes, creates Git worktrees, consumes Herdr's native agent state and notifications, opens native Herdr machines, and fills the tmux-remote gap with a workspace proxy. The plugin manifest supplies the popup surface. |
+| **Zellij** | Planned | Capability interfaces checked on paper: native project/session actions, pane listing, screen reads, focus, and floating panes; nexo would fill agent, notification, and remote-proxy gaps. |
+| **WezTerm** | Planned | Capability interfaces checked on paper: native spawn/list/read/focus; no popup CLI operation, and workspace switching needs a Lua/user action. |
+| **Kitty** | Planned | Capability interfaces checked on paper: native tab launch, pane listing, screen reads, focus, and overlays; agent state, notifications, and remote proxies would be nexo gaps. |
+
+The planned rows are a design check, not a promise that those backends are
+installed or supported yet. See [docs/backends.md](docs/backends.md) for the
+full capability matrix and sources.
+
+## Contributing
+
+Build and verify changes locally:
+
+```sh
+just build
+just test
+just lint
+```
+
+Please keep capability interfaces small, adapters thin, and behavior native to
+the selected backend where possible. Start with [CONTEXT.md](CONTEXT.md), then
+read the relevant decision records in [docs/adr](docs/adr),
+[docs/agents.md](docs/agents.md), and [docs/remote.md](docs/remote.md).
 
 ## License
 
