@@ -3,6 +3,7 @@ package picker
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -50,6 +51,15 @@ const (
 // carry their own action without changing the picker model.
 type OpenAction func(context.Context, Place) error
 
+type ContainerRef struct {
+	Machine string `json:"machine"`
+	ID      string `json:"id"`
+}
+
+type PreviewBatch struct {
+	Previews map[ContainerRef]string
+}
+
 // Place is the additive item model used by the picker. SearchText and
 // DisplayRemainder keep ranking and rendering independent of filesystem paths;
 // Path and Group remain populated for project places.
@@ -89,6 +99,24 @@ func ProjectPlaces(candidates []projects.Candidate) []Place {
 	return places
 }
 
+// LocalMachine returns the hostname used to group local containers.
+func LocalMachine() string {
+	name, err := os.Hostname()
+	if err != nil || strings.TrimSpace(name) == "" {
+		return "local"
+	}
+	return name
+}
+
+// MachinePlace adds the create affordance for a machine, including one with
+// no currently open containers.
+func MachinePlace(machine string) Place {
+	if strings.TrimSpace(machine) == "" {
+		machine = LocalMachine()
+	}
+	return Place{Kind: NewContainerKind, Group: machine, Machine: machine, SearchText: "+ new container", DisplayRemainder: "+ new container…"}
+}
+
 // ContainerPlaces converts backend containers to machine-grouped picker
 // places. The machine field is deliberately separate from the group so remote
 // sources can add more machines without changing the row model.
@@ -97,7 +125,7 @@ func ContainerPlaces(containers []capabilities.Container) []Place {
 	for _, container := range containers {
 		machine := container.Machine
 		if machine == "" {
-			machine = "local"
+			machine = LocalMachine()
 		}
 		places = append(places, Place{
 			Kind:             ContainerKind,
@@ -110,6 +138,27 @@ func ContainerPlaces(containers []capabilities.Container) []Place {
 			Preview:          container.Preview,
 			Payload:          container,
 		})
+	}
+	return places
+}
+
+// MachinePlaces returns one create affordance per machine represented by the
+// containers, or the local machine when there are no containers.
+func MachinePlaces(containers []capabilities.Container) []Place {
+	machines := make(map[string]bool)
+	var places []Place
+	for _, container := range containers {
+		machine := container.Machine
+		if machine == "" {
+			machine = LocalMachine()
+		}
+		if !machines[machine] {
+			machines[machine] = true
+			places = append(places, MachinePlace(machine))
+		}
+	}
+	if len(places) == 0 {
+		places = append(places, MachinePlace(LocalMachine()))
 	}
 	return places
 }
@@ -196,6 +245,7 @@ const (
 type Row struct {
 	Kind       RowKind
 	Group      string
+	groupKey   groupKey
 	Place      Place
 	Remainder  string
 	Matches    []int
@@ -205,7 +255,13 @@ type Row struct {
 	Marked     bool
 }
 
+type groupKey struct {
+	kind PlaceKind
+	name string
+}
+
 type group struct {
+	key    groupKey
 	name   string
 	places []Place
 	orders []int
@@ -223,16 +279,17 @@ type Model struct {
 
 	// expanded is used for empty-query groups. collapsed is an explicit user
 	// collapse in a non-empty query, where matching groups otherwise unfold.
-	expanded    map[string]bool
-	collapsed   map[string]bool
+	expanded    map[groupKey]bool
+	collapsed   map[groupKey]bool
 	selected    *Place
 	cancelled   bool
-	marked      map[string]bool
+	marked      map[ContainerRef]bool
 	renameMode  bool
 	renameInput []rune
 	renameReady bool
 	confirmKill bool
 	killReady   bool
+	previewCmd  func() tea.Msg
 }
 
 // NewModel constructs a picker model with all groups folded.
@@ -243,16 +300,28 @@ func NewModel(places []Place, theme Theme) Model {
 	m := Model{
 		places:    append([]Place(nil), places...),
 		theme:     theme,
-		expanded:  make(map[string]bool),
-		collapsed: make(map[string]bool),
-		marked:    make(map[string]bool),
+		expanded:  make(map[groupKey]bool),
+		collapsed: make(map[groupKey]bool),
+		marked:    make(map[ContainerRef]bool),
 	}
 	m.rebuild()
 	return m
 }
 
+// WithPreviewCommand starts asynchronous screen preview loading when the
+// Bubble Tea program starts, rather than blocking picker construction.
+func (m Model) WithPreviewCommand(command func() tea.Msg) Model {
+	m.previewCmd = command
+	return m
+}
+
 // Init implements tea.Model.
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	if m.previewCmd == nil {
+		return nil
+	}
+	return m.previewCmd
+}
 
 // Places returns a copy of the model's source places.
 func (m Model) Places() []Place { return append([]Place(nil), m.places...) }
@@ -277,55 +346,92 @@ func (m Model) Selected() (Place, bool) {
 	return *m.selected, true
 }
 
-// RenameRequest reports the confirmed rename entered in the picker.
-func (m Model) RenameRequest() (string, string, bool) {
+// RenameTargetRequest reports the confirmed rename keyed by machine and ID.
+func (m Model) RenameTargetRequest() (ContainerRef, string, bool) {
 	if !m.renameReady || len(m.rows) == 0 || m.cursor >= len(m.rows) {
-		return "", "", false
+		return ContainerRef{}, "", false
 	}
 	row := m.rows[m.cursor]
 	if row.Kind != PlaceRow || row.Place.Kind != ContainerKind {
-		return "", "", false
+		return ContainerRef{}, "", false
 	}
-	return row.Place.ContainerID, string(m.renameInput), true
+	return ContainerRef{Machine: row.Place.Machine, ID: row.Place.ContainerID}, string(m.renameInput), true
 }
 
-// KillRequest reports the complete confirmed selection. It is one request so
-// callers perform one confirmation and one capability call for all containers.
-func (m Model) KillRequest() ([]string, bool) {
+// RenameRequest retains the ID-only capability seam for local backends.
+func (m Model) RenameRequest() (string, string, bool) {
+	ref, name, ok := m.RenameTargetRequest()
+	return ref.ID, name, ok
+}
+
+// KillTargetsRequest reports the complete confirmed selection keyed by
+// machine and container ID, so future remote sources cannot collide.
+func (m Model) KillTargetsRequest() ([]ContainerRef, bool) {
 	if !m.killReady {
 		return nil, false
 	}
-	ids := m.markedIDs()
-	if len(ids) == 0 && len(m.rows) > 0 && m.cursor < len(m.rows) {
+	targets := m.markedTargets()
+	if len(targets) == 0 && len(m.rows) > 0 && m.cursor < len(m.rows) {
 		row := m.rows[m.cursor]
 		if row.Kind == PlaceRow && row.Place.Kind == ContainerKind && row.Place.ContainerID != "" {
-			ids = []string{row.Place.ContainerID}
+			targets = []ContainerRef{{Machine: row.Place.Machine, ID: row.Place.ContainerID}}
 		}
 	}
-	return ids, len(ids) > 0
+	return targets, len(targets) > 0
+}
+
+// KillRequest retains the ID-only capability seam for local backends.
+func (m Model) KillRequest() ([]string, bool) {
+	targets, ok := m.KillTargetsRequest()
+	if !ok {
+		return nil, false
+	}
+	ids := make([]string, 0, len(targets))
+	for _, target := range targets {
+		ids = append(ids, target.ID)
+	}
+	return ids, true
 }
 
 // Marked returns the selected container IDs in display order.
-func (m Model) Marked() []string { return m.markedIDs() }
-
-func (m Model) markedIDs() []string {
-	var ids []string
-	seen := make(map[string]bool)
-	for _, place := range m.places {
-		if place.Kind != ContainerKind || !m.marked[place.ContainerID] || place.ContainerID == "" || seen[place.ContainerID] {
-			continue
-		}
-		seen[place.ContainerID] = true
-		ids = append(ids, place.ContainerID)
+func (m Model) Marked() []string {
+	targets := m.markedTargets()
+	ids := make([]string, 0, len(targets))
+	for _, target := range targets {
+		ids = append(ids, target.ID)
 	}
 	return ids
 }
 
+func (m Model) markedTargets() []ContainerRef {
+	var targets []ContainerRef
+	seen := make(map[ContainerRef]bool)
+	for _, place := range m.places {
+		ref := ContainerRef{Machine: place.Machine, ID: place.ContainerID}
+		if place.Kind != ContainerKind || place.ContainerID == "" || !m.marked[ref] || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		targets = append(targets, ref)
+	}
+	return targets
+}
+
 // SetQuery is primarily useful to model tests and embedding callers.
+func (m *Model) SetPreview(ref ContainerRef, preview string) {
+	for index := range m.places {
+		place := &m.places[index]
+		if place.Kind == ContainerKind && place.ContainerID == ref.ID && place.Machine == ref.Machine {
+			place.Preview = preview
+		}
+	}
+	m.rebuild()
+}
+
 func (m *Model) SetQuery(query string) {
 	m.query = []rune(query)
-	m.collapsed = make(map[string]bool)
-	m.expanded = make(map[string]bool)
+	m.collapsed = make(map[groupKey]bool)
+	m.expanded = make(map[groupKey]bool)
 	m.rebuild()
 }
 
@@ -334,15 +440,23 @@ func (m *Model) SetSize(width, height int) {
 	m.width, m.height = width, height
 }
 
+func placeGroupKey(place Place) groupKey {
+	if place.Kind == ContainerKind || place.Kind == NewContainerKind {
+		return groupKey{kind: ContainerKind, name: place.Machine}
+	}
+	return groupKey{kind: ProjectKind, name: place.Group}
+}
+
 func (m *Model) rebuild() {
 	groups := make([]group, 0)
-	byName := make(map[string]int)
+	byKey := make(map[groupKey]int)
 	for order, place := range m.places {
-		index, ok := byName[place.Group]
+		key := placeGroupKey(place)
+		index, ok := byKey[key]
 		if !ok {
 			index = len(groups)
-			byName[place.Group] = index
-			groups = append(groups, group{name: place.Group})
+			byKey[key] = index
+			groups = append(groups, group{key: key, name: key.name})
 		}
 		groups[index].places = append(groups[index].places, place)
 		groups[index].orders = append(groups[index].orders, order)
@@ -351,18 +465,15 @@ func (m *Model) rebuild() {
 	query := string(m.query)
 	if query == "" {
 		for _, g := range groups {
-			m.rows = append(m.rows, Row{
-				Kind:       HeaderRow,
-				Group:      g.name,
-				Expanded:   m.expanded[g.name],
-				ChildCount: len(g.places),
-			})
-			if m.expanded[g.name] {
+			m.rows = append(m.rows, Row{Kind: HeaderRow, Group: g.name, groupKey: g.key, Expanded: m.expanded[g.key], ChildCount: m.groupCount(groups, g.key)})
+			if m.expanded[g.key] {
 				for index, place := range g.places {
-					m.rows = append(m.rows, m.placeRow(place, 0, nil, index == len(g.places)-1))
+					if place.Kind != NewContainerKind {
+						m.rows = append(m.rows, m.placeRow(place, 0, nil, index == len(g.places)-1))
+					}
 				}
 				if groupHasContainers(g) {
-					m.rows = append(m.rows, Row{Kind: NewContainerRow, Group: g.name, Place: Place{Kind: NewContainerKind, Group: g.name, Machine: g.name, SearchText: "+ new container", DisplayRemainder: "+ new container…"}})
+					m.rows = append(m.rows, Row{Kind: NewContainerRow, Group: g.name, groupKey: g.key, Place: MachinePlace(g.name)})
 				}
 			}
 		}
@@ -372,16 +483,19 @@ func (m *Model) rebuild() {
 
 	type candidate struct {
 		place Place
-		group string
+		group groupKey
 		full  Match
 		rem   Match
 		remOK bool
 		order int
 	}
 	var ranked []candidate
-	visible := make(map[string]bool)
+	visible := make(map[groupKey]bool)
 	for _, g := range groups {
 		for placeIndex, place := range g.places {
+			if place.Kind == NewContainerKind {
+				continue
+			}
 			full, ok := Rank(query, searchText(place))
 			if !ok {
 				continue
@@ -389,9 +503,9 @@ func (m *Model) rebuild() {
 			rem := visibleRemainder(place)
 			remMatch, remOK := Rank(query, rem)
 			if remOK {
-				visible[g.name] = true
+				visible[g.key] = true
 			}
-			ranked = append(ranked, candidate{place: place, group: g.name, full: full, rem: remMatch, remOK: remOK, order: g.orders[placeIndex]})
+			ranked = append(ranked, candidate{place: place, group: g.key, full: full, rem: remMatch, remOK: remOK, order: g.orders[placeIndex]})
 		}
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {
@@ -401,12 +515,12 @@ func (m *Model) rebuild() {
 		return ranked[i].order < ranked[j].order
 	})
 
-	seenFolded := make(map[string]bool)
-	lastRenderedGroup := ""
+	seenFolded := make(map[groupKey]bool)
+	lastRenderedGroup := groupKey{}
 	for _, hit := range ranked {
 		if !visible[hit.group] && !m.expanded[hit.group] {
 			if !seenFolded[hit.group] {
-				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group, ChildCount: m.groupCount(groups, hit.group)})
+				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.name, groupKey: hit.group, ChildCount: m.groupCount(groups, hit.group)})
 				seenFolded[hit.group] = true
 				lastRenderedGroup = hit.group
 			}
@@ -414,72 +528,73 @@ func (m *Model) rebuild() {
 		}
 		if m.collapsed[hit.group] {
 			if lastRenderedGroup != hit.group {
-				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group, ChildCount: m.groupCount(groups, hit.group)})
+				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.name, groupKey: hit.group, ChildCount: m.groupCount(groups, hit.group)})
 				lastRenderedGroup = hit.group
 			}
 			continue
 		}
 		if lastRenderedGroup != hit.group {
-			m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group, Expanded: visible[hit.group] || m.expanded[hit.group], ChildCount: m.groupCount(groups, hit.group)})
+			m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.name, groupKey: hit.group, Expanded: visible[hit.group] || m.expanded[hit.group], ChildCount: m.groupCount(groups, hit.group)})
 			lastRenderedGroup = hit.group
 		}
 		positions := hit.rem.Positions
 		if !hit.remOK {
 			positions = nil
 		}
-		row := m.placeRow(hit.place, hit.full.Score, positions, false)
-		m.rows = append(m.rows, row)
+		m.rows = append(m.rows, m.placeRow(hit.place, hit.full.Score, positions, false))
 	}
-	// A machine's create affordance is rendered after its visible containers.
-	// It is intentionally not a ranked candidate of its own.
 	for index := len(m.rows) - 1; index >= 0; index-- {
-		if m.rows[index].Kind != HeaderRow {
+		if m.rows[index].Kind != HeaderRow || !m.rows[index].Expanded || !m.groupHasContainerPlace(m.rows[index].groupKey) {
 			continue
 		}
-		groupName := m.rows[index].Group
-		if !m.groupHasContainerPlace(groupName) || !m.rows[index].Expanded {
-			continue
-		}
+		groupKey := m.rows[index].groupKey
 		insertAt := index + 1
-		for insertAt < len(m.rows) && m.rows[insertAt].Group == groupName {
+		for insertAt < len(m.rows) && m.rows[insertAt].groupKey == groupKey {
 			insertAt++
 		}
 		m.rows = append(m.rows, Row{})
 		copy(m.rows[insertAt+1:], m.rows[insertAt:])
-		m.rows[insertAt] = Row{Kind: NewContainerRow, Group: groupName, Place: Place{Kind: NewContainerKind, Group: groupName, Machine: groupName, SearchText: "+ new container", DisplayRemainder: "+ new container…"}}
+		m.rows[insertAt] = Row{Kind: NewContainerRow, Group: groupKey.name, groupKey: groupKey, Place: MachinePlace(groupKey.name)}
 	}
 	m.clampCursor()
 }
 
 func groupHasContainers(g group) bool {
 	for _, place := range g.places {
-		if place.Kind == ContainerKind {
+		if place.Kind == ContainerKind || place.Kind == NewContainerKind {
 			return true
 		}
 	}
 	return false
 }
 
-func (m Model) groupHasContainerPlace(name string) bool {
+func (m Model) groupHasContainerPlace(key groupKey) bool {
 	for _, place := range m.places {
-		if place.Group == name && place.Kind == ContainerKind {
+		if placeGroupKey(place) == key && (place.Kind == ContainerKind || place.Kind == NewContainerKind) {
 			return true
 		}
 	}
 	return false
 }
 
-func (m Model) groupCount(groups []group, name string) int {
+func (m Model) groupCount(groups []group, key groupKey) int {
 	for _, g := range groups {
-		if g.name == name {
-			return len(g.places)
+		if g.key == key {
+			count := 0
+			for _, place := range g.places {
+				if place.Kind != NewContainerKind {
+					count++
+				}
+			}
+			return count
 		}
 	}
 	return 0
 }
 
 func (m Model) placeRow(place Place, score int, positions []int, _ bool) Row {
-	return Row{Kind: PlaceRow, Group: place.Group, Place: place, Remainder: visibleRemainder(place), Matches: append([]int(nil), positions...), Score: score, Marked: m.marked[place.ContainerID]}
+	ref := ContainerRef{Machine: place.Machine, ID: place.ContainerID}
+	return Row{Kind: PlaceRow, Group: place.Group, groupKey: placeGroupKey(place), Place: place, Remainder: visibleRemainder(place), Matches: append([]int(nil), positions...), Score: score, Marked: m.marked[ref]}
 }
 
 func searchText(place Place) string {
@@ -547,6 +662,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.SetSize(msg.Width, msg.Height)
 		return m, nil
+	case PreviewBatch:
+		for ref, preview := range msg.Previews {
+			m.SetPreview(ref, preview)
+		}
+		return m, nil
 	case tea.KeyMsg:
 		if m.renameMode {
 			switch {
@@ -597,7 +717,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case msg.Type == tea.KeyRunes && len(m.query) == 0 && (string(msg.Runes) == "x" || string(msg.Runes) == "d"):
-			if len(m.markedIDs()) > 0 || m.currentContainer() {
+			if len(m.markedTargets()) > 0 || m.currentContainer() {
 				m.confirmKill = true
 			}
 			return m, nil
@@ -638,16 +758,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.Type == tea.KeyBackspace, msg.Type == tea.KeyDelete:
 			if len(m.query) > 0 {
 				m.query = m.query[:len(m.query)-1]
-				m.collapsed = make(map[string]bool)
-				m.expanded = make(map[string]bool)
+				m.collapsed = make(map[groupKey]bool)
+				m.expanded = make(map[groupKey]bool)
 				m.rebuild()
 			}
 			return m, nil
 		case msg.Type == tea.KeyRunes:
 			if len(msg.Runes) > 0 {
 				m.query = append(m.query, msg.Runes...)
-				m.collapsed = make(map[string]bool)
-				m.expanded = make(map[string]bool)
+				m.collapsed = make(map[groupKey]bool)
+				m.expanded = make(map[groupKey]bool)
 				m.rebuild()
 			}
 			return m, nil
@@ -664,8 +784,9 @@ func (m *Model) markCurrent() {
 	if !m.currentContainer() {
 		return
 	}
-	id := m.rows[m.cursor].Place.ContainerID
-	m.marked[id] = !m.marked[id]
+	place := m.rows[m.cursor].Place
+	ref := ContainerRef{Machine: place.Machine, ID: place.ContainerID}
+	m.marked[ref] = !m.marked[ref]
 	m.rebuild()
 }
 
@@ -681,7 +802,7 @@ func (m Model) expandCurrent() (tea.Model, tea.Cmd) {
 	if len(m.rows) == 0 || m.rows[m.cursor].Kind != HeaderRow {
 		return m, nil
 	}
-	name := m.rows[m.cursor].Group
+	name := m.rows[m.cursor].groupKey
 	if string(m.query) == "" {
 		m.expanded[name] = true
 	} else {
@@ -697,7 +818,7 @@ func (m Model) collapseCurrent() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	row := m.rows[m.cursor]
-	groupName := row.Group
+	groupName := row.groupKey
 	if row.Kind == HeaderRow {
 		if string(m.query) == "" {
 			m.expanded[groupName] = false
@@ -714,7 +835,7 @@ func (m Model) collapseCurrent() (tea.Model, tea.Cmd) {
 	m.rebuild()
 	for index := m.cursor; index >= 0; index-- {
 		candidate := m.rows[index]
-		if candidate.Kind == HeaderRow && candidate.Group == groupName {
+		if candidate.Kind == HeaderRow && candidate.groupKey == groupName {
 			m.cursor = index
 			break
 		}

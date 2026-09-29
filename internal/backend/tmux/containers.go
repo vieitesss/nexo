@@ -99,12 +99,38 @@ func (b *Backend) KillContainers(ctx context.Context, ids []string) error {
 	if b == nil || b.Runner == nil {
 		return errors.New("tmux container killer requires a command runner")
 	}
+	current, err := b.currentContainer(ctx)
+	if err != nil {
+		return err
+	}
 	for _, id := range ids {
+		if id == current {
+			continue
+		}
 		if err := b.KillContainer(ctx, id); err != nil {
 			return err
 		}
 	}
+	if current != "" {
+		for _, id := range ids {
+			if id == current {
+				return b.KillContainer(ctx, id)
+			}
+		}
+	}
 	return nil
+}
+
+func (b *Backend) currentContainer(ctx context.Context) (string, error) {
+	pane := strings.TrimSpace(os.Getenv("TMUX_PANE"))
+	if pane == "" {
+		return "", nil
+	}
+	output, err := b.run(ctx, "display-message", "-p", "-t", pane, "#{session_id}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func localMachine() string {

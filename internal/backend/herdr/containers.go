@@ -108,12 +108,38 @@ func (b *Backend) KillContainers(ctx context.Context, ids []string) error {
 	if b == nil || b.Runner == nil {
 		return errors.New("herdr container killer requires a command runner")
 	}
+	current, err := b.currentContainer(ctx)
+	if err != nil {
+		return err
+	}
 	for _, id := range ids {
+		if id == current {
+			continue
+		}
 		if err := b.KillContainer(ctx, id); err != nil {
 			return err
 		}
 	}
+	if current != "" {
+		for _, id := range ids {
+			if id == current {
+				return b.KillContainer(ctx, id)
+			}
+		}
+	}
 	return nil
+}
+
+func (b *Backend) currentContainer(ctx context.Context) (string, error) {
+	pane := strings.TrimSpace(os.Getenv("HERDR_PANE_ID"))
+	if pane == "" {
+		return "", nil
+	}
+	output, err := b.run(ctx, "pane", "get", pane)
+	if err != nil {
+		return "", err
+	}
+	return decodePaneWorkspace(output)
 }
 
 // ReadScreen reads Herdr's native pane snapshot. Herdr owns the terminal
@@ -171,11 +197,41 @@ func decodePaneText(output []byte) (string, error) {
 	}
 	var result struct {
 		Text string `json:"text"`
+		Read struct {
+			Text string `json:"text"`
+		} `json:"read"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return "", fmt.Errorf("decode herdr pane read: %w", err)
 	}
+	if result.Read.Text != "" {
+		return result.Read.Text, nil
+	}
 	return result.Text, nil
+}
+
+func decodePaneWorkspace(output []byte) (string, error) {
+	var envelope struct {
+		Result      json.RawMessage `json:"result"`
+		WorkspaceID string          `json:"workspace_id"`
+	}
+	if err := json.Unmarshal(output, &envelope); err != nil {
+		return "", fmt.Errorf("decode herdr pane: %w", err)
+	}
+	if envelope.WorkspaceID != "" {
+		return envelope.WorkspaceID, nil
+	}
+	raw := envelope.Result
+	if len(raw) == 0 || string(raw) == "null" {
+		raw = output
+	}
+	var paneResult struct {
+		WorkspaceID string `json:"workspace_id"`
+	}
+	if err := json.Unmarshal(raw, &paneResult); err != nil {
+		return "", fmt.Errorf("decode herdr pane: %w", err)
+	}
+	return paneResult.WorkspaceID, nil
 }
 
 func localMachine() string {

@@ -79,9 +79,27 @@ func TestContainerActionsUseNativeHerdrCommands(t *testing.T) {
 	}
 }
 
+func TestKillContainersKillsCurrentWorkspaceLast(t *testing.T) {
+	t.Setenv("HERDR_PANE_ID", "pane-current")
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"pane get pane-current": []byte(`{"result":{"workspace_id":"workspace-1"}}`),
+	}}
+	if err := New(runner).KillContainers(context.Background(), []string{"workspace-1", "workspace-2"}); err != nil {
+		t.Fatalf("KillContainers() error = %v", err)
+	}
+	want := []call{
+		{name: "herdr", args: []string{"pane", "get", "pane-current"}},
+		{name: "herdr", args: []string{"workspace", "close", "workspace-2"}},
+		{name: "herdr", args: []string{"workspace", "close", "workspace-1"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want current workspace last: %#v", runner.calls, want)
+	}
+}
+
 func TestReadScreenDecodesNativePaneRead(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"pane read pane-1 --source visible": []byte(`{"result":{"text":"hello"}}`),
+		"pane read pane-1 --source visible": []byte(`{"result":{"type":"pane_read","read":{"text":"hello"}}}`),
 	}}
 	backend := New(runner)
 	got, err := backend.ReadScreen(context.Background(), "pane-1")

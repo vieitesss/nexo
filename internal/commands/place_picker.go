@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,23 +36,17 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 
 	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
 	places := picker.ProjectPlaces(discovery.Candidates)
+	var previewCmd func() tea.Msg
 	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
 		containers, err := lister.ListContainers(ctx)
 		if err != nil {
 			return fmt.Errorf("list containers: %w", err)
 		}
-		if reader, ok := invocation.Adapter.(capabilities.ScreenReader); ok {
-			for index := range containers {
-				if containers[index].ActivePaneID == "" {
-					continue
-				}
-				preview, err := reader.ReadScreen(ctx, containers[index].ActivePaneID)
-				if err == nil {
-					containers[index].Preview = preview
-				}
-			}
-		}
 		places = append(places, picker.ContainerPlaces(containers)...)
+		places = append(places, picker.MachinePlaces(containers)...)
+		if reader, ok := invocation.Adapter.(capabilities.ScreenReader); ok {
+			previewCmd = previewCommand(ctx, reader, containers)
+		}
 	}
 	for _, warning := range discovery.Warnings {
 		if invocation.Stderr != nil {
@@ -69,6 +64,9 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 
 	theme := picker.ThemeFromTerminal(ctx, picker.ThemeQuery{Reader: os.Stdin, Writer: os.Stdout}, 100*time.Millisecond)
 	model := picker.NewModel(places, theme)
+	if previewCmd != nil {
+		model = model.WithPreviewCommand(previewCmd)
+	}
 	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
 	result, err := program.Run()
 	if err != nil {
@@ -81,14 +79,24 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	if final.Cancelled() {
 		return nil
 	}
-	if id, name, ok := final.RenameRequest(); ok {
+	if target, name, ok := final.RenameTargetRequest(); ok {
+		if !isLocalContainer(target.Machine) {
+			return fmt.Errorf("container machine %q is not supported", target.Machine)
+		}
 		renamer, supported := invocation.Adapter.(capabilities.ContainerRenamer)
 		if !supported {
 			return fmt.Errorf("backend %q does not support renaming containers", invocation.Selection.Kind)
 		}
-		return renamer.RenameContainer(ctx, id, name)
+		return renamer.RenameContainer(ctx, target.ID, name)
 	}
-	if ids, ok := final.KillRequest(); ok {
+	if targets, ok := final.KillTargetsRequest(); ok {
+		ids := make([]string, 0, len(targets))
+		for _, target := range targets {
+			if !isLocalContainer(target.Machine) {
+				return fmt.Errorf("container machine %q is not supported", target.Machine)
+			}
+			ids = append(ids, target.ID)
+		}
 		if killer, supported := invocation.Adapter.(capabilities.ContainerBatchKiller); supported {
 			// The batch capability receives the whole selection exactly once;
 			// the backend may issue one native close command per container.
@@ -116,6 +124,9 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 		return fmt.Errorf("place kind %q is not openable yet", place.Kind)
 	}
 	if place.Kind == picker.ContainerKind {
+		if !isLocalContainer(place.Machine) {
+			return fmt.Errorf("container machine %q is not supported", place.Machine)
+		}
 		if containerOpener, supported := invocation.Adapter.(capabilities.ContainerOpener); supported {
 			return containerOpener.OpenContainer(ctx, place.ContainerID)
 		}
@@ -131,6 +142,62 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 		return fmt.Errorf("backend %q does not support opening projects", invocation.Selection.Kind)
 	}
 	return opener.OpenProject(ctx, place.Path, capabilities.OpenOptions{})
+}
+
+func isLocalContainer(machine string) bool {
+	return machine == "" || machine == "local" || machine == picker.LocalMachine()
+}
+
+func previewCommand(ctx context.Context, reader capabilities.ScreenReader, containers []capabilities.Container) func() tea.Msg {
+	return func() tea.Msg {
+		type job struct {
+			ref  picker.ContainerRef
+			pane string
+		}
+		jobs := make(chan job)
+		previews := make(map[picker.ContainerRef]string)
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		workers := 4
+		if len(containers) < workers {
+			workers = len(containers)
+		}
+		if workers == 0 {
+			return nil
+		}
+		worker := func() {
+			defer wg.Done()
+			for item := range jobs {
+				readCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+				preview, err := reader.ReadScreen(readCtx, item.pane)
+				cancel()
+				if err == nil {
+					mu.Lock()
+					previews[item.ref] = preview
+					mu.Unlock()
+				}
+			}
+		}
+		wg.Add(workers)
+		for index := 0; index < workers; index++ {
+			go worker()
+		}
+		for _, container := range containers {
+			if container.ActivePaneID != "" {
+				machine := container.Machine
+				if machine == "" {
+					machine = picker.LocalMachine()
+				}
+				jobs <- job{ref: picker.ContainerRef{Machine: machine, ID: container.ID}, pane: container.ActivePaneID}
+			}
+		}
+		close(jobs)
+		wg.Wait()
+		if len(previews) == 0 {
+			return nil
+		}
+		return picker.PreviewBatch{Previews: previews}
+	}
 }
 
 func pickerCommand(kind, configPath string) string {

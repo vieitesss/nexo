@@ -59,6 +59,7 @@ func TestListContainersUsesStableIDsAndActivePane(t *testing.T) {
 }
 
 func TestContainerActionsUseBackendNativeCommands(t *testing.T) {
+	t.Setenv("TMUX_PANE", "")
 	runner := &fakeRunner{}
 	backend := New(runner, true)
 	if err := backend.OpenContainer(context.Background(), "$1"); err != nil {
@@ -78,6 +79,24 @@ func TestContainerActionsUseBackendNativeCommands(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestKillContainersKillsCurrentSessionLast(t *testing.T) {
+	t.Setenv("TMUX_PANE", "%current")
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"display-message -p -t %current #{session_id}": []byte("$1\n"),
+	}}
+	if err := New(runner, true).KillContainers(context.Background(), []string{"$1", "$2"}); err != nil {
+		t.Fatalf("KillContainers() error = %v", err)
+	}
+	want := []call{
+		{name: "tmux", args: []string{"display-message", "-p", "-t", "%current", "#{session_id}"}},
+		{name: "tmux", args: []string{"kill-session", "-t", "$2"}},
+		{name: "tmux", args: []string{"kill-session", "-t", "$1"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want current session last: %#v", runner.calls, want)
 	}
 }
 

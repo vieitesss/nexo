@@ -178,6 +178,16 @@ func TestContainerPlacesFoldByMachineAndRenderCreateRowAndPreview(t *testing.T) 
 	}
 }
 
+func TestPreviewBatchUpdatesContainerWithoutRebuildingPicker(t *testing.T) {
+	model := NewModel(ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "one", Machine: "host"}}), Theme{})
+	updated, _ := model.Update(PreviewBatch{Previews: map[ContainerRef]string{{Machine: "host", ID: "$1"}: "shell$"}})
+	model = updated.(Model)
+	places := model.Places()
+	if len(places) == 0 || places[0].Preview != "shell$" {
+		t.Fatalf("places = %#v, want asynchronously loaded preview", places)
+	}
+}
+
 func TestContainerMarksAndKillConfirmOnceForSelection(t *testing.T) {
 	places := ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "one", Machine: "host"}, {ID: "$2", Name: "two", Machine: "host"}})
 	model := NewModel(places, Theme{})
