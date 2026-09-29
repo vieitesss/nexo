@@ -31,6 +31,7 @@ type Invocation struct {
 	ContainerResolver capabilities.ContainerActionResolver
 	Stdout            io.Writer
 	Stderr            io.Writer
+	Stdin             io.Reader
 	JSON              bool
 	Args              []string
 }
