@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/runner"
 )
@@ -21,6 +22,9 @@ import (
 type Backend struct {
 	Runner runner.CommandRunner
 	agents *Source
+
+	proxyConfig     config.RemoteConfig
+	proxyConfigPath string
 }
 
 // New constructs a Herdr backend using the supplied command runner.
@@ -198,11 +202,12 @@ func (b *Backend) OpenProject(ctx context.Context, path string, options capabili
 }
 
 type workspace struct {
-	ID          string `json:"workspace_id"`
-	Label       string `json:"label"`
-	Focused     bool   `json:"focused"`
-	ActiveTabID string `json:"active_tab_id"`
-	PaneCount   int    `json:"pane_count"`
+	ID          string            `json:"workspace_id"`
+	Label       string            `json:"label"`
+	Tokens      map[string]string `json:"tokens"`
+	Focused     bool              `json:"focused"`
+	ActiveTabID string            `json:"active_tab_id"`
+	PaneCount   int               `json:"pane_count"`
 }
 
 // decodeWorkspaceList accepts the JSON envelope emitted by the Herdr CLI and

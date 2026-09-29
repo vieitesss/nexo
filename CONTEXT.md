@@ -78,6 +78,11 @@ Any computer whose containers nexo can switch to, including the local one.
 "SSH host" names only the alias used to reach a machine.
 _Avoid_: host, server
 
+**Remote kind**:
+The multiplexer running on a configured remote machine: tmux or Herdr. A
+listing detects and carries this value so an open operation can choose a native
+Herdr path or a tmux proxy without probing the machine again.
+
 **Proxy**:
 A local container named `MACHINE/CONTAINER` whose only pane attaches to a
 container on another machine. Closing or detaching a proxy never closes the

@@ -328,7 +328,7 @@ func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
 	if len(invocation.Config.Remote.Machines) == 0 || invocation.Runner == nil {
 		return nil
 	}
-	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig)
+	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithKindDetection()
 	commands := make([]tea.Cmd, 0, len(invocation.Config.Remote.Machines))
 	seen := make(map[string]bool)
 	for _, configured := range invocation.Config.Remote.Machines {
@@ -339,7 +339,17 @@ func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
 		seen[machine] = true
 		commands = append(commands, func() tea.Msg {
 			result := lister.ListMachineWithAgents(ctx, machine)
-			return picker.RemoteBatch{Machine: result.Machine, Places: picker.ContainerPlaces(result.Containers), Agents: result.Agents, Error: result.Error}
+			places := picker.ContainerPlaces(result.Containers)
+			for index := range places {
+				if places[index].Kind != picker.ContainerKind {
+					continue
+				}
+				kind := result.Kind
+				places[index].OpenAction = func(openCtx context.Context, place picker.Place) error {
+					return openRemoteContainer(openCtx, invocation, machine, containerOpenID(place), kind)
+				}
+			}
+			return picker.RemoteBatch{Machine: result.Machine, Places: places, Agents: result.Agents, Error: result.Error}
 		})
 	}
 	return commands
