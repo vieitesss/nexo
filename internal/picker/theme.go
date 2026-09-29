@@ -2,7 +2,6 @@ package picker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,7 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/sys/unix"
+	"github.com/charmbracelet/x/term"
+	"github.com/muesli/termenv"
 )
 
 var oscColorPattern = regexp.MustCompile(`(?i)\x1b\](10|11);([^\x07\x1b]+)(?:\x07|\x1b\\)`)
@@ -24,9 +24,10 @@ type ThemeQuery struct {
 }
 
 // ThemeFromTerminal asks for the terminal's default foreground and background.
-// If either query does not answer before timeout, an ANSI-safe fallback is
-// returned. Reads from an os.File use a non-blocking tty fd and leave no
-// reader goroutine behind after the deadline.
+// termenv owns terminal mode changes, OSC parsing, non-TTY detection, and its
+// bounded status-report read. Non-terminal test readers can provide a
+// SetReadDeadline method to exercise the same parsing seam without touching a
+// live terminal.
 func ThemeFromTerminal(ctx context.Context, terminal ThemeQuery, timeout time.Duration) Theme {
 	if ctx == nil {
 		ctx = context.Background()
@@ -36,18 +37,30 @@ func ThemeFromTerminal(ctx context.Context, terminal ThemeQuery, timeout time.Du
 	if terminal.Reader == nil || terminal.Writer == nil {
 		return fallback
 	}
+
+	if reader, ok := terminal.Reader.(*os.File); ok {
+		writer, writerOK := terminal.Writer.(*os.File)
+		if !writerOK || !term.IsTerminal(reader.Fd()) || !term.IsTerminal(writer.Fd()) {
+			return fallback
+		}
+		return themeFromTermenv(termenv.NewOutput(writer), fallback)
+	}
+
 	if timeout <= 0 {
 		timeout = 100 * time.Millisecond
 	}
-
 	_, _ = io.WriteString(terminal.Writer, "\x1b]10;?\x07\x1b]11;?\x07")
-	data, ok := readOSCReply(ctx, terminal.Reader, timeout)
+	data, ok := readGenericReply(ctx, terminal.Reader, timeout)
 	if !ok {
 		return fallback
 	}
-	fg, fgOK := parseOSCColor(data, 10)
-	bg, bgOK := parseOSCColor(data, 11)
-	if !fgOK || !bgOK {
+	return themeFromReply(data, fallback)
+}
+
+func themeFromTermenv(output *termenv.Output, fallback Theme) Theme {
+	fg := termenvColor(output.ForegroundColor())
+	bg := termenvColor(output.BackgroundColor())
+	if fg == "" || bg == "" {
 		return fallback
 	}
 	return Theme{
@@ -60,92 +73,32 @@ func ThemeFromTerminal(ctx context.Context, terminal ThemeQuery, timeout time.Du
 	}
 }
 
-func readOSCReply(ctx context.Context, reader io.Reader, timeout time.Duration) ([]byte, bool) {
-	if file, ok := reader.(*os.File); ok {
-		return readTTYReply(ctx, file, timeout)
-	}
-	return readGenericReply(ctx, reader, timeout)
-}
-
-// readTTYReply polls the terminal fd synchronously. In particular, it does
-// not start a goroutine that can consume input after timeout.
-func readTTYReply(ctx context.Context, file *os.File, timeout time.Duration) ([]byte, bool) {
-	fd := int(file.Fd())
-	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
-	if err != nil || unix.SetNonblock(fd, true) != nil {
-		return nil, false
-	}
-	defer func() { _, _ = unix.FcntlInt(uintptr(fd), unix.F_SETFL, flags) }()
-
-	deadline := time.Now().Add(timeout)
-	var data []byte
-	buffer := make([]byte, 256)
-	for {
-		if bytesContainColor(data, 10) && bytesContainColor(data, 11) {
-			return data, true
-		}
-		if err := contextError(ctx); err != nil || time.Until(deadline) <= 0 {
-			return nil, false
-		}
-		n, readErr := file.Read(buffer)
-		if n > 0 {
-			data = append(data, buffer[:n]...)
-			continue
-		}
-		if readErr != nil && !errors.Is(readErr, unix.EAGAIN) && !errors.Is(readErr, unix.EWOULDBLOCK) {
-			return nil, false
-		}
-		wait := time.Until(deadline)
-		if wait > 2*time.Millisecond {
-			wait = 2 * time.Millisecond
-		}
-		timer := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, false
-		case <-timer.C:
-		}
+func termenvColor(color termenv.Color) string {
+	switch value := color.(type) {
+	case termenv.ANSIColor:
+		return strconv.Itoa(int(value))
+	case termenv.ANSI256Color:
+		return strconv.Itoa(int(value))
+	case termenv.RGBColor:
+		return string(value)
+	case termenv.NoColor:
+		return ""
+	default:
+		return ""
 	}
 }
 
-// readGenericReply keeps the public io.Reader seam useful for model tests.
-// Readers that support deadlines can be cancelled without a goroutine; the
-// final fallback is bounded for arbitrary readers as well.
+// readGenericReply has no uncancellable fallback: an arbitrary io.Reader is
+// not safe to read with a deadline, so callers must provide a deadline-aware
+// reader for this test seam. os.File terminals use termenv above.
 func readGenericReply(ctx context.Context, reader io.Reader, timeout time.Duration) ([]byte, bool) {
-	if deadlineReader, ok := reader.(interface{ SetReadDeadline(time.Time) error }); ok {
-		_ = deadlineReader.SetReadDeadline(time.Now().Add(timeout))
-		defer func() { _ = deadlineReader.SetReadDeadline(time.Time{}) }()
-		return readReplyUntil(ctx, reader, timeout)
-	}
-
-	responses := make(chan []byte, 1)
-	go func() {
-		var data []byte
-		buffer := make([]byte, 256)
-		for {
-			n, err := reader.Read(buffer)
-			if n > 0 {
-				data = append(data, buffer[:n]...)
-				if bytesContainColor(data, 10) && bytesContainColor(data, 11) {
-					responses <- data
-					return
-				}
-			}
-			if err != nil {
-				responses <- data
-				return
-			}
-		}
-	}()
-	select {
-	case <-ctx.Done():
-		return nil, false
-	case data := <-responses:
-		return data, bytesContainColor(data, 10) && bytesContainColor(data, 11)
-	case <-time.After(timeout):
+	deadlineReader, ok := reader.(interface{ SetReadDeadline(time.Time) error })
+	if !ok {
 		return nil, false
 	}
+	_ = deadlineReader.SetReadDeadline(time.Now().Add(timeout))
+	defer func() { _ = deadlineReader.SetReadDeadline(time.Time{}) }()
+	return readReplyUntil(ctx, reader, timeout)
 }
 
 func readReplyUntil(ctx context.Context, reader io.Reader, timeout time.Duration) ([]byte, bool) {
@@ -176,6 +129,22 @@ func contextError(ctx context.Context) error {
 		return ctx.Err()
 	default:
 		return nil
+	}
+}
+
+func themeFromReply(data []byte, fallback Theme) Theme {
+	fg, fgOK := parseOSCColor(data, 10)
+	bg, bgOK := parseOSCColor(data, 11)
+	if !fgOK || !bgOK {
+		return fallback
+	}
+	return Theme{
+		Foreground:          fg,
+		Background:          bg,
+		SelectionBackground: blend(bg, fg, 0.20),
+		Muted:               blend(fg, bg, 0.55),
+		Highlight:           highlightColor(fg),
+		Color:               true,
 	}
 }
 
@@ -258,16 +227,29 @@ func highlightColor(foreground string) string {
 }
 
 func blend(first, second string, amount float64) string {
-	fr, fg, fb, ok := hexRGB(first)
+	fr, fg, fb, ok := ansiRGB(first)
 	if !ok {
-		return first
+		return "8"
 	}
-	sr, sg, sb, ok := hexRGB(second)
+	sr, sg, sb, ok := ansiRGB(second)
 	if !ok {
-		return first
+		return "8"
 	}
 	mix := func(a, b int) int { return int(float64(a)*(1-amount) + float64(b)*amount + 0.5) }
 	return fmt.Sprintf("#%02x%02x%02x", mix(fr, sr), mix(fg, sg), mix(fb, sb))
+}
+
+func ansiRGB(value string) (int, int, int, bool) {
+	if numeric, err := strconv.Atoi(value); err == nil && numeric >= 0 && numeric <= 15 {
+		rgb := [16][3]int{
+			{0, 0, 0}, {128, 0, 0}, {0, 128, 0}, {128, 128, 0},
+			{0, 0, 128}, {128, 0, 128}, {0, 128, 128}, {192, 192, 192},
+			{128, 128, 128}, {255, 0, 0}, {0, 255, 0}, {255, 255, 0},
+			{0, 0, 255}, {255, 0, 255}, {0, 255, 255}, {255, 255, 255},
+		}
+		return rgb[numeric][0], rgb[numeric][1], rgb[numeric][2], true
+	}
+	return hexRGB(value)
 }
 
 func hexRGB(value string) (int, int, int, bool) {

@@ -23,6 +23,15 @@ func TestRepeatedHeadersSeparateConsecutiveRuns(t *testing.T) {
 	if len(rows) != 6 || rows[0].Group != "/g1" || rows[2].Group != "/g2" || rows[4].Group != "/g1" {
 		t.Fatalf("rows = %#v, want repeated g1 headers", rows)
 	}
+	for range 5 {
+		updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model = updated.(Model)
+	}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	model = updated.(Model)
+	if model.Cursor() != 3 || model.Rows()[model.Cursor()].Group != "/g1" {
+		t.Fatalf("cursor=%d rows=%#v, want nearest repeated header", model.Cursor(), model.Rows())
+	}
 }
 
 func TestNoMatchGroupsAreHidden(t *testing.T) {
@@ -30,6 +39,32 @@ func TestNoMatchGroupsAreHidden(t *testing.T) {
 	model.SetQuery("does-not-exist")
 	if rows := model.Rows(); len(rows) != 0 {
 		t.Fatalf("rows = %#v, want no-match groups hidden", rows)
+	}
+}
+
+func TestGoldenViewEmptyQuery(t *testing.T) {
+	model := NewModel(testPlaces(), Theme{})
+	want := "> \n▸ alpha (2)\n▸ beta (1)"
+	if got := model.View(); got != want {
+		t.Fatalf("empty-query view = %q, want %q", got, want)
+	}
+}
+
+func TestGoldenViewRemainderHit(t *testing.T) {
+	model := NewModel(testPlaces(), Theme{})
+	model.SetQuery("am")
+	want := "> am\n▾ beta\n  └ gamma"
+	if got := model.View(); got != want {
+		t.Fatalf("remainder-hit view = %q, want %q", got, want)
+	}
+}
+
+func TestGoldenViewPrefixOnlyGroup(t *testing.T) {
+	model := NewModel(testPlaces(), Theme{})
+	model.SetQuery("/work")
+	want := "> /work\n▸ alpha (2)\n▸ beta (1)"
+	if got := model.View(); got != want {
+		t.Fatalf("prefix-only view = %q, want %q", got, want)
 	}
 }
 
@@ -76,9 +111,12 @@ func TestTreeSpineAndHighlightHaveSeparateThemeStyles(t *testing.T) {
 }
 
 func TestNamedOSCColorsBecomeANSIColors(t *testing.T) {
-	responses := strings.NewReader("\x1b]10;red\x07\x1b]11;blue\x07")
+	responses := deadlineReader{Reader: strings.NewReader("\x1b]10;red\x07\x1b]11;blue\x07")}
 	got := ThemeFromTerminal(context.Background(), ThemeQuery{Reader: responses, Writer: &strings.Builder{}}, time.Second)
 	if got.Foreground != "1" || got.Background != "4" {
 		t.Fatalf("theme = %#v, want ANSI foreground/background", got)
+	}
+	if got.SelectionBackground == "4" || got.Muted == "1" || !strings.HasPrefix(got.SelectionBackground, "#") || !strings.HasPrefix(got.Muted, "#") {
+		t.Fatalf("theme = %#v, want blended ANSI colors", got)
 	}
 }

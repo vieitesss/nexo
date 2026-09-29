@@ -190,6 +190,7 @@ type Model struct {
 	expanded  map[string]bool
 	collapsed map[string]bool
 	selected  *Place
+	cancelled bool
 }
 
 // NewModel constructs a picker model with all groups folded.
@@ -221,6 +222,9 @@ func (m Model) Cursor() int { return m.cursor }
 
 // Rows returns a copy of the current visible rows.
 func (m Model) Rows() []Row { return append([]Row(nil), m.rows...) }
+
+// Cancelled reports whether the picker exited without accepting a place.
+func (m Model) Cancelled() bool { return m.cancelled }
 
 // Selected reports the place accepted by Enter, if any.
 func (m Model) Selected() (Place, bool) {
@@ -411,13 +415,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		switch {
+		case msg.Type == tea.KeyCtrlC, msg.Type == tea.KeyEsc:
+			m.cancelled = true
+			return m, tea.Quit
+		case msg.Type == tea.KeyRunes && len(m.query) == 0 && string(msg.Runes) == "q":
+			m.cancelled = true
+			return m, tea.Quit
 		case key.Matches(msg, defaultKeyMap.Clear):
-			if len(m.query) > 0 {
-				m.query = nil
-				m.collapsed = make(map[string]bool)
-				m.expanded = make(map[string]bool)
-				m.rebuild()
-			}
 			return m, nil
 		case key.Matches(msg, defaultKeyMap.Up):
 			m.cursor--
@@ -498,7 +502,8 @@ func (m Model) collapseCurrent() (tea.Model, tea.Cmd) {
 		m.collapsed[groupName] = true
 	}
 	m.rebuild()
-	for index, candidate := range m.rows {
+	for index := m.cursor; index >= 0; index-- {
+		candidate := m.rows[index]
 		if candidate.Kind == HeaderRow && candidate.Group == groupName {
 			m.cursor = index
 			break

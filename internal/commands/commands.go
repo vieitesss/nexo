@@ -19,14 +19,15 @@ import (
 
 // Invocation is the public seam shared by registered subcommands.
 type Invocation struct {
-	Selection backend.Selection
-	Config    config.Config
-	Runner    runner.CommandRunner
-	Adapter   any
-	Stdout    io.Writer
-	Stderr    io.Writer
-	JSON      bool
-	Args      []string
+	Selection  backend.Selection
+	Config     config.Config
+	ConfigPath string
+	Runner     runner.CommandRunner
+	Adapter    any
+	Stdout     io.Writer
+	Stderr     io.Writer
+	JSON       bool
+	Args       []string
 }
 
 // Command is a registered nexo subcommand.

@@ -45,7 +45,7 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	// Herdr 0.9 exposes popup.close but no request that opens a popup. The
 	// absence of Popup deliberately selects the inline Bubble Tea path there.
 	if popup, ok := invocation.Adapter.(capabilities.Popup); ok && os.Getenv(pickerInlineEnv) != "1" {
-		return popup.ShowPopup(ctx, pickerCommand(string(invocation.Selection.Kind)))
+		return popup.ShowPopup(ctx, pickerCommand(string(invocation.Selection.Kind), invocation.ConfigPath))
 	}
 
 	theme := picker.ThemeFromTerminal(ctx, picker.ThemeQuery{Reader: os.Stdin, Writer: os.Stdout}, 100*time.Millisecond)
@@ -58,6 +58,9 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	final, ok := result.(picker.Model)
 	if !ok {
 		return errors.New("place picker returned an invalid model")
+	}
+	if final.Cancelled() {
+		return nil
 	}
 	place, ok := final.Selected()
 	if !ok {
@@ -76,9 +79,13 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	return opener.OpenProject(ctx, place.Path, capabilities.OpenOptions{})
 }
 
-func pickerCommand(kind string) string {
+func pickerCommand(kind, configPath string) string {
 	binary := shellQuote(os.Args[0])
-	return fmt.Sprintf("NEXO_PLACE_PICKER_INLINE=1 %s --backend=%s", binary, shellQuote(kind))
+	command := fmt.Sprintf("NEXO_PLACE_PICKER_INLINE=1 %s --backend=%s", binary, shellQuote(kind))
+	if configPath != "" {
+		command += " --config-file=" + shellQuote(configPath)
+	}
+	return command
 }
 
 func shellQuote(value string) string {

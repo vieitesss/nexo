@@ -111,10 +111,29 @@ func TestClearingQueryRefoldsAllGroups(t *testing.T) {
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRight})
 	model = updated.(Model)
 	model.SetQuery("app")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	model = updated.(Model)
+	for range 3 {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		model = updated.(Model)
+	}
 	if model.Query() != "" || len(model.Rows()) != 2 || model.Rows()[0].Expanded {
 		t.Fatalf("rows = %#v query=%q, want all groups refolded", model.Rows(), model.Query())
+	}
+}
+
+func TestCancelKeysQuitWithoutSelecting(t *testing.T) {
+	for _, keyType := range []tea.KeyType{tea.KeyCtrlC, tea.KeyEsc} {
+		model := NewModel(testPlaces(), Theme{})
+		updated, cmd := model.Update(tea.KeyMsg{Type: keyType})
+		model = updated.(Model)
+		if cmd == nil || !model.Cancelled() {
+			t.Fatalf("key %v: cancelled=%v cmd=%v, want clean quit", keyType, model.Cancelled(), cmd)
+		}
+	}
+	model := NewModel(testPlaces(), Theme{})
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	model = updated.(Model)
+	if cmd == nil || !model.Cancelled() {
+		t.Fatalf("q: cancelled=%v cmd=%v, want clean quit", model.Cancelled(), cmd)
 	}
 }
 

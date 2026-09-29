@@ -152,14 +152,15 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 	}
 	selection = selection.WithCapabilities(commandRunner, environment)
 	if err := command.Run(context.Background(), commands.Invocation{
-		Selection: selection,
-		Config:    cfg,
-		Runner:    commandRunner,
-		Adapter:   selection.Adapter,
-		Stdout:    stdout,
-		Stderr:    stderr,
-		JSON:      options.JSON,
-		Args:      options.Args,
+		Selection:  selection,
+		Config:     cfg,
+		ConfigPath: options.ConfigPath,
+		Runner:     commandRunner,
+		Adapter:    selection.Adapter,
+		Stdout:     stdout,
+		Stderr:     stderr,
+		JSON:       options.JSON,
+		Args:       options.Args,
 	}); err != nil {
 		writeError(stderr, err)
 		return 1
