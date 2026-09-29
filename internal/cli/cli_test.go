@@ -29,6 +29,23 @@ func TestParseRequiresCommand(t *testing.T) {
 	}
 }
 
+func TestRunWithVersionDoesNotRequireCommandOrBackend(t *testing.T) {
+	var output, errors strings.Builder
+	status := RunWith([]string{"--version"}, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("--version should not invoke an external program")
+		return nil, nil
+	}), backend.MapEnvironment{}, "")
+	if status != 0 {
+		t.Fatalf("status = %d, errors = %q", status, errors.String())
+	}
+	if got, want := output.String(), "nexo dev\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+	if errors.Len() != 0 {
+		t.Fatalf("errors = %q", errors.String())
+	}
+}
+
 func TestRunWithReportsBackendOutsideMultiplexerAsJSON(t *testing.T) {
 	var output, errors strings.Builder
 	status := RunWith([]string{"backend", "--json"}, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {

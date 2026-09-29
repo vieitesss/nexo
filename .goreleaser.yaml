@@ -1,0 +1,50 @@
+version: 2
+
+project_name: nexo
+
+builds:
+  - id: nexo
+    main: ./cmd/nexo
+    binary: nexo
+    ldflags:
+      - -s -w -X github.com/vieitesss/nexo/internal/version.Version={{ .Version }}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: nexo
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+brews:
+  - repository:
+      owner: vieitesss
+      name: homebrew-tap
+      token: '{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}'
+    directory: Formula
+    name: nexo
+    homepage: https://github.com/vieitesss/nexo
+    description: Navigate projects, containers, and coding agents
+    license: MIT
+    install: |
+      bin.install "nexo"
+    test: |
+      system "#{bin}/nexo", "--version"
