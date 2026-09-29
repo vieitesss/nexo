@@ -18,6 +18,11 @@ import (
 
 const DefaultMachineTimeout = 5 * time.Second
 
+const (
+	agentFrameStart = "__NEXO_AGENTS_START__"
+	agentFrameEnd   = "__NEXO_AGENTS_END__"
+)
+
 // MachineResult is one configured machine's listing result. An error does not
 // prevent other machines from being listed.
 type MachineResult struct {
@@ -101,27 +106,19 @@ func (l Lister) ListMachine(ctx context.Context, machine string) MachineResult {
 // statuses from the same machine. An unavailable remote nexo binary is a
 // best-effort omission: containers remain usable and no error is reported.
 func (l Lister) ListMachineWithAgents(ctx context.Context, machine string) MachineResult {
-	result := l.ListMachine(ctx, machine)
-	if result.Error != "" {
+	machine = strings.TrimSpace(machine)
+	result := MachineResult{Machine: machine}
+	if machine == "" {
+		result.Error = "machine name is empty"
 		return result
 	}
-	agents, err := l.ListAgentsMachine(ctx, machine)
-	if err == nil {
-		result.Agents = agents
-	}
-	return result
-}
-
-// ListAgentsMachine reads the optional remote nexo agent listing. Callers that
-// use this as decoration data should ignore errors, because older machines may
-// not have nexo installed.
-func (l Lister) ListAgentsMachine(ctx context.Context, machine string) ([]capabilities.Agent, error) {
-	machine = strings.TrimSpace(machine)
-	if machine == "" {
-		return nil, errors.New("machine name is empty")
-	}
 	if l.Runner == nil {
-		return nil, errors.New("remote agent listing requires a command runner")
+		result.Error = "remote listing requires a command runner"
+		return result
+	}
+	if l.Backend != backend.Tmux && l.Backend != backend.Herdr {
+		result.Error = fmt.Sprintf("backend %q does not support remote listing", l.Backend)
+		return result
 	}
 	timeout := l.Timeout
 	if timeout <= 0 {
@@ -129,12 +126,39 @@ func (l Lister) ListAgentsMachine(ctx context.Context, machine string) ([]capabi
 	}
 	machineCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	args := l.sshArgs(machine, shellCommand("nexo", "agents", "--json"))
-	output, err := l.Runner.Run(machineCtx, "ssh", args...)
+	output, err := l.runWithAgents(machineCtx, machine)
 	if err != nil {
-		return nil, err
+		if errors.Is(machineCtx.Err(), context.DeadlineExceeded) {
+			result.Error = fmt.Sprintf("timed out after %s", timeout)
+		} else {
+			result.Error = normalizeError(err.Error())
+		}
+		if result.Error == "" {
+			result.Error = "remote listing failed"
+		}
+		return result
 	}
-	return decodeAgents(output)
+	containerOutput, agentOutput := splitAgentFrame(output)
+	var containers []capabilities.Container
+	switch l.Backend {
+	case backend.Tmux:
+		containers, err = decodeTmux(containerOutput, machine)
+	case backend.Herdr:
+		containers, err = decodeHerdr(containerOutput, machine)
+	}
+	if err != nil {
+		result.Error = normalizeError(err.Error())
+		return result
+	}
+	result.Containers = containers
+	if len(strings.TrimSpace(string(agentOutput))) > 0 {
+		// Agent discovery is optional. Invalid output, an old remote binary, or
+		// a backend mismatch must not hide otherwise valid containers.
+		if agents, agentErr := decodeAgents(agentOutput); agentErr == nil {
+			result.Agents = agents
+		}
+	}
+	return result
 }
 
 // List queries all configured machines in parallel. Results retain the input
@@ -169,10 +193,24 @@ func uniqueMachines(machines []string) []string {
 }
 
 func (l Lister) run(ctx context.Context, machine string) ([]byte, error) {
-	command := shellCommand("herdr", "workspace", "list")
-	if l.Backend == backend.Tmux {
-		command = shellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
-	}
+	return l.runCommand(ctx, machine, l.backendCommand())
+}
+
+func (l Lister) runWithAgents(ctx context.Context, machine string) ([]byte, error) {
+	listing := l.backendCommand()
+	agents := shellCommand("nexo", "--backend", string(l.Backend), "agents", "--json")
+	command := strings.Join([]string{
+		"agent_status=0",
+		listing + " || agent_status=$?",
+		"printf '\\n%s\\n' " + shellCommand(agentFrameStart),
+		agents + " 2>/dev/null || true",
+		"printf '\\n%s\\n' " + shellCommand(agentFrameEnd),
+		"exit $agent_status",
+	}, "; ")
+	return l.runCommand(ctx, machine, command)
+}
+
+func (l Lister) runCommand(ctx context.Context, machine, command string) ([]byte, error) {
 	args := l.sshArgs(machine, command)
 	output, err := l.Runner.Run(ctx, "ssh", args...)
 	if err != nil {
@@ -189,6 +227,37 @@ func (l Lister) run(ctx context.Context, machine string) ([]byte, error) {
 		return nil, fmt.Errorf("ssh %s: %w", machine, err)
 	}
 	return output, nil
+}
+
+func (l Lister) backendCommand() string {
+	if l.Backend == backend.Tmux {
+		return shellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
+	}
+	return shellCommand("herdr", "workspace", "list")
+}
+
+func splitAgentFrame(output []byte) (listing, agents []byte) {
+	lines := strings.Split(string(output), "\n")
+	start, end := -1, -1
+	for index, line := range lines {
+		switch strings.TrimSuffix(line, "\r") {
+		case agentFrameStart:
+			if start < 0 {
+				start = index
+			}
+		case agentFrameEnd:
+			if start >= 0 {
+				end = index
+			}
+		}
+	}
+	if start < 0 {
+		return output, nil
+	}
+	if end < 0 || end <= start {
+		return []byte(strings.Join(lines[:start], "\n")), nil
+	}
+	return []byte(strings.Join(lines[:start], "\n")), []byte(strings.Join(lines[start+1:end], "\n"))
 }
 
 func (l Lister) sshArgs(machine, command string) []string {
