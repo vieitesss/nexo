@@ -12,6 +12,18 @@ func Names(backend any) []string {
 	if _, ok := backend.(WorktreeCreator); ok {
 		names = append(names, "WorktreeCreator")
 	}
+	if _, ok := backend.(ContainerOpener); ok {
+		names = append(names, "ContainerOpener")
+	}
+	if _, ok := backend.(ContainerLister); ok {
+		names = append(names, "ContainerLister")
+	}
+	if _, ok := backend.(ContainerRenamer); ok {
+		names = append(names, "ContainerRenamer")
+	}
+	if _, ok := backend.(ContainerKiller); ok {
+		names = append(names, "ContainerKiller")
+	}
 	if _, ok := backend.(PaneLister); ok {
 		names = append(names, "PaneLister")
 	}
