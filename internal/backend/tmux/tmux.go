@@ -124,24 +124,24 @@ func (b *Backend) RemoveWorktree(ctx context.Context, worktree capabilities.Work
 	if b == nil || b.Runner == nil {
 		return errors.New("tmux worktree remover requires a command runner")
 	}
+	var failures []error
+	if worktree.SessionName != "" {
+		if _, err := b.run(ctx, "kill-session", "-t", "="+worktree.SessionName); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	path, err := filepath.Abs(worktree.Path)
 	if err != nil {
-		return fmt.Errorf("resolve worktree destination: %w", err)
-	}
-	if _, err := b.runGit(ctx, "-C", worktree.Repo, "worktree", "remove", "--force", path); err != nil {
-		return err
+		failures = append(failures, fmt.Errorf("resolve worktree destination: %w", err))
+	} else if _, err := b.runGit(ctx, "-C", worktree.Repo, "worktree", "remove", "--force", path); err != nil {
+		failures = append(failures, err)
 	}
 	if worktree.NewBranch {
 		if _, err := b.runGit(ctx, "-C", worktree.Repo, "branch", "-D", worktree.Branch); err != nil {
-			return err
+			failures = append(failures, err)
 		}
 	}
-	if worktree.SessionName != "" {
-		if _, err := b.run(ctx, "kill-session", "-t", "="+worktree.SessionName); err != nil {
-			return err
-		}
-	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (b *Backend) rollbackWorktree(ctx context.Context, repo, path string, newBranch bool, branch string, branchExisted bool) error {

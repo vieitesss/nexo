@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/pelletier/go-toml/v2/unstable"
 )
 
 // AddProjectPath appends parent to the top-level paths array without
@@ -105,16 +107,9 @@ func writeConfigFile(path string, contents []byte, mode os.FileMode, _ bool) err
 		_ = os.Remove(temporaryPath)
 		return fmt.Errorf("replace config %s: %w", path, err)
 	}
-	dirFile, err := os.Open(directory)
-	if err != nil {
-		return fmt.Errorf("open config directory: %w", err)
-	}
-	if err := dirFile.Sync(); err != nil {
+	if dirFile, err := os.Open(directory); err == nil {
+		_ = dirFile.Sync()
 		_ = dirFile.Close()
-		return fmt.Errorf("sync config directory: %w", err)
-	}
-	if err := dirFile.Close(); err != nil {
-		return fmt.Errorf("close config directory: %w", err)
 	}
 	return nil
 }
@@ -165,106 +160,79 @@ func appendProjectPath(contents []byte, parent string) ([]byte, error) {
 		return nil, err
 	}
 	if !found {
+		insertAt := start
 		var result bytes.Buffer
-		result.Write(contents)
-		if len(contents) > 0 && contents[len(contents)-1] != '\n' {
+		result.Write(contents[:insertAt])
+		if insertAt > 0 && contents[insertAt-1] != '\n' {
 			result.WriteByte('\n')
 		}
 		result.WriteString("paths = [")
 		result.WriteString(quoted)
 		result.WriteString("]\n")
+		result.Write(contents[insertAt:])
 		return result.Bytes(), nil
 	}
 	return appendArrayValue(contents, start, end, quoted), nil
 }
 
 func findTopLevelPathsArray(contents []byte) (start, end int, found bool, err error) {
-	section := ""
-	var multilineQuote byte
-	for lineStart := 0; lineStart < len(contents); {
-		lineEnd := bytes.IndexByte(contents[lineStart:], '\n')
-		if lineEnd < 0 {
-			lineEnd = len(contents)
-		} else {
-			lineEnd += lineStart
-		}
-		line := contents[lineStart:lineEnd]
-		if multilineQuote != 0 {
-			if closesMultilineString(line, multilineQuote) {
-				multilineQuote = 0
-			}
-			if lineEnd == len(contents) {
-				break
-			}
-			lineStart = lineEnd + 1
-			continue
-		}
-		withoutComment := stripTOMLComment(line)
-		trimmed := strings.TrimSpace(string(withoutComment))
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-			section = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
-		}
-		if section == "" {
-			keyEnd := strings.IndexByte(trimmed, '=')
-			if keyEnd > 0 && strings.TrimSpace(trimmed[:keyEnd]) == "paths" {
-				valueOffset := bytes.IndexByte(withoutComment, '=')
-				value := withoutComment[valueOffset+1:]
-				arrayOffset := bytes.IndexByte(value, '[')
-				if arrayOffset < 0 {
-					return 0, 0, false, errors.New("paths must be an array")
+	parser := unstable.Parser{}
+	parser.Reset(contents)
+	firstTableOffset := len(contents)
+	inTable := false
+	for parser.NextExpression() {
+		expression := parser.Expression()
+		switch expression.Kind {
+		case unstable.Table, unstable.ArrayTable:
+			inTable = true
+			if firstTableOffset == len(contents) {
+				key := expression.Key()
+				if key.Next() {
+					firstTableOffset = int(key.Node().Raw.Offset)
+					if lineStart := bytes.LastIndexByte(contents[:firstTableOffset], '\n'); lineStart >= 0 {
+						firstTableOffset = lineStart + 1
+					} else {
+						firstTableOffset = 0
+					}
 				}
-				start = lineStart + valueOffset + 1 + arrayOffset
-				end, ok := matchingArrayEnd(contents, start)
-				if !ok {
-					return 0, 0, false, errors.New("paths array is not closed")
-				}
-				return start, end, true, nil
 			}
-		}
-		if quote := unclosedMultilineString(line); quote != 0 {
-			multilineQuote = quote
-		}
-		if lineEnd == len(contents) {
-			break
-		}
-		lineStart = lineEnd + 1
-	}
-	return 0, 0, false, nil
-}
-
-func unclosedMultilineString(line []byte) byte {
-	for i := 0; i < len(line); {
-		if next, ok := skipTOMLString(line, i); ok {
-			if i+2 < len(line) && (line[i] == '"' || line[i] == '\'') && line[i+1] == line[i] && line[i+2] == line[i] && !hasClosingTriple(line, i+3, line[i]) {
-				return line[i]
-			}
-			i = next
 			continue
+		case unstable.KeyValue:
+			if inTable {
+				continue
+			}
+			key := expression.Key()
+			if !key.Next() || !key.IsLast() || string(key.Node().Data) != "paths" {
+				continue
+			}
+			value := expression.Value()
+			if value.Kind != unstable.Array {
+				return 0, 0, false, errors.New("paths must be an array")
+			}
+			valueStart := int(key.Node().Raw.Offset + key.Node().Raw.Length)
+			for valueStart < len(contents) && contents[valueStart] != '=' {
+				valueStart++
+			}
+			if valueStart < len(contents) {
+				valueStart++
+			}
+			for valueStart < len(contents) && (contents[valueStart] == ' ' || contents[valueStart] == '\t' || contents[valueStart] == '\r' || contents[valueStart] == '\n') {
+				valueStart++
+			}
+			if valueStart >= len(contents) || contents[valueStart] != '[' {
+				return 0, 0, false, errors.New("paths array range is unavailable")
+			}
+			valueEnd, ok := matchingArrayEnd(contents, valueStart)
+			if !ok {
+				return 0, 0, false, errors.New("paths array is not closed")
+			}
+			return valueStart, valueEnd, true, nil
 		}
-		if line[i] == '#' {
-			return 0
-		}
-		i++
 	}
-	return 0
-}
-
-func hasClosingTriple(line []byte, start int, quote byte) bool {
-	for i := start; i+2 < len(line); i++ {
-		if line[i] == quote && line[i+1] == quote && line[i+2] == quote {
-			return true
-		}
+	if parser.Error() != nil {
+		return 0, 0, false, parser.Error()
 	}
-	return false
-}
-
-func closesMultilineString(line []byte, quote byte) bool {
-	for i := 0; i+2 < len(line); i++ {
-		if line[i] == quote && line[i+1] == quote && line[i+2] == quote {
-			return true
-		}
-	}
-	return false
+	return firstTableOffset, 0, false, nil
 }
 
 func stripTOMLComment(line []byte) []byte {

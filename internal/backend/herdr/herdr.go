@@ -111,15 +111,19 @@ func decodeWorktreeWorkspaceID(output []byte) string {
 	var envelope struct {
 		Result json.RawMessage `json:"result"`
 	}
-	if json.Unmarshal(output, &envelope) != nil || len(envelope.Result) == 0 {
+	if json.Unmarshal(output, &envelope) != nil {
 		return ""
+	}
+	raw := output
+	if len(envelope.Result) != 0 && string(envelope.Result) != "null" {
+		raw = envelope.Result
 	}
 	var result struct {
 		Workspace struct {
 			ID string `json:"workspace_id"`
 		} `json:"workspace"`
 	}
-	if json.Unmarshal(envelope.Result, &result) != nil {
+	if json.Unmarshal(raw, &result) != nil {
 		return ""
 	}
 	return result.Workspace.ID
