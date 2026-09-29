@@ -2,8 +2,6 @@ package tmux
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +15,7 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
+	"github.com/vieitesss/nexo/internal/statefile"
 )
 
 type pane struct {
@@ -280,7 +279,7 @@ func (s *Source) updateStates(update func(map[string]agentState) error) error {
 	}
 	stateDir := s.stateDir
 	if stateDir == "" {
-		stateDir = defaultStateDir()
+		stateDir = statefile.DefaultDir()
 	}
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("create agent state directory: %w", err)
@@ -300,65 +299,18 @@ func (s *Source) updateStates(update func(map[string]agentState) error) error {
 	if err := update(states); err != nil {
 		return err
 	}
-	if err := writeStatesAtomic(s.statePath("json"), persistedStates{Agents: states}); err != nil {
+	contents, err := json.MarshalIndent(persistedStates{Agents: states}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal agent state: %w", err)
+	}
+	if err := statefile.WriteAtomic(s.statePath("json"), contents); err != nil {
 		return fmt.Errorf("write agent state: %w", err)
 	}
 	return nil
 }
 
-func writeStatesAtomic(path string, states persistedStates) error {
-	contents, err := json.MarshalIndent(states, "", "  ")
-	if err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".agents-state-*.tmp")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer func() { _ = os.Remove(temporaryPath) }()
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(contents); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporaryPath, path)
-}
-
 func (s *Source) statePath(suffix string) string {
-	dir := s.stateDir
-	if dir == "" {
-		dir = defaultStateDir()
-	}
-	return filepath.Join(dir, serverFileName(s.server)+"."+suffix)
-}
-
-func defaultStateDir() string {
-	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "nexo", "agents")
-	}
-	if dir, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(dir, ".local", "state", "nexo", "agents")
-	}
-	return filepath.Join(os.TempDir(), "nexo", "agents")
-}
-
-func serverFileName(server string) string {
-	if server == "" {
-		server = "default"
-	}
-	digest := sha256.Sum256([]byte(server))
-	return filepath.Base(server) + "-" + hex.EncodeToString(digest[:8])
+	return statefile.Path(s.stateDir, s.server, suffix)
 }
 
 // MarkSeen marks a stopped pane seen after focus enters that exact pane.
@@ -452,28 +404,14 @@ func acquireWatcherLock(path string) (func(), error) {
 }
 
 func acquireFileLock(path string, nonBlocking bool) (func(), error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("create watcher state directory: %w", err)
-	}
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	release, err := statefile.Lock(path, nonBlocking)
 	if err != nil {
-		return nil, fmt.Errorf("open agent lock: %w", err)
-	}
-	flags := syscall.LOCK_EX
-	if nonBlocking {
-		flags |= syscall.LOCK_NB
-	}
-	if err := syscall.Flock(int(file.Fd()), flags); err != nil {
-		_ = file.Close()
 		if nonBlocking && (errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)) {
 			return nil, errWatcherAlreadyRunning
 		}
-		return nil, fmt.Errorf("flock agent lock: %w", err)
+		return nil, err
 	}
-	return func() {
-		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-		_ = file.Close()
-	}, nil
+	return release, nil
 }
 
 var (

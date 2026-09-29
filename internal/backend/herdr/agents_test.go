@@ -112,6 +112,57 @@ func TestAgentSourcePersistsStoppedSinceAcrossInvocations(t *testing.T) {
 	}
 }
 
+func TestAgentSourcePrunesPanesAbsentFromSnapshot(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"agent list": []byte(`{"result":{"type":"agent_list","agents":[
+			{"pane_id":"w:p1","workspace_id":"w","tab_id":"t","agent":"pi","agent_status":"done","state_change_seq":1},
+			{"pane_id":"w:p2","workspace_id":"w","tab_id":"t","agent":"codex","agent_status":"done","state_change_seq":1}
+		]}}`),
+	}}
+	source := NewAgentSource(runner)
+	source.SetStateDir(t.TempDir())
+	if _, err := source.ListAgents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runner.outputs["agent list"] = []byte(`{"result":{"type":"agent_list","agents":[{"pane_id":"w:p1","workspace_id":"w","tab_id":"t","agent":"pi","agent_status":"done","state_change_seq":1}]}}`)
+	if _, err := source.ListAgents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	states, err := source.readStates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := states["w:p2"]; ok {
+		t.Fatalf("persisted states = %#v, want disappeared pane pruned", states)
+	}
+	if _, ok := states["w:p1"]; !ok {
+		t.Fatalf("persisted states = %#v, want current pane retained", states)
+	}
+}
+
+func TestAgentSourceKeysDefaultServerByConfigPath(t *testing.T) {
+	t.Setenv("HERDR_SOCKET_PATH", "")
+	stateDir := t.TempDir()
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"agent list": []byte(`{"result":{"type":"agent_list","agents":[{"pane_id":"w:p1","workspace_id":"w","tab_id":"t","agent":"pi","agent_status":"done","state_change_seq":1}]}}`),
+	}}
+	first := NewAgentSource(runner)
+	first.SetStateDir(stateDir)
+	t.Setenv("HERDR_CONFIG_PATH", "/tmp/herdr-one/config.toml")
+	if _, err := first.ListAgents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	second := NewAgentSource(runner)
+	second.SetStateDir(stateDir)
+	t.Setenv("HERDR_CONFIG_PATH", "/tmp/herdr-two/config.toml")
+	if _, err := second.ListAgents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if first.statePath("json") == second.statePath("json") {
+		t.Fatalf("state paths = %q, want distinct paths for distinct config paths", first.statePath("json"))
+	}
+}
+
 func TestAgentSourceFillsBranchFromForegroundCWD(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"agent list": []byte(`{"result":{"type":"agent_list","agents":[{"pane_id":"w:p1","workspace_id":"w","tab_id":"t","agent":"pi","agent_status":"working","focused":false,"cwd":"/work/repo","foreground_cwd":"/work/repo/worktree","state_change_seq":1}]}}`),
