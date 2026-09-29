@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,75 @@ func (e *Error) Error() string {
 
 // Unwrap preserves the command runner error for errors.Is and errors.As.
 func (e *Error) Unwrap() error { return e.Err }
+
+func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.WorktreeCreateOptions) (capabilities.Worktree, error) {
+	if b == nil || b.Runner == nil {
+		return capabilities.Worktree{}, errors.New("herdr worktree creator requires a command runner")
+	}
+	path, err := filepath.Abs(options.Destination)
+	if err != nil {
+		return capabilities.Worktree{}, fmt.Errorf("resolve worktree destination: %w", err)
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return capabilities.Worktree{}, fmt.Errorf("worktree destination %q already exists", path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return capabilities.Worktree{}, fmt.Errorf("check worktree destination %q: %w", path, err)
+	}
+
+	args := []string{"worktree", "create", "--cwd", options.Repo, "--branch", options.Branch}
+	if options.NewBranch {
+		args = append(args, "--base", "HEAD")
+	}
+	args = append(args, "--path", path, "--focus")
+	output, err := b.run(ctx, args[0], args[1:]...)
+	if err != nil {
+		return capabilities.Worktree{}, err
+	}
+	return capabilities.Worktree{
+		Path:        path,
+		Branch:      options.Branch,
+		Repo:        options.Repo,
+		NewBranch:   options.NewBranch,
+		ContainerID: decodeWorktreeWorkspaceID(output),
+	}, nil
+}
+
+// RemoveWorktree removes a Herdr worktree workspace created by this invocation.
+func (b *Backend) RemoveWorktree(ctx context.Context, worktree capabilities.Worktree) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("herdr worktree remover requires a command runner")
+	}
+	if worktree.ContainerID == "" {
+		return errors.New("herdr worktree result does not include a workspace id")
+	}
+	_, err := b.run(ctx, "worktree", "remove", "--workspace", worktree.ContainerID, "--force")
+	return err
+}
+
+func decodeWorktreeWorkspaceID(output []byte) string {
+	if len(output) == 0 {
+		return ""
+	}
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if json.Unmarshal(output, &envelope) != nil {
+		return ""
+	}
+	raw := output
+	if len(envelope.Result) != 0 && string(envelope.Result) != "null" {
+		raw = envelope.Result
+	}
+	var result struct {
+		Workspace struct {
+			ID string `json:"workspace_id"`
+		} `json:"workspace"`
+	}
+	if json.Unmarshal(raw, &result) != nil {
+		return ""
+	}
+	return result.Workspace.ID
+}
 
 // OpenProject focuses an existing Herdr workspace selected by label, or
 // creates and focuses a workspace for path when none is found.
