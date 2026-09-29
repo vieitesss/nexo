@@ -257,10 +257,11 @@ nexo --backend=tmux --json worktree create --new-branch \
 ```
 
 `--json` changes only the output: creation still opens the new worktree as a
-container and focuses it. Inside tmux, the client switches to the new session.
-Outside tmux, the command attaches to it interactively and inherits the process
-stdout, so run it from a real terminal; a piped invocation outside tmux fails
-the attach, rolls back the worktree, and returns status `1` with no JSON.
+container and focuses it. On Herdr, Herdr creates the worktree workspace and
+focuses it. On tmux, a client inside tmux switches to the new session; outside
+tmux, the command attaches to it interactively and inherits the process stdout,
+so run it from a real terminal. A piped invocation outside tmux fails the
+attach, rolls back the worktree, and returns status `1` with no JSON.
 
 The output is one object with only `path` and `branch`. The encoder deliberately
 omits the input repository, the `--new-branch` choice, backend container ID,
