@@ -7,20 +7,18 @@ import (
 	"github.com/vieitesss/nexo/internal/config"
 )
 
-type focusEventsRunner struct {
-	fakeRunner
-}
-
-func (r *focusEventsRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	if name == "tmux" && len(args) == 3 && args[0] == "show-option" {
-		r.calls = append(r.calls, call{name: name, args: append([]string(nil), args...)})
-		return []byte("on\n"), nil
-	}
-	return r.fakeRunner.Run(ctx, name, args...)
-}
-
 func TestInitLeavesExistingFocusEventsEnabled(t *testing.T) {
-	runner := &focusEventsRunner{}
+	placeLine := "bind-key -T root C-s display-popup -E -h 80% -w 80% -x C -y C \"" + pickerCommand("") + "\"\n"
+	agentLine := "bind-key -T prefix a display-popup -E -h 80% -w 80% -x C -y C \"" + agentPickerCommand("") + "\"\n"
+	runner := &fakeRunner{
+		outputs: map[string][]byte{
+			"show-option -gqv focus-events": []byte("on\n"),
+		},
+		sequences: map[string][][]byte{
+			"list-keys -T root C-s": {nil, []byte(placeLine)},
+			"list-keys -T prefix a": {nil, []byte(agentLine)},
+		},
+	}
 	backend := New(runner, true)
 	if err := backend.Init(context.Background(), InitInput{Config: config.TmuxConfig{}}); err != nil {
 		t.Fatalf("Init() error = %v", err)

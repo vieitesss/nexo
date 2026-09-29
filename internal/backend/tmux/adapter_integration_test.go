@@ -253,6 +253,164 @@ func TestTmuxAdapterIntegration(t *testing.T) {
 	}
 }
 
+func TestTmuxAdapterOwnershipWithCompoundAndQuotedPaths(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, name := range []string{"TMUX", "TMUX_PANE", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"} {
+		_ = os.Unsetenv(name)
+	}
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "nexo adapter's binary with spaces")
+	build := exec.CommandContext(ctx, "go", "build", "-o", binary, "./cmd/nexo")
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build nexo: %v\n%s", err, output)
+	}
+	configDir := filepath.Join(t.TempDir(), "nexo config's directory")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config file's settings.toml")
+	server := fmt.Sprintf("nexo-ownership-%d", time.Now().UnixNano())
+	runTmux := func(args ...string) ([]byte, error) {
+		commandArgs := append([]string{"-L", server, "-f", "/dev/null"}, args...)
+		return exec.CommandContext(ctx, "tmux", commandArgs...).CombinedOutput()
+	}
+	if output, err := runTmux("new-session", "-d", "-s", "work", "sleep", "60"); err != nil {
+		t.Fatalf("create throwaway tmux server: %v\n%s", err, output)
+	}
+	defer func() { _, _ = runTmux("kill-server") }()
+
+	writeConfig := func(placeKey string) {
+		t.Helper()
+		contents := "[agents]\nnotify = false\npoll-interval = 1\n\n[tmux]\nplace-key = " + fmt.Sprintf("%q", placeKey) + "\nagent-key = \"none\"\n"
+		if err := os.WriteFile(configPath, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		command := fmt.Sprintf("%s --backend=tmux --config-file=%s tmux init", shellQuote(binary), shellQuote(configPath))
+		if output, err := runTmux("run-shell", command); err != nil {
+			t.Fatalf("run adapter: %v\n%s", err, output)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	list := func(key string) string {
+		t.Helper()
+		output, _ := runTmux("list-keys", "-T", "root", tmuxKey(key))
+		return string(output)
+	}
+	assertNexo := func(key string) {
+		t.Helper()
+		line := list(key)
+		if !strings.Contains(line, "display-popup") || !strings.Contains(line, "NEXO_PLACE_PICKER_INLINE=1") {
+			t.Fatalf("binding %q = %q, want nexo popup", key, line)
+		}
+	}
+	assertUnbound := func(key string) {
+		t.Helper()
+		line := list(key)
+		if !strings.Contains(line, "unknown key") {
+			t.Fatalf("binding %q = %q, want unbound", key, line)
+		}
+	}
+
+	// A compound command that happens to end in a nexo popup is user-owned.
+	writeConfig("C-x")
+	original := list("C-x")
+	assertNexo("C-x")
+	customPopup := fmt.Sprintf("NEXO_PLACE_PICKER_INLINE=1 %s --backend='tmux' --config-file=%s", shellQuote(binary), shellQuote(configPath))
+	if output, err := runTmux("bind-key", "-n", "C-x", "display-message", "user custom action", `\;`, "display-popup", "-E", customPopup); err != nil {
+		t.Fatalf("install compound user binding: %v\n%s", err, output)
+	}
+	compound := list("C-x")
+	if !strings.Contains(compound, "display-message") || !strings.Contains(compound, "display-popup") {
+		t.Fatalf("compound binding = %q, want both user commands", compound)
+	}
+	writeConfig("C-x")
+	if got := list("C-x"); got != compound {
+		t.Fatalf("same-key compound binding = %q, want unchanged %q (original %q)", got, compound, original)
+	}
+	writeConfig("C-y")
+	if got := list("C-x"); got != compound {
+		t.Fatalf("changed-key compound binding = %q, want preserved %q", got, compound)
+	}
+	assertNexo("C-y")
+	writeConfig("none")
+	if got := list("C-x"); got != compound {
+		t.Fatalf("disabled compound binding = %q, want preserved %q", got, compound)
+	}
+	assertUnbound("C-y")
+
+	// Ownership must not depend on parsing either shell-quoting layer.
+	writeConfig("C-a")
+	assertNexo("C-a")
+	quotedSame := list("C-a")
+	writeConfig("C-a")
+	if got := list("C-a"); got != quotedSame {
+		t.Fatalf("same-key quoted binding = %q, want unchanged %q", got, quotedSame)
+	}
+	writeConfig("C-b")
+	assertUnbound("C-a")
+	assertNexo("C-b")
+	writeConfig("none")
+	assertUnbound("C-b")
+}
+
+func TestTmuxAdapterFocusEventsOffPreserved(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for _, name := range []string{"TMUX", "TMUX_PANE", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"} {
+		_ = os.Unsetenv(name)
+	}
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "nexo")
+	build := exec.CommandContext(ctx, "go", "build", "-o", binary, "./cmd/nexo")
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build nexo: %v\n%s", err, output)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[tmux]\nplace-key = \"none\"\nagent-key = \"none\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := fmt.Sprintf("nexo-focus-off-%d", time.Now().UnixNano())
+	runTmux := func(args ...string) ([]byte, error) {
+		commandArgs := append([]string{"-L", server, "-f", "/dev/null"}, args...)
+		return exec.CommandContext(ctx, "tmux", commandArgs...).CombinedOutput()
+	}
+	if output, err := runTmux("new-session", "-d", "-s", "work", "sleep", "60"); err != nil {
+		t.Fatalf("create throwaway tmux server: %v\n%s", err, output)
+	}
+	defer func() { _, _ = runTmux("kill-server") }()
+	if output, err := runTmux("set-option", "-g", "focus-events", "off"); err != nil {
+		t.Fatalf("disable focus events: %v\n%s", err, output)
+	}
+	command := fmt.Sprintf("%s --backend=tmux --config-file=%s tmux init", shellQuote(binary), shellQuote(configPath))
+	if output, err := runTmux("run-shell", command); err != nil {
+		t.Fatalf("run adapter: %v\n%s", err, output)
+	}
+	time.Sleep(500 * time.Millisecond)
+	focus, err := runTmux("show-option", "-gqv", "focus-events")
+	if err != nil || strings.TrimSpace(string(focus)) != "off" {
+		t.Fatalf("focus-events after Init/Watch = %q, err = %v, want off", focus, err)
+	}
+}
+
 func TestTmuxAdapterSpecialKeys(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")

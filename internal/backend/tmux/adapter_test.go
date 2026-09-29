@@ -11,32 +11,32 @@ import (
 )
 
 func TestInitInstallsBindingsHooksAndWatcher(t *testing.T) {
-	runner := &fakeRunner{}
+	placeLine := "bind-key -T root C-s display-popup -E -h 80% -w 80% -x C -y C \"" + pickerCommand("") + "\"\n"
+	agentLine := "bind-key -T prefix a display-popup -E -h 80% -w 80% -x C -y C \"" + agentPickerCommand("") + "\"\n"
+	runner := &fakeRunner{sequences: map[string][][]byte{
+		"list-keys -T root C-s": {nil, []byte(placeLine)},
+		"list-keys -T prefix a": {nil, []byte(agentLine)},
+	}}
 	backend := New(runner, true)
 	if err := backend.Init(context.Background(), InitInput{Config: config.TmuxConfig{}}); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
 	focusCommand := focusHookCommand(os.Args[0], "")
 	watchCommand := watcherCommand("")
-	want := []call{
-		{name: "tmux", args: []string{"show-option", "-gqv", "@nexo-place-key"}},
-		{name: "tmux", args: []string{"list-keys", "-T", "root", "C-s"}},
-		{name: "tmux", args: []string{"bind-key", "-n", "C-s", "display-popup", "-E", "-w", "80%", "-h", "80%", "-x", "C", "-y", "C", pickerCommand("")}},
-		{name: "tmux", args: []string{"set-option", "-g", "@nexo-place-key", "root:C-s"}},
-		{name: "tmux", args: []string{"show-option", "-gqv", "@nexo-agent-key"}},
-		{name: "tmux", args: []string{"list-keys", "-T", "prefix", "a"}},
-		{name: "tmux", args: []string{"bind-key", "a", "display-popup", "-E", "-w", "80%", "-h", "80%", "-x", "C", "-y", "C", agentPickerCommand("")}},
-		{name: "tmux", args: []string{"set-option", "-g", "@nexo-agent-key", "prefix:a"}},
-		{name: "tmux", args: []string{"show-option", "-gqv", "focus-events"}},
-		{name: "tmux", args: []string{"set-option", "-g", "focus-events", "on"}},
-		{name: "tmux", args: []string{"show-hooks", "-g", "pane-focus-in"}},
-		{name: "tmux", args: []string{"set-hook", "-ag", "pane-focus-in", focusCommand}},
-		{name: "tmux", args: []string{"show-hooks", "-g", "client-session-changed"}},
-		{name: "tmux", args: []string{"set-hook", "-ag", "client-session-changed", focusCommand}},
-		{name: "tmux", args: []string{"run-shell", "-b", watchCommand}},
+	if !hasCall(runner.calls, "bind-key", "-n", "C-s", "display-popup", "-E", "-w", "80%", "-h", "80%", "-x", "C", "-y", "C", pickerCommand("")) || !hasCall(runner.calls, "bind-key", "a", "display-popup", "-E", "-w", "80%", "-h", "80%", "-x", "C", "-y", "C", agentPickerCommand("")) {
+		t.Fatalf("calls = %#v, want configured bindings", runner.calls)
 	}
-	if !reflect.DeepEqual(runner.calls, want) {
-		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	if !hasCall(runner.calls, "set-option", "-g", "@nexo-place-key", encodeBindingRecord("root", "C-s", placeLine)) || !hasCall(runner.calls, "set-option", "-g", "@nexo-agent-key", encodeBindingRecord("prefix", "a", agentLine)) {
+		t.Fatalf("calls = %#v, want exact binding records", runner.calls)
+	}
+	if hasCall(runner.calls, "set-option", "-g", "focus-events", "on") {
+		t.Fatalf("calls = %#v, want no focus-events mutation", runner.calls)
+	}
+	if !hasCall(runner.calls, "display-message", "nexo: agent seen-marking needs 'set -g focus-events on'") {
+		t.Fatalf("calls = %#v, want focus-events warning", runner.calls)
+	}
+	if !hasCall(runner.calls, "set-hook", "-ag", "pane-focus-in", focusCommand) || !hasCall(runner.calls, "set-hook", "-ag", "client-session-changed", focusCommand) || !hasCall(runner.calls, "run-shell", "-b", watchCommand) {
+		t.Fatalf("calls = %#v, want hooks and watcher", runner.calls)
 	}
 }
 
@@ -93,27 +93,15 @@ func TestInitPreservesUserBindingsAndReportsConflicts(t *testing.T) {
 	}
 }
 
-func TestNexoBindingDetectionFailsClosed(t *testing.T) {
-	validPlace := "bind-key -T root C-s display-popup -E -h 80% -w 80% -x C -y C \"NEXO_PLACE_PICKER_INLINE=1 'nexo' --backend='tmux'\""
-	validAgent := "bind-key -T prefix a display-popup -E -h 80% -w 80% -x C -y C \"NEXO_AGENT_NAVIGATOR_INLINE=1 'nexo' --backend='tmux' agents pick\""
-	for _, test := range []struct {
-		name    string
-		binding string
-		want    bool
-	}{
-		{name: "place popup", binding: validPlace, want: true},
-		{name: "agent popup", binding: validAgent, want: true},
-		{name: "arbitrary backend command", binding: `bind-key -T root C-s run-shell "nexo --backend=tmux agents --json"`},
-		{name: "marker message", binding: `bind-key -T root C-s display-message "NEXO_PLACE_PICKER_INLINE=1 is a marker"`},
-		{name: "marker prefix", binding: `bind-key -T root C-s display-popup "NEXO_PLACE_PICKER_INLINE=10 'nexo' --backend='tmux'"`},
-		{name: "marker phrase", binding: `bind-key -T root C-s display-popup "NEXO_PLACE_PICKER_INLINE=1 is a marker"`},
-		{name: "arbitrary marked subcommand", binding: `bind-key -T root C-s display-popup "NEXO_PLACE_PICKER_INLINE=1 'nexo' --backend='tmux' agents --json"`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := isNexoBinding(test.binding); got != test.want {
-				t.Fatalf("isNexoBinding() = %v, want %v", got, test.want)
-			}
-		})
+func TestBindingRecordRoundTripsExactLine(t *testing.T) {
+	line := "bind-key -T root ; display-popup \"/tmp/agent's config\"\n"
+	value := encodeBindingRecord("root", ";", line)
+	record, ok, err := decodeBindingRecord(value)
+	if err != nil || !ok {
+		t.Fatalf("decodeBindingRecord() = %#v, %v, want record", record, err)
+	}
+	if record.table != "root" || record.key != ";" || record.line != line {
+		t.Fatalf("record = %#v, want exact table/key/line", record)
 	}
 }
 
@@ -152,12 +140,17 @@ func TestInitPreservesIndexedHooks(t *testing.T) {
 }
 
 func TestInitRemovesRecordedBindingsWhenKeysChange(t *testing.T) {
+	placeLine := "bind-key -T root C-s display-popup -E -h 80% -w 80% -x C -y C \"" + pickerCommand("") + "\"\n"
+	agentLine := "bind-key -T prefix a display-popup -E -h 80% -w 80% -x C -y C \"" + agentPickerCommand("") + "\"\n"
+	newPlaceLine := "bind-key -T root C-x display-popup -E -h 80% -w 80% -x C -y C \"" + pickerCommand("") + "\"\n"
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"show-option -gqv @nexo-place-key": []byte("root:C-s\n"),
-		"show-option -gqv @nexo-agent-key": []byte("prefix:a\n"),
-		"list-keys -T root C-s":            []byte("bind-key -T root C-s display-popup -E -h 80% -w 80% -x C -y C \"NEXO_PLACE_PICKER_INLINE=1 'nexo' --backend='tmux'\"\n"),
-		"list-keys -T prefix a":            []byte("bind-key -T prefix a display-popup -E -h 80% -w 80% -x C -y C \"NEXO_AGENT_NAVIGATOR_INLINE=1 'nexo' --backend='tmux' agents pick\"\n"),
+		"show-option -gqv @nexo-place-key": []byte(encodeBindingRecord("root", "C-s", placeLine)),
+		"show-option -gqv @nexo-agent-key": []byte(encodeBindingRecord("prefix", "a", agentLine)),
+		"list-keys -T root C-s":            []byte(placeLine),
+		"list-keys -T prefix a":            []byte(agentLine),
 		"show-option -gqv focus-events":    []byte("on\n"),
+	}, sequences: map[string][][]byte{
+		"list-keys -T root C-x": {nil, []byte(newPlaceLine)},
 	}}
 	cfg := config.TmuxConfig{PlaceKey: "C-x", AgentKey: "none"}
 	if err := New(runner, true).Init(context.Background(), InitInput{Config: cfg}); err != nil {

@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,8 @@ import (
 const (
 	placeBindingOption = "@nexo-place-key"
 	agentBindingOption = "@nexo-agent-key"
+
+	bindingRecordVersion = "v1"
 )
 
 // InitInput contains the tmux adapter settings for one invocation.
@@ -51,56 +54,62 @@ func (b *Backend) Init(ctx context.Context, input InitInput) error {
 
 func (b *Backend) bind(ctx context.Context, mode, table, option, key, configOption, command string, cfg config.TmuxConfig) error {
 	key = normalizeKey(key)
-	previousTable, previousKey, err := b.recordedBinding(ctx, option, table)
+	previous, hasPrevious, err := b.recordedBinding(ctx, option)
 	if err != nil {
 		return err
 	}
 
-	// The option is only a hint about where nexo last installed a binding. A
-	// user can replace that binding without knowing about the option, so always
-	// inspect the current command before treating it as ours.
 	var previousBinding string
 	var previousBound bool
-	if previousKey != "" {
-		previousBinding, previousBound, err = b.currentBinding(ctx, previousTable, previousKey)
+	if hasPrevious {
+		previousBinding, previousBound, err = b.currentBinding(ctx, previous.table, previous.key)
 		if err != nil {
 			return err
 		}
 	}
-	previousIsNexo := previousBound && isNexoBinding(previousBinding)
-	previousIsTarget := previousKey != "" && previousTable == table && previousKey == key
+	previousIsTarget := hasPrevious && previous.table == table && previous.key == key
+	previousOwned := previousBound && previousBinding == previous.line
+	conflictReported := false
+	if previousBound && !previousOwned {
+		if err := b.reportConflict(ctx, previous.table, previous.key, configOption); err != nil {
+			return err
+		}
+		conflictReported = true
+	}
 
-	var targetBinding string
 	var targetBound bool
 	if key != "" {
 		if previousIsTarget {
-			targetBinding, targetBound = previousBinding, previousBound
+			targetBound = previousBound
 		} else {
-			targetBinding, targetBound, err = b.currentBinding(ctx, table, key)
+			_, targetBound, err = b.currentBinding(ctx, table, key)
 			if err != nil {
 				return err
 			}
 		}
 	}
-
-	if previousBound && !previousIsNexo && !previousIsTarget {
-		if err := b.reportConflict(ctx, previousTable, previousKey, configOption); err != nil {
-			return err
-		}
-	}
-	if previousBound && previousIsNexo && !previousIsTarget {
-		if err := b.unbind(ctx, previousTable, previousKey); err != nil {
-			return err
-		}
-	}
-	if targetBound && !isNexoBinding(targetBinding) {
-		if err := b.reportConflict(ctx, table, key, configOption); err != nil {
-			return err
+	targetOwned := previousIsTarget && previousOwned && targetBound
+	if targetBound && !targetOwned {
+		if !conflictReported || !previousIsTarget {
+			if err := b.reportConflict(ctx, table, key, configOption); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
+
 	if key == "" {
-		return b.recordBinding(ctx, option, table, key)
+		if previousOwned {
+			if err := b.unbind(ctx, previous.table, previous.key); err != nil {
+				return err
+			}
+		}
+		return b.recordBinding(ctx, option, table, key, "")
+	}
+	if hasPrevious && previousOwned && !previousIsTarget {
+		if err := b.unbind(ctx, previous.table, previous.key); err != nil {
+			return err
+		}
 	}
 
 	bindArgs := []string{}
@@ -111,7 +120,14 @@ func (b *Backend) bind(ctx context.Context, mode, table, option, key, configOpti
 	if _, err := b.run(ctx, "bind-key", bindArgs...); err != nil {
 		return err
 	}
-	return b.recordBinding(ctx, option, table, key)
+	installed, bound, err := b.currentBinding(ctx, table, key)
+	if err != nil {
+		return fmt.Errorf("read installed tmux binding for %s:%s: %w", table, key, err)
+	}
+	if !bound {
+		return fmt.Errorf("read installed tmux binding for %s:%s: binding is missing", table, key)
+	}
+	return b.recordBinding(ctx, option, table, key, installed)
 }
 
 func (b *Backend) currentBinding(ctx context.Context, table, key string) (string, bool, error) {
@@ -138,84 +154,6 @@ func isMissingKey(err error) bool {
 		strings.Contains(message, "key not found")
 }
 
-func isNexoBinding(binding string) bool {
-	words := tmuxWords(binding)
-	for index, word := range words {
-		if word != "display-popup" || index+1 >= len(words) {
-			continue
-		}
-		command := tmuxWords(words[len(words)-1])
-		if len(command) < 3 || command[2] != "--backend=tmux" {
-			continue
-		}
-		if command[0] == "NEXO_PLACE_PICKER_INLINE=1" && validConfigArgs(command[3:]) {
-			return true
-		}
-		if command[0] == "NEXO_AGENT_NAVIGATOR_INLINE=1" && len(command) >= 5 && command[len(command)-2] == "agents" && command[len(command)-1] == "pick" && validConfigArgs(command[3:len(command)-2]) {
-			return true
-		}
-	}
-	return false
-}
-
-// tmuxWords tokenizes the command serialization returned by list-keys. It is
-// deliberately small: tmux's quoting is sufficient here because we only need
-// to distinguish the final display-popup command from arbitrary user text.
-func validConfigArgs(args []string) bool {
-	for _, arg := range args {
-		if !strings.HasPrefix(arg, "--config-file=") {
-			return false
-		}
-	}
-	return true
-}
-
-func tmuxWords(value string) []string {
-	var words []string
-	var word strings.Builder
-	var quote byte
-	escaped := false
-	flush := func() {
-		if word.Len() > 0 {
-			words = append(words, word.String())
-			word.Reset()
-		}
-	}
-	for i := 0; i < len(value); i++ {
-		char := value[i]
-		if escaped {
-			word.WriteByte(char)
-			escaped = false
-			continue
-		}
-		if quote == '"' && char == '\\' {
-			escaped = true
-			continue
-		}
-		if quote != 0 {
-			if char == quote {
-				quote = 0
-			} else {
-				word.WriteByte(char)
-			}
-			continue
-		}
-		switch char {
-		case '\'', '"':
-			quote = char
-		case ' ', '\t', '\r', '\n':
-			flush()
-		default:
-			word.WriteByte(char)
-		}
-	}
-	if escaped {
-		word.WriteByte('\\')
-	}
-	flush()
-	return words
-}
-
 func (b *Backend) reportConflict(ctx context.Context, table, key, configOption string) error {
 	message := fmt.Sprintf("nexo: tmux key %q in table %q is already bound; change %s or set it to 'none'", key, table, configOption)
 	if _, err := b.run(ctx, "display-message", message); err != nil {
@@ -231,28 +169,74 @@ func normalizeKey(key string) string {
 	return strings.TrimSpace(key)
 }
 
-func (b *Backend) recordedBinding(ctx context.Context, option, defaultTable string) (string, string, error) {
+type bindingRecord struct {
+	table string
+	key   string
+	line  string
+}
+
+func (b *Backend) recordedBinding(ctx context.Context, option string) (bindingRecord, bool, error) {
 	output, err := b.run(ctx, "show-option", "-gqv", option)
 	if err != nil {
-		return "", "", fmt.Errorf("read tmux option %s: %w", option, err)
+		return bindingRecord{}, false, fmt.Errorf("read tmux option %s: %w", option, err)
 	}
 	value := strings.TrimSpace(string(output))
 	if value == "" {
-		return defaultTable, "", nil
+		return bindingRecord{}, false, nil
 	}
-	table, key, ok := strings.Cut(value, ":")
-	if !ok {
-		return defaultTable, normalizeKey(value), nil
+	record, ok, err := decodeBindingRecord(value)
+	if err != nil {
+		return bindingRecord{}, false, err
 	}
-	if table != "root" && table != "prefix" {
-		return "", "", fmt.Errorf("unsupported recorded tmux key table %q", table)
+	if ok {
+		return record, true, nil
 	}
-	return table, normalizeKey(key), nil
+	// Values written by older development versions did not include the exact
+	// list-keys line, so they cannot establish ownership. Keep rejecting an
+	// unsupported table rather than risking a mutation based on that value.
+	if table, _, found := strings.Cut(value, ":"); found && table != "root" && table != "prefix" {
+		return bindingRecord{}, false, fmt.Errorf("unsupported recorded tmux key table %q", table)
+	}
+	return bindingRecord{}, false, nil
 }
 
-func (b *Backend) recordBinding(ctx context.Context, option, table, key string) error {
-	value := table + ":" + key
-	if _, err := b.run(ctx, "set-option", "-g", option, tmuxKey(value)); err != nil {
+func decodeBindingRecord(value string) (bindingRecord, bool, error) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 4 || parts[0] != bindingRecordVersion {
+		return bindingRecord{}, false, nil
+	}
+	if parts[1] != "root" && parts[1] != "prefix" {
+		return bindingRecord{}, false, fmt.Errorf("unsupported recorded tmux key table %q", parts[1])
+	}
+	key, err := base64.RawStdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return bindingRecord{}, false, fmt.Errorf("decode recorded tmux key: %w", err)
+	}
+	line, err := base64.RawStdEncoding.DecodeString(parts[3])
+	if err != nil {
+		return bindingRecord{}, false, fmt.Errorf("decode recorded tmux binding: %w", err)
+	}
+	if len(key) == 0 || len(line) == 0 {
+		return bindingRecord{}, false, fmt.Errorf("recorded tmux binding is incomplete")
+	}
+	return bindingRecord{table: parts[1], key: string(key), line: string(line)}, true, nil
+}
+
+func encodeBindingRecord(table, key, line string) string {
+	return strings.Join([]string{
+		bindingRecordVersion,
+		table,
+		base64.RawStdEncoding.EncodeToString([]byte(key)),
+		base64.RawStdEncoding.EncodeToString([]byte(line)),
+	}, ":")
+}
+
+func (b *Backend) recordBinding(ctx context.Context, option, table, key, line string) error {
+	value := ""
+	if key != "" {
+		value = encodeBindingRecord(table, key, line)
+	}
+	if _, err := b.run(ctx, "set-option", "-g", option, value); err != nil {
 		return fmt.Errorf("record tmux binding: %w", err)
 	}
 	return nil

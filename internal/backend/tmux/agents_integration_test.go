@@ -87,6 +87,9 @@ func TestTmuxAgentIntegration(t *testing.T) {
 	if len(agents) != 1 || agents[0].Harness != "pi" {
 		t.Fatalf("discovery = %#v, want one pi agent", agents)
 	}
+	if output, err := runTmux("set-option", "-g", "focus-events", "on"); err != nil {
+		t.Fatalf("enable focus events for focus-hook test: %v: %s", err, output)
+	}
 	if err := source.installHooks(ctx); err != nil {
 		t.Fatal(err)
 	}
