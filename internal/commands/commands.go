@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 )
 
 import (
@@ -18,14 +19,15 @@ import (
 
 // Invocation is the public seam shared by registered subcommands.
 type Invocation struct {
-	Selection backend.Selection
-	Config    config.Config
-	Runner    runner.CommandRunner
-	Adapter   any
-	Stdout    io.Writer
-	Stderr    io.Writer
-	JSON      bool
-	Args      []string
+	Selection  backend.Selection
+	Config     config.Config
+	ConfigPath string
+	Runner     runner.CommandRunner
+	Adapter    any
+	Stdout     io.Writer
+	Stderr     io.Writer
+	JSON       bool
+	Args       []string
 }
 
 // Command is a registered nexo subcommand.
@@ -89,6 +91,9 @@ func (r *Registry) Lookup(name string) (Command, bool) {
 func (r *Registry) Names() []string {
 	names := make([]string, 0, len(r.commands))
 	for name := range r.commands {
+		if strings.HasPrefix(name, "__") {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)

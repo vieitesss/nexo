@@ -25,6 +25,11 @@ func TestRegistryLeavesFeatureNamesAvailable(t *testing.T) {
 			t.Fatalf("Lookup(%q) found a placeholder; feature registration must own the name", name)
 		}
 	}
+	for _, name := range registry.Names() {
+		if name == PlacePickerCommandName {
+			t.Fatal("internal place picker command leaked into Registry.Names")
+		}
+	}
 }
 
 type testCommand struct{ name string }
