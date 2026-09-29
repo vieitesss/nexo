@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/remote"
@@ -113,6 +114,9 @@ func runRemoteNew(ctx context.Context, invocation Invocation) error {
 	if strings.ContainsAny(name, "\r\n") {
 		return errors.New("remote container name must be one line")
 	}
+	if err := tmux.ValidateProxyIdentity(machine, name); err != nil {
+		return err
+	}
 	proxy, ok := invocation.Adapter.(capabilities.RemoteProxy)
 	if !ok {
 		return fmt.Errorf("backend %q does not support remote proxies", invocation.Selection.Kind)
@@ -124,7 +128,7 @@ func runRemoteNew(ctx context.Context, invocation Invocation) error {
 	if configPath := strings.TrimSpace(invocation.Config.Remote.SSHConfig); configPath != "" {
 		args = append(args, "-F", configPath)
 	}
-	args = append(args, machine, "tmux new-session -d -s "+remoteShellQuote(name))
+	args = append(args, machine, "tmux new-session -d -s "+remoteShellQuote(tmux.EscapeSessionName(name)))
 	if output, err := invocation.Runner.Run(ctx, "ssh", args...); err != nil {
 		if text := strings.TrimSpace(string(output)); text != "" {
 			return fmt.Errorf("create remote container: %s", text)
@@ -149,11 +153,14 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 		if pane == "" {
 			return errors.New("remote close requires MACHINE/CONTAINER outside a proxy session")
 		}
-		output, err := invocation.Runner.Run(ctx, "tmux", "display-message", "-p", "-t", pane, "#{session_name}")
+		output, err := invocation.Runner.Run(ctx, "tmux", "display-message", "-p", "-t", pane, "#{@nexo-proxy}")
 		if err != nil {
 			return fmt.Errorf("find current proxy: %w", err)
 		}
 		target = strings.TrimSpace(string(output))
+		if target == "" {
+			return errors.New("current session is not a nexo proxy")
+		}
 	}
 	machine, container, err := parseRemoteTarget(target)
 	if err != nil {
@@ -169,30 +176,52 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 	if !ok {
 		return fmt.Errorf("backend %q does not support closing proxy containers", invocation.Selection.Kind)
 	}
+	resolver, ok := invocation.Adapter.(interface {
+		ProxySessionID(context.Context, string, string) (string, error)
+	})
+	if !ok {
+		return fmt.Errorf("backend %q does not support resolving proxy sessions", invocation.Selection.Kind)
+	}
 	// This is deliberately a local backend operation. It only kills the
-	// proxy container named MACHINE/CONTAINER and never sends a close command
-	// to the remote machine.
-	return killer.KillContainer(ctx, machine+"/"+container)
+	// proxy container and never sends a close command to the remote machine.
+	sessionID, err := resolver.ProxySessionID(ctx, machine, container)
+	if err != nil {
+		return err
+	}
+	if sessionID == "" {
+		return fmt.Errorf("proxy %q/%q was not found", machine, container)
+	}
+	return killer.KillContainer(ctx, sessionID)
 }
 
 func runRemoteAttach(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) != 3 {
 		return errors.New("remote attach requires MACHINE CONTAINER")
 	}
+	if invocation.Selection.Kind != backend.Tmux {
+		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
+	}
+	if _, ok := invocation.Adapter.(capabilities.RemoteProxy); !ok {
+		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
+	}
 	machine := strings.TrimSpace(invocation.Args[1])
 	container := strings.TrimSpace(invocation.Args[2])
-	if machine == "" || strings.HasPrefix(machine, "-") {
-		return errors.New("remote attach requires a valid machine")
+	if err := validateRemoteMachine(invocation.Config.Remote.Machines, machine); err != nil {
+		return err
 	}
 	if container == "" {
 		return errors.New("remote attach requires a container")
+	}
+	transport := tmux.NewCommandTransport(invocation.Config.Remote)
+	if invocation.Config.Remote.EffectiveTransport() != "ssh" {
+		return transport.Attach(ctx, machine, container)
 	}
 	initial, maximum := invocation.Config.Remote.ReconnectDelays()
 	input := invocation.Stdin
 	if input == nil {
 		input = os.Stdin
 	}
-	return tmux.RunReconnect(ctx, tmux.NewCommandTransport(invocation.Config.Remote), nil, input, machine, container, initial, maximum)
+	return tmux.RunReconnect(ctx, transport, nil, input, machine, container, initial, maximum)
 }
 
 func parseRemoteTarget(target string) (string, string, error) {

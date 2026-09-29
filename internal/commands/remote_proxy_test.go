@@ -48,6 +48,10 @@ func (k *recordingKiller) KillContainer(_ context.Context, id string) error {
 
 func (*recordingKiller) Proxy(context.Context, string, string) error { return nil }
 
+func (*recordingKiller) ProxySessionID(context.Context, string, string) (string, error) {
+	return "$7", nil
+}
+
 func TestRemoteCloseOnlyKillsLocalProxy(t *testing.T) {
 	killer := &recordingKiller{}
 	err := (remoteCommand{}).Run(context.Background(), Invocation{
@@ -60,8 +64,8 @@ func TestRemoteCloseOnlyKillsLocalProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if killer.closed != "devbox/$1" {
-		t.Fatalf("closed target = %q, want local proxy name", killer.closed)
+	if killer.closed != "$7" {
+		t.Fatalf("closed target = %q, want stable proxy session id", killer.closed)
 	}
 }
 
@@ -89,6 +93,48 @@ func TestRemoteNewQuotesRemoteContainerName(t *testing.T) {
 	}
 	if !reflect.DeepEqual(proxy.opened, [2]string{"devbox", "name with spaces"}) {
 		t.Fatalf("proxy call = %#v, want new target", proxy.opened)
+	}
+
+	got = nil
+	err = (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
+		Adapter:   proxy,
+		Runner: runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+			got = append([]string{name}, args...)
+			return nil, nil
+		}),
+		Args: []string{"new", "devbox", "hash#(touch /tmp/nexo-proxy-review)"},
+	})
+	if err != nil {
+		t.Fatalf("Run() with format-looking name error = %v", err)
+	}
+	if !strings.Contains(got[len(got)-1], "hash##(touch /tmp/nexo-proxy-review)") {
+		t.Fatalf("remote command = %q, want escaped tmux format marker", got[len(got)-1])
+	}
+}
+
+func TestRemoteAttachValidatesBackendAndMachine(t *testing.T) {
+	proxy := &recordingRemoteProxy{}
+	for _, test := range []struct {
+		name      string
+		selection backend.Selection
+		want      string
+	}{
+		{name: "unconfigured machine", selection: backend.Selection{Kind: backend.Tmux}, want: "not configured"},
+		{name: "non tmux backend", selection: backend.Selection{Kind: backend.Herdr}, want: "does not support"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := (remoteCommand{}).Run(context.Background(), Invocation{
+				Selection: test.selection,
+				Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
+				Adapter:   proxy,
+				Args:      []string{"attach", "other", "--help"},
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Run() error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 
