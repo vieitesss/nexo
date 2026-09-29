@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
@@ -71,7 +71,7 @@ func (b *Backend) OpenProject(ctx context.Context, path string, options capabili
 		return errors.New("tmux project opener requires a command runner")
 	}
 
-	name := sessionName(path)
+	name := projects.TargetName(path)
 	_, err := b.run(ctx, "has-session", "-t", "="+name)
 	exists := err == nil
 	if err != nil && !isMissingSession(err) {
@@ -158,9 +158,4 @@ func isMissingSession(err error) bool {
 		strings.Contains(message, "no server running")
 }
 
-func sessionName(path string) string {
-	clean := filepath.Clean(path)
-	parent := filepath.Base(filepath.Dir(clean))
-	base := filepath.Base(clean)
-	return strings.NewReplacer(".", "_", ":", "_").Replace(parent + "_" + base)
-}
+func sessionName(path string) string { return projects.TargetName(path) }
