@@ -85,10 +85,34 @@ func (b *Backend) OpenProject(ctx context.Context, path string, options capabili
 
 	if b.Inside {
 		_, err = b.run(ctx, "switch-client", "-t", "="+name)
-	} else {
-		_, err = b.run(ctx, "attach-session", "-t", "="+name)
+		return err
 	}
-	return err
+	return b.runInteractive(ctx, "attach-session", "-t", "="+name)
+}
+
+func (b *Backend) runInteractive(ctx context.Context, operation string, args ...string) error {
+	interactive, ok := b.Runner.(runner.InteractiveRunner)
+	if !ok {
+		return &Error{
+			Operation: operation,
+			Args:      append([]string(nil), args...),
+			Stderr:    "interactive command runner is unavailable",
+			Err:       errors.New("runner does not support interactive commands"),
+		}
+	}
+	if err := interactive.RunInteractive(ctx, "tmux", append([]string{operation}, args...)...); err != nil {
+		stderr := interactiveStderr(err)
+		if stderr == "" {
+			stderr = err.Error()
+		}
+		return &Error{
+			Operation: operation,
+			Args:      append([]string(nil), args...),
+			Stderr:    stderr,
+			Err:       err,
+		}
+	}
+	return nil
 }
 
 func (b *Backend) run(ctx context.Context, operation string, args ...string) ([]byte, error) {
@@ -97,9 +121,8 @@ func (b *Backend) run(ctx context.Context, operation string, args ...string) ([]
 		return output, nil
 	}
 	stderr := string(output)
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-		stderr = string(exitErr.Stderr)
+	if captured := interactiveStderr(err); captured != "" {
+		stderr = captured
 	}
 	if stderr == "" {
 		stderr = err.Error()
@@ -110,6 +133,18 @@ func (b *Backend) run(ctx context.Context, operation string, args ...string) ([]
 		Stderr:    stderr,
 		Err:       err,
 	}
+}
+
+func interactiveStderr(err error) string {
+	var interactiveErr *runner.InteractiveError
+	if errors.As(err, &interactiveErr) && interactiveErr.Stderr != "" {
+		return interactiveErr.Stderr
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+		return string(exitErr.Stderr)
+	}
+	return ""
 }
 
 func isMissingSession(err error) bool {

@@ -16,8 +16,9 @@ type call struct {
 }
 
 type fakeRunner struct {
-	calls []call
-	fail  map[string]error
+	calls            []call
+	interactiveCalls int
+	fail             map[string]error
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -27,6 +28,13 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 		return []byte(err.Error()), err
 	}
 	return nil, nil
+}
+
+func (f *fakeRunner) RunInteractive(_ context.Context, name string, args ...string) error {
+	f.interactiveCalls++
+	f.calls = append(f.calls, call{name: name, args: append([]string(nil), args...)})
+	key := strings.Join(args, " ")
+	return f.fail[key]
 }
 
 func TestSessionNameUsesParentAndBaseAndIsTmuxSafe(t *testing.T) {
@@ -58,6 +66,25 @@ func TestOpenProjectCreatesAndAttachesMissingSessionOutsideTmux(t *testing.T) {
 	want := []call{{name: "tmux", args: []string{"has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"new-session", "-d", "-s", "acme_app", "-c", "/work/acme/app"}}, {name: "tmux", args: []string{"attach-session", "-t", "=acme_app"}}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+	if runner.interactiveCalls != 1 {
+		t.Fatalf("interactive calls = %d, want 1", runner.interactiveCalls)
+	}
+}
+
+func TestOpenProjectReportsInteractiveAttachError(t *testing.T) {
+	want := errors.New("open terminal failed: not a terminal")
+	runner := &fakeRunner{fail: map[string]error{
+		"attach-session -t =acme_app": want,
+	}}
+	backend := New(runner, false)
+	err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{})
+	var tmuxErr *Error
+	if !errors.As(err, &tmuxErr) || !strings.Contains(tmuxErr.Stderr, "not a terminal") {
+		t.Fatalf("error = %v, want typed interactive error", err)
+	}
+	if runner.interactiveCalls != 1 {
+		t.Fatalf("interactive calls = %d, want 1", runner.interactiveCalls)
 	}
 }
 
