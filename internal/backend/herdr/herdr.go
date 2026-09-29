@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,31 @@ func (e *Error) Error() string {
 
 // Unwrap preserves the command runner error for errors.Is and errors.As.
 func (e *Error) Unwrap() error { return e.Err }
+
+func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.WorktreeCreateOptions) (capabilities.Worktree, error) {
+	if b == nil || b.Runner == nil {
+		return capabilities.Worktree{}, errors.New("herdr worktree creator requires a command runner")
+	}
+	path, err := filepath.Abs(options.Destination)
+	if err != nil {
+		return capabilities.Worktree{}, fmt.Errorf("resolve worktree destination: %w", err)
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return capabilities.Worktree{}, fmt.Errorf("worktree destination %q already exists", path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return capabilities.Worktree{}, fmt.Errorf("check worktree destination %q: %w", path, err)
+	}
+
+	args := []string{"worktree", "create", "--cwd", options.Repo, "--branch", options.Branch}
+	if options.NewBranch {
+		args = append(args, "--base", "HEAD")
+	}
+	args = append(args, "--path", path, "--focus")
+	if _, err := b.run(ctx, args[0], args[1:]...); err != nil {
+		return capabilities.Worktree{}, err
+	}
+	return capabilities.Worktree{Path: path, Branch: options.Branch}, nil
+}
 
 // OpenProject focuses an existing Herdr workspace selected by label, or
 // creates and focuses a workspace for path when none is found.

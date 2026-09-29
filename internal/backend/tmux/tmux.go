@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
@@ -62,6 +63,65 @@ type UnsupportedError struct {
 
 func (e *UnsupportedError) Error() string {
 	return fmt.Sprintf("tmux does not support %s", e.Option)
+}
+
+func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.WorktreeCreateOptions) (capabilities.Worktree, error) {
+	if b == nil || b.Runner == nil {
+		return capabilities.Worktree{}, errors.New("tmux worktree creator requires a command runner")
+	}
+	path, err := filepath.Abs(options.Destination)
+	if err != nil {
+		return capabilities.Worktree{}, fmt.Errorf("resolve worktree destination: %w", err)
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return capabilities.Worktree{}, fmt.Errorf("worktree destination %q already exists", path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return capabilities.Worktree{}, fmt.Errorf("check worktree destination %q: %w", path, err)
+	}
+
+	args := []string{"-C", options.Repo, "worktree", "add"}
+	if options.NewBranch {
+		args = append(args, "-b", options.Branch)
+	}
+	args = append(args, path, options.Branch)
+	if _, err := b.runGit(ctx, args...); err != nil {
+		return capabilities.Worktree{}, err
+	}
+
+	result := capabilities.Worktree{Path: path, Branch: options.Branch}
+	if err := b.OpenProject(ctx, path, capabilities.OpenOptions{}); err != nil {
+		rollbackErr := b.rollbackWorktree(ctx, options.Repo, path, options.NewBranch, options.Branch)
+		if rollbackErr != nil {
+			return capabilities.Worktree{}, errors.Join(err, rollbackErr)
+		}
+		return capabilities.Worktree{}, err
+	}
+	return result, nil
+}
+
+func (b *Backend) rollbackWorktree(ctx context.Context, repo, path string, newBranch bool, branch string) error {
+	var failures []error
+	if _, err := b.runGit(ctx, "-C", repo, "worktree", "remove", "--force", path); err != nil {
+		failures = append(failures, err)
+	}
+	if newBranch {
+		if _, err := b.runGit(ctx, "-C", repo, "branch", "-D", branch); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (b *Backend) runGit(ctx context.Context, args ...string) ([]byte, error) {
+	output, err := b.Runner.Run(ctx, "git", args...)
+	if err == nil {
+		return output, nil
+	}
+	stderr := string(output)
+	if stderr == "" {
+		stderr = err.Error()
+	}
+	return nil, &Error{Operation: "git", Args: append([]string(nil), args...), Stderr: stderr, Err: err}
 }
 
 // OpenProject opens path in a tmux session and focuses that session.

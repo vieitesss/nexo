@@ -20,7 +20,7 @@ func TestRegistryLeavesFeatureNamesAvailable(t *testing.T) {
 	if _, ok := registry.Lookup("agents"); !ok {
 		t.Fatal("Lookup(\"agents\") did not find the agent command")
 	}
-	for _, name := range []string{"worktree", "remote"} {
+	for _, name := range []string{"remote"} {
 		if _, ok := registry.Lookup(name); ok {
 			t.Fatalf("Lookup(%q) found a placeholder; feature registration must own the name", name)
 		}
