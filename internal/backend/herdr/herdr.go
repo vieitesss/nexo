@@ -19,12 +19,24 @@ import (
 // feature is implemented.
 type Backend struct {
 	Runner runner.CommandRunner
+	agents *Source
 }
 
 // New constructs a Herdr backend using the supplied command runner.
 func New(r runner.CommandRunner) *Backend {
-	return &Backend{Runner: r}
+	return &Backend{Runner: r, agents: NewAgentSource(r)}
 }
+
+// ListAgents implements capabilities.AgentSource with Herdr's native agent
+// awareness.
+func (b *Backend) ListAgents(ctx context.Context) ([]capabilities.Agent, error) {
+	if b == nil || b.agents == nil {
+		return nil, errors.New("herdr agents requires a command runner")
+	}
+	return b.agents.ListAgents(ctx)
+}
+
+var _ capabilities.AgentSource = (*Backend)(nil)
 
 // Name identifies this backend.
 func (Backend) Name() string { return "herdr" }
