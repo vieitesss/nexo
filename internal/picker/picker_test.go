@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/vieitesss/nexo/internal/projects"
 )
 
 func testPlaces() []Place {
@@ -13,6 +15,17 @@ func testPlaces() []Place {
 		{Kind: ProjectKind, Group: "/work/alpha", Path: "/work/alpha/app"},
 		{Kind: ProjectKind, Group: "/work/alpha", Path: "/work/alpha/notes"},
 		{Kind: ProjectKind, Group: "/work/beta", Path: "/work/beta/gamma"},
+	}
+}
+
+func TestProjectPlacesCarriesGitContextAndOpenFields(t *testing.T) {
+	places := ProjectPlaces([]projects.Candidate{{Path: "/work/app", Group: "/work", Git: true, LinkedWorktree: true}})
+	if len(places) != 1 {
+		t.Fatalf("places = %#v", places)
+	}
+	place := places[0]
+	if !place.Git || !place.LinkedWorktree || place.SearchText != "/work/app" || place.DisplayRemainder != "app" || place.Payload == nil {
+		t.Fatalf("place = %#v, want project metadata and open payload", place)
 	}
 }
 
@@ -35,10 +48,35 @@ func TestHeaderExpandAndChildCollapseAreKeyboardStops(t *testing.T) {
 	if len(model.Rows()) != 4 || model.Rows()[1].Kind != PlaceRow {
 		t.Fatalf("expanded rows = %#v", model.Rows())
 	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	model = updated.(Model)
-	if len(model.Rows()) != 2 || model.Rows()[0].Expanded {
-		t.Fatalf("collapsed rows = %#v", model.Rows())
+	if len(model.Rows()) != 2 || model.Rows()[0].Expanded || model.Cursor() != 0 {
+		t.Fatalf("collapsed rows = %#v cursor=%d, want parent header selected", model.Rows(), model.Cursor())
+	}
+}
+
+func TestSpaceExpandsHeader(t *testing.T) {
+	model := NewModel(testPlaces(), Theme{})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model = updated.(Model)
+	if len(model.Rows()) != 4 || model.Rows()[0].Kind != HeaderRow || !model.Rows()[0].Expanded {
+		t.Fatalf("rows = %#v, want Space to expand header", model.Rows())
+	}
+}
+
+func TestEnterOnlyExpandsAnExpandedHeader(t *testing.T) {
+	model := NewModel(testPlaces(), Theme{})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = updated.(Model)
+	before := model.Rows()
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil || len(model.Rows()) != len(before) || !model.Rows()[0].Expanded {
+		t.Fatalf("rows = %#v, cmd=%v, Enter collapsed expanded header", model.Rows(), cmd)
 	}
 }
 
@@ -60,6 +98,11 @@ func TestPrefixOnlyHitLeavesGroupFolded(t *testing.T) {
 	rows := model.Rows()
 	if len(rows) != 2 || rows[0].Kind != HeaderRow || rows[0].Expanded || rows[1].Kind != HeaderRow || rows[1].Expanded {
 		t.Fatalf("rows = %#v, want folded prefix-only groups", rows)
+	}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if len(model.Rows()) <= 2 || !model.Rows()[0].Expanded {
+		t.Fatalf("rows = %#v, want Enter to expand a folded header", model.Rows())
 	}
 }
 

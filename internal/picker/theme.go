@@ -2,12 +2,16 @@ package picker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 var oscColorPattern = regexp.MustCompile(`(?i)\x1b\](10|11);([^\x07\x1b]+)(?:\x07|\x1b\\)`)
@@ -21,8 +25,12 @@ type ThemeQuery struct {
 
 // ThemeFromTerminal asks for the terminal's default foreground and background.
 // If either query does not answer before timeout, an ANSI-safe fallback is
-// returned. The timeout is enforced even when Reader is a blocking stream.
+// returned. Reads from an os.File use a non-blocking tty fd and leave no
+// reader goroutine behind after the deadline.
 func ThemeFromTerminal(ctx context.Context, terminal ThemeQuery, timeout time.Duration) Theme {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	fallback := DefaultTheme
 	fallback.Color = true
 	if terminal.Reader == nil || terminal.Writer == nil {
@@ -33,12 +41,90 @@ func ThemeFromTerminal(ctx context.Context, terminal ThemeQuery, timeout time.Du
 	}
 
 	_, _ = io.WriteString(terminal.Writer, "\x1b]10;?\x07\x1b]11;?\x07")
+	data, ok := readOSCReply(ctx, terminal.Reader, timeout)
+	if !ok {
+		return fallback
+	}
+	fg, fgOK := parseOSCColor(data, 10)
+	bg, bgOK := parseOSCColor(data, 11)
+	if !fgOK || !bgOK {
+		return fallback
+	}
+	return Theme{
+		Foreground:          fg,
+		Background:          bg,
+		SelectionBackground: blend(bg, fg, 0.20),
+		Muted:               blend(fg, bg, 0.55),
+		Highlight:           highlightColor(fg),
+		Color:               true,
+	}
+}
+
+func readOSCReply(ctx context.Context, reader io.Reader, timeout time.Duration) ([]byte, bool) {
+	if file, ok := reader.(*os.File); ok {
+		return readTTYReply(ctx, file, timeout)
+	}
+	return readGenericReply(ctx, reader, timeout)
+}
+
+// readTTYReply polls the terminal fd synchronously. In particular, it does
+// not start a goroutine that can consume input after timeout.
+func readTTYReply(ctx context.Context, file *os.File, timeout time.Duration) ([]byte, bool) {
+	fd := int(file.Fd())
+	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+	if err != nil || unix.SetNonblock(fd, true) != nil {
+		return nil, false
+	}
+	defer func() { _, _ = unix.FcntlInt(uintptr(fd), unix.F_SETFL, flags) }()
+
+	deadline := time.Now().Add(timeout)
+	var data []byte
+	buffer := make([]byte, 256)
+	for {
+		if bytesContainColor(data, 10) && bytesContainColor(data, 11) {
+			return data, true
+		}
+		if err := contextError(ctx); err != nil || time.Until(deadline) <= 0 {
+			return nil, false
+		}
+		n, readErr := file.Read(buffer)
+		if n > 0 {
+			data = append(data, buffer[:n]...)
+			continue
+		}
+		if readErr != nil && !errors.Is(readErr, unix.EAGAIN) && !errors.Is(readErr, unix.EWOULDBLOCK) {
+			return nil, false
+		}
+		wait := time.Until(deadline)
+		if wait > 2*time.Millisecond {
+			wait = 2 * time.Millisecond
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, false
+		case <-timer.C:
+		}
+	}
+}
+
+// readGenericReply keeps the public io.Reader seam useful for model tests.
+// Readers that support deadlines can be cancelled without a goroutine; the
+// final fallback is bounded for arbitrary readers as well.
+func readGenericReply(ctx context.Context, reader io.Reader, timeout time.Duration) ([]byte, bool) {
+	if deadlineReader, ok := reader.(interface{ SetReadDeadline(time.Time) error }); ok {
+		_ = deadlineReader.SetReadDeadline(time.Now().Add(timeout))
+		defer func() { _ = deadlineReader.SetReadDeadline(time.Time{}) }()
+		return readReplyUntil(ctx, reader, timeout)
+	}
+
 	responses := make(chan []byte, 1)
 	go func() {
 		var data []byte
 		buffer := make([]byte, 256)
 		for {
-			n, err := terminal.Reader.Read(buffer)
+			n, err := reader.Read(buffer)
 			if n > 0 {
 				data = append(data, buffer[:n]...)
 				if bytesContainColor(data, 10) && bytesContainColor(data, 11) {
@@ -52,28 +138,44 @@ func ThemeFromTerminal(ctx context.Context, terminal ThemeQuery, timeout time.Du
 			}
 		}
 	}()
-
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
 	select {
 	case <-ctx.Done():
-		return fallback
+		return nil, false
 	case data := <-responses:
-		fg, fgOK := parseOSCColor(data, 10)
-		bg, bgOK := parseOSCColor(data, 11)
-		if !fgOK || !bgOK {
-			return fallback
+		return data, bytesContainColor(data, 10) && bytesContainColor(data, 11)
+	case <-time.After(timeout):
+		return nil, false
+	}
+}
+
+func readReplyUntil(ctx context.Context, reader io.Reader, timeout time.Duration) ([]byte, bool) {
+	deadline := time.Now().Add(timeout)
+	var data []byte
+	buffer := make([]byte, 256)
+	for {
+		if bytesContainColor(data, 10) && bytesContainColor(data, 11) {
+			return data, true
 		}
-		return Theme{
-			Foreground:          fg,
-			Background:          bg,
-			SelectionBackground: blend(bg, fg, 0.20),
-			Muted:               blend(fg, bg, 0.55),
-			Highlight:           fg,
-			Color:               true,
+		if contextError(ctx) != nil || time.Until(deadline) <= 0 {
+			return nil, false
 		}
-	case <-deadline.C:
-		return fallback
+		n, err := reader.Read(buffer)
+		if n > 0 {
+			data = append(data, buffer[:n]...)
+			continue
+		}
+		if err != nil {
+			return nil, false
+		}
+	}
+}
+
+func contextError(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
 	}
 }
 
@@ -118,13 +220,41 @@ func parseRGB(value string) (string, bool) {
 	if strings.HasPrefix(value, "#") && (len(value) == 7 || len(value) == 4) {
 		return value, true
 	}
-	switch value {
-	case "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
-		"bright-black", "bright-red", "bright-green", "bright-yellow", "bright-blue", "bright-magenta", "bright-cyan", "bright-white":
-		return value, true
-	default:
-		return "", false
+	if numeric, ok := ansiColor(value); ok {
+		return numeric, true
 	}
+	return "", false
+}
+
+func ansiColor(value string) (string, bool) {
+	colors := map[string]string{
+		"black": "0", "red": "1", "green": "2", "yellow": "3",
+		"blue": "4", "magenta": "5", "cyan": "6", "white": "7",
+		"bright-black": "8", "bright-red": "9", "bright-green": "10",
+		"bright-yellow": "11", "bright-blue": "12", "bright-magenta": "13",
+		"bright-cyan": "14", "bright-white": "15",
+	}
+	numeric, ok := colors[value]
+	return numeric, ok
+}
+
+func highlightColor(foreground string) string {
+	if numeric, ok := ansiColor(foreground); ok {
+		if value, err := strconv.Atoi(numeric); err == nil && value < 8 {
+			return "11"
+		}
+		return "15"
+	}
+	if value, err := strconv.Atoi(foreground); err == nil {
+		if value < 8 {
+			return "11"
+		}
+		return "15"
+	}
+	if strings.HasPrefix(foreground, "#") {
+		return "#ffcc00"
+	}
+	return "15"
 }
 
 func blend(first, second string, amount float64) string {

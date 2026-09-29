@@ -2,6 +2,7 @@
 package picker
 
 import (
+	"context"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -39,14 +40,25 @@ const (
 	DecorationAccent DecorationStyle = "accent"
 )
 
-// Place is the additive item model used by the picker. Path and Group are
-// meaningful for project places; other kinds may use their own fields as
-// they are introduced.
+// OpenAction is an optional action owned by a place source. Project places
+// leave it nil so the active backend can open them; future place kinds can
+// carry their own action without changing the picker model.
+type OpenAction func(context.Context, Place) error
+
+// Place is the additive item model used by the picker. SearchText and
+// DisplayRemainder keep ranking and rendering independent of filesystem paths;
+// Path and Group remain populated for project places.
 type Place struct {
-	Kind        PlaceKind
-	Path        string
-	Group       string
-	Decorations []Decoration
+	Kind             PlaceKind
+	Path             string
+	Group            string
+	SearchText       string
+	DisplayRemainder string
+	Payload          any
+	OpenAction       OpenAction
+	Git              bool
+	LinkedWorktree   bool
+	Decorations      []Decoration
 }
 
 // ProjectPlaces converts project discovery results into picker places while
@@ -55,9 +67,14 @@ func ProjectPlaces(candidates []projects.Candidate) []Place {
 	places := make([]Place, 0, len(candidates))
 	for _, candidate := range candidates {
 		places = append(places, Place{
-			Kind:  ProjectKind,
-			Path:  candidate.Path,
-			Group: candidate.Group,
+			Kind:             ProjectKind,
+			Path:             candidate.Path,
+			Group:            candidate.Group,
+			SearchText:       candidate.Path,
+			DisplayRemainder: projectRemainder(candidate.Path, candidate.Group),
+			Payload:          candidate,
+			Git:              candidate.Git,
+			LinkedWorktree:   candidate.LinkedWorktree,
 		})
 	}
 	return places
@@ -199,6 +216,9 @@ func (m Model) Places() []Place { return append([]Place(nil), m.places...) }
 // Query returns the current fuzzy query.
 func (m Model) Query() string { return string(m.query) }
 
+// Cursor returns the index of the keyboard-selected row.
+func (m Model) Cursor() int { return m.cursor }
+
 // Rows returns a copy of the current visible rows.
 func (m Model) Rows() []Row { return append([]Row(nil), m.rows...) }
 
@@ -268,7 +288,7 @@ func (m *Model) rebuild() {
 	visible := make(map[string]bool)
 	for _, g := range groups {
 		for placeIndex, place := range g.places {
-			full, ok := Rank(query, place.Path)
+			full, ok := Rank(query, searchText(place))
 			if !ok {
 				continue
 			}
@@ -288,27 +308,32 @@ func (m *Model) rebuild() {
 	})
 
 	seenFolded := make(map[string]bool)
-	previousGroup := ""
+	lastRenderedGroup := ""
 	for _, hit := range ranked {
-		if !hit.remOK {
-			if !visible[hit.group] && !seenFolded[hit.group] {
+		if !visible[hit.group] && !m.expanded[hit.group] {
+			if !seenFolded[hit.group] {
 				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group, ChildCount: m.groupCount(groups, hit.group)})
 				seenFolded[hit.group] = true
+				lastRenderedGroup = hit.group
 			}
 			continue
 		}
 		if m.collapsed[hit.group] {
-			if !seenFolded[hit.group] {
+			if lastRenderedGroup != hit.group {
 				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group, ChildCount: m.groupCount(groups, hit.group)})
-				seenFolded[hit.group] = true
+				lastRenderedGroup = hit.group
 			}
 			continue
 		}
-		if previousGroup != hit.group {
-			m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group, Expanded: true, ChildCount: m.groupCount(groups, hit.group)})
+		if lastRenderedGroup != hit.group {
+			m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group, Expanded: visible[hit.group] || m.expanded[hit.group], ChildCount: m.groupCount(groups, hit.group)})
+			lastRenderedGroup = hit.group
 		}
-		m.rows = append(m.rows, m.placeRow(hit.place, hit.full.Score, hit.rem.Positions, false))
-		previousGroup = hit.group
+		positions := hit.rem.Positions
+		if !hit.remOK {
+			positions = nil
+		}
+		m.rows = append(m.rows, m.placeRow(hit.place, hit.full.Score, positions, false))
 	}
 	m.clampCursor()
 }
@@ -326,15 +351,29 @@ func (m Model) placeRow(place Place, score int, positions []int, _ bool) Row {
 	return Row{Kind: PlaceRow, Group: place.Group, Place: place, Remainder: visibleRemainder(place), Matches: append([]int(nil), positions...), Score: score}
 }
 
-func visibleRemainder(place Place) string {
-	if place.Group == "" {
-		return filepath.ToSlash(place.Path)
+func searchText(place Place) string {
+	if place.SearchText != "" {
+		return place.SearchText
 	}
-	remainder, err := filepath.Rel(place.Group, place.Path)
+	return place.Path
+}
+
+func projectRemainder(path, group string) string {
+	if group == "" {
+		return filepath.ToSlash(path)
+	}
+	remainder, err := filepath.Rel(group, path)
 	if err == nil && remainder != "." && remainder != ".." && !strings.HasPrefix(remainder, ".."+string(filepath.Separator)) {
 		return filepath.ToSlash(remainder)
 	}
-	return filepath.ToSlash(place.Path)
+	return filepath.ToSlash(path)
+}
+
+func visibleRemainder(place Place) string {
+	if place.DisplayRemainder != "" {
+		return filepath.ToSlash(place.DisplayRemainder)
+	}
+	return projectRemainder(place.Path, place.Group)
 }
 
 func (m *Model) clampCursor() {
@@ -359,7 +398,7 @@ var defaultKeyMap = KeyMap{
 	Up:       key.NewBinding(key.WithKeys("up", "ctrl+k")),
 	Down:     key.NewBinding(key.WithKeys("down", "ctrl+j")),
 	Accept:   key.NewBinding(key.WithKeys("enter")),
-	Expand:   key.NewBinding(key.WithKeys("right", "space")),
+	Expand:   key.NewBinding(key.WithKeys("right", tea.KeySpace.String())),
 	Collapse: key.NewBinding(key.WithKeys("left")),
 	Clear:    key.NewBinding(key.WithKeys("esc")),
 }
@@ -398,7 +437,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			row := m.rows[m.cursor]
 			if row.Kind == HeaderRow {
-				return m.toggleGroup(row.Group)
+				return m.expandCurrent()
 			}
 			selected := row.Place
 			m.selected = &selected
@@ -424,20 +463,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) toggleGroup(groupName string) (tea.Model, tea.Cmd) {
-	if string(m.query) == "" {
-		m.expanded[groupName] = !m.expanded[groupName]
-	} else {
-		if m.collapsed[groupName] {
-			delete(m.collapsed, groupName)
-		} else {
-			m.collapsed[groupName] = true
-		}
-	}
-	m.rebuild()
-	return m, nil
-}
-
 func (m Model) expandCurrent() (tea.Model, tea.Cmd) {
 	if len(m.rows) == 0 || m.rows[m.cursor].Kind != HeaderRow {
 		return m, nil
@@ -446,6 +471,7 @@ func (m Model) expandCurrent() (tea.Model, tea.Cmd) {
 	if string(m.query) == "" {
 		m.expanded[name] = true
 	} else {
+		m.expanded[name] = true
 		delete(m.collapsed, name)
 	}
 	m.rebuild()
@@ -457,19 +483,27 @@ func (m Model) collapseCurrent() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	row := m.rows[m.cursor]
+	groupName := row.Group
 	if row.Kind == HeaderRow {
 		if string(m.query) == "" {
-			m.expanded[row.Group] = false
+			m.expanded[groupName] = false
 		}
 		m.rebuild()
 		return m, nil
 	}
 	if string(m.query) == "" {
-		m.expanded[row.Group] = false
+		m.expanded[groupName] = false
 	} else {
-		m.collapsed[row.Group] = true
+		delete(m.expanded, groupName)
+		m.collapsed[groupName] = true
 	}
 	m.rebuild()
+	for index, candidate := range m.rows {
+		if candidate.Kind == HeaderRow && candidate.Group == groupName {
+			m.cursor = index
+			break
+		}
+	}
 	return m, nil
 }
 
@@ -501,7 +535,10 @@ func (m Model) View() string {
 		if index+1 >= len(m.rows) || m.rows[index+1].Kind == HeaderRow || m.rows[index+1].Group != row.Group {
 			spine = "└"
 		}
-		lines = append(lines, m.rowStyle(selected, false).Render("  "+spine+" "+m.highlight(row.Remainder, row.Matches, selected)))
+		spineStyle := m.style(m.theme.Muted)
+		body := m.highlight(row.Remainder, row.Matches, selected)
+		body = strings.ReplaceAll(body, "/", spineStyle.Render(" │ "))
+		lines = append(lines, m.rowStyle(selected, false).Render("  ")+spineStyle.Render(spine+" ")+m.rowStyle(selected, false).Render(body))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -523,9 +560,16 @@ func itoa(value int) string {
 func (m Model) style(color string) lipgloss.Style {
 	style := lipgloss.NewStyle()
 	if m.theme.Color && color != "" {
-		style = style.Foreground(lipgloss.Color(color))
+		style = style.Foreground(lipgloss.Color(normalizeColor(color)))
 	}
 	return style
+}
+
+func normalizeColor(color string) string {
+	if numeric, ok := ansiColor(color); ok {
+		return numeric
+	}
+	return color
 }
 
 func (m Model) rowStyle(selected, header bool) lipgloss.Style {
@@ -551,7 +595,7 @@ func (m Model) highlight(text string, positions []int, selected bool) string {
 	var out strings.Builder
 	for index, r := range runes {
 		if set[index] {
-			out.WriteString(m.style(m.theme.Highlight).Render(string(r)))
+			out.WriteString(m.style(m.theme.Highlight).Bold(true).Render(string(r)))
 		} else {
 			out.WriteRune(r)
 		}

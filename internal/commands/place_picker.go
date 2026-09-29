@@ -63,6 +63,9 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	if !ok {
 		return nil
 	}
+	if place.OpenAction != nil {
+		return place.OpenAction(ctx, place)
+	}
 	if place.Kind != picker.ProjectKind {
 		return fmt.Errorf("place kind %q is not openable yet", place.Kind)
 	}

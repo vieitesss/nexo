@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 )
 
 import (
@@ -89,6 +90,9 @@ func (r *Registry) Lookup(name string) (Command, bool) {
 func (r *Registry) Names() []string {
 	names := make([]string, 0, len(r.commands))
 	for name := range r.commands {
+		if strings.HasPrefix(name, "__") {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
