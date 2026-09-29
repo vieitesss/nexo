@@ -50,6 +50,7 @@ type Model struct {
 	err             error
 	width           int
 	height          int
+	sized           bool
 	refreshInFlight *bool
 }
 
@@ -90,6 +91,7 @@ func (m Model) Cursor() int { return m.cursor }
 // SetSize records the terminal surface supplied by Bubble Tea.
 func (m *Model) SetSize(width, height int) {
 	m.width, m.height = width, height
+	m.sized = true
 }
 
 // Selected returns the pane accepted by Enter.
@@ -295,8 +297,11 @@ func (m *Model) clampCursor() {
 // Bubble Tea supplies dimensions, the compact frame remains useful to callers
 // that inspect a model before it is started.
 func (m Model) View() string {
-	if m.width <= 0 || m.height <= 0 {
+	if !m.sized {
 		return m.legacyView()
+	}
+	if m.width <= 0 || m.height <= 0 {
+		return ""
 	}
 	items := make([]shell.Item, 0, len(m.rows))
 	for index, row := range m.rows {
@@ -312,7 +317,7 @@ func (m Model) View() string {
 	if m.err != nil {
 		dialog = m.err.Error()
 	}
-	search := "Search: " + string(m.query) + m.style(m.theme.Highlight).Render("▌")
+	search := shell.PromptLine(m.width, "Search: ", string(m.query), m.style(m.theme.Highlight).Render("▌"))
 	return shell.Render(shell.Options{
 		Width:  m.width,
 		Height: m.height,
@@ -323,7 +328,6 @@ func (m Model) View() string {
 		Paint: func(value string, selected bool) string {
 			style := m.surfaceStyle(m.theme.Foreground)
 			if selected && m.theme.Color {
-				value = shell.Plain(value)
 				style = style.Background(lipgloss.Color(m.theme.SelectionBackground))
 			}
 			return style.Render(value)
@@ -370,16 +374,46 @@ func (m Model) secondaryText(agent capabilities.Agent) string {
 	if strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && agent.StoppedSince != nil {
 		parts = append(parts, age(m.now(), *agent.StoppedSince))
 	}
+	if len(parts) == 0 {
+		return m.style(m.theme.Muted).Render("no metadata")
+	}
 	return m.style(m.theme.Muted).Render(strings.Join(parts, " · "))
 }
 
 func (m Model) hints() []shell.Hint {
-	hints := []shell.Hint{{Key: firstKey(upKey), Label: "up"}, {Key: firstKey(downKey), Label: "down"}}
+	hints := make([]shell.Hint, 0, 4)
 	if len(m.rows) > 0 {
-		hints = append(hints, shell.Hint{Key: firstKey(acceptKey), Label: "open"})
+		hints = append(hints, m.hintKeys("↑↓", "move"), m.hint(acceptKey, "open"))
 	}
-	hints = append(hints, shell.Hint{Key: "esc", Label: "cancel"})
+	hints = append(hints, m.hintKey("esc", "cancel"))
 	return hints
+}
+
+func (m Model) hint(binding key.Binding, label string) shell.Hint {
+	return m.hintKey(firstKey(binding), label)
+}
+
+func (m Model) hintKey(keyValue, label string) shell.Hint {
+	return shell.Hint{Key: m.style(m.theme.Highlight).Bold(true).Render(displayKey(keyValue)), Label: label}
+}
+
+func (m Model) hintKeys(keyValue, label string) shell.Hint {
+	return shell.Hint{Key: m.style(m.theme.Highlight).Bold(true).Render(keyValue), Label: label}
+}
+
+func displayKey(value string) string {
+	switch value {
+	case "up":
+		return "↑"
+	case "down":
+		return "↓"
+	case "left":
+		return "←"
+	case "right":
+		return "→"
+	default:
+		return value
+	}
 }
 
 func firstKey(binding key.Binding) string {

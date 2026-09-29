@@ -3,9 +3,10 @@ package shell
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
-	"github.com/mattn/go-runewidth"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Item is one row in a picker list. Selectable items have a primary and,
@@ -60,22 +61,28 @@ func Render(options Options) string {
 	}
 
 	hintLines := HintLines(options.Width, options.Hints, options.Dialog)
-	// The second hint row is the first expendable surface. At least one list
-	// row must remain, so a tiny surface receives one footer row.
+	// The second hint row is the first expendable surface. Keep the search
+	// row and footer bounded even when there is no room for a list row.
 	hintRows := len(hintLines)
 	if hintRows > 2 {
 		hintRows = 2
 	}
-	if options.Height-1-hintRows < 1 {
+	if options.Height <= 1 {
+		hintRows = 0
+	} else if options.Height-1-hintRows < 1 && hintRows > 1 {
 		hintRows = 1
+		// A surrendered footer row still advertises that actions are hidden.
+		if options.Width > 0 {
+			hintLines = []string{Truncate(hintLines[0], options.Width-1, "") + "…"}
+		}
 	}
-	if hintRows < 1 {
-		hintRows = 1
+	if hintRows < 0 {
+		hintRows = 0
 	}
 
 	listHeight := options.Height - 1 - hintRows
-	if listHeight < 1 {
-		listHeight = 1
+	if listHeight < 0 {
+		listHeight = 0
 	}
 	lines, selectedAt := itemLines(options.Items, listHeight)
 	// When the list does not have room for two-line entries, secondary lines
@@ -88,6 +95,7 @@ func Render(options Options) string {
 		lines = []itemLine{{}}
 	}
 	start := viewportStart(len(lines), listHeight, selectedAt)
+	start = keepSelectedItemVisible(lines, listHeight, start, selectedAt)
 	body := make([]string, 0, listHeight)
 	for row := 0; row < listHeight; row++ {
 		index := start + row
@@ -133,7 +141,7 @@ func itemLines(items []Item, _ int) ([]itemLine, int) {
 			selectedAt = len(lines)
 		}
 		lines = append(lines, itemLine{Text: item.Primary, Selected: item.Selected, Item: index})
-		if item.Selectable {
+		if item.Selectable && StringWidth(item.Secondary) > 0 {
 			lines = append(lines, itemLine{Text: item.Secondary, Selected: item.Selected, Item: index, Secondary: true})
 		}
 		if item.Separator {
@@ -181,6 +189,32 @@ func viewportStart(total, height, selected int) int {
 	return start
 }
 
+func keepSelectedItemVisible(lines []itemLine, height, start, selected int) int {
+	if selected < 0 || selected+1 >= len(lines) || height < 2 {
+		return start
+	}
+	secondary := lines[selected+1]
+	if !secondary.Secondary || secondary.Item != lines[selected].Item {
+		return start
+	}
+	if selected < start {
+		start = selected
+	}
+	if selected+1 >= start+height {
+		start = selected + 2 - height
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start+height > len(lines) {
+		start = len(lines) - height
+	}
+	if start < 0 {
+		start = 0
+	}
+	return start
+}
+
 // HintLines wraps chips onto at most two rows and ellipsizes a chip when it
 // cannot fit. Dialog text takes precedence over normal chips.
 func HintLines(width int, hints []Hint, dialog string) []string {
@@ -194,11 +228,13 @@ func HintLines(width int, hints []Hint, dialog string) []string {
 		return []string{""}
 	}
 	lines := make([]string, 1)
+	overflow := false
 	for _, hint := range hints {
 		chip := strings.TrimSpace(strings.TrimSpace(hint.Key) + " " + strings.TrimSpace(hint.Label))
 		if chip == "" {
 			continue
 		}
+		chip = normalize(chip)
 		if StringWidth(chip) > width {
 			chip = padOrTruncate(chip, width)
 		}
@@ -212,44 +248,38 @@ func HintLines(width int, hints []Hint, dialog string) []string {
 			continue
 		}
 		if len(lines) == 2 {
-			// The final chip is represented by an ellipsis rather than leaking
-			// past the right edge.
-			remaining := width - StringWidth(line) - 2
-			if remaining > 0 {
-				lines[len(lines)-1] = line + "  " + padOrTruncate(chip, remaining)
-			} else {
-				lines[len(lines)-1] = Truncate(line, width, "…")
-			}
-			continue
+			overflow = true
+			break
 		}
 		lines = append(lines, chip)
+	}
+	if overflow {
+		const ellipsis = "…"
+		last := len(lines) - 1
+		line := lines[last]
+		if line == "" {
+			lines[last] = ellipsis
+		} else if StringWidth(line)+2+StringWidth(ellipsis) <= width {
+			lines[last] = line + "  " + ellipsis
+		} else {
+			lines[last] = Truncate(line, width-StringWidth(ellipsis), "") + ellipsis
+		}
 	}
 	return lines
 }
 
-// StringWidth returns terminal cells after ignoring ANSI control sequences.
+// StringWidth returns terminal cells after ANSI controls and unsafe text
+// controls have been removed. Width is measured by grapheme clusters, so a
+// joined emoji sequence occupies the same cells it does on the terminal.
 func StringWidth(value string) int {
-	width := 0
-	for index := 0; index < len(value); {
-		if value[index] == '\x1b' {
-			index = skipANSI(value, index)
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(value[index:])
-		if r == '\n' || r == '\r' {
-			index += size
-			continue
-		}
-		width += runewidth.RuneWidth(r)
-		index += size
-	}
-	return width
+	return ansi.StringWidth(normalize(value))
 }
 
 // Plain removes ANSI control sequences while retaining visible text. It is
 // useful when a selected row must apply one uninterrupted background style.
 func Plain(value string) string {
 	var out strings.Builder
+	value = normalize(value)
 	for index := 0; index < len(value); {
 		if value[index] == '\x1b' {
 			index = skipANSI(value, index)
@@ -268,14 +298,9 @@ func Truncate(value string, width int, tail string) string {
 	if width <= 0 {
 		return ""
 	}
-	if StringWidth(value) <= width {
-		return value
-	}
-	tailWidth := StringWidth(tail)
-	if tailWidth >= width {
-		return clip(value, width)
-	}
-	return clip(value, width-tailWidth) + tail
+	value = normalize(value)
+	tail = normalize(tail)
+	return ansi.Truncate(value, width, tail)
 }
 
 func padOrTruncate(value string, width int) string {
@@ -287,12 +312,40 @@ func paintLine(value string, width int, selected bool, paint func(string, bool) 
 	return paint(padOrTruncate(value, width), selected)
 }
 
-func clip(value string, width int) string {
+// PromptLine keeps the prompt and cursor visible while horizontally
+// windowing the query or rename input around its end.
+func PromptLine(width int, prompt, value, cursor string) string {
 	if width <= 0 {
 		return ""
 	}
+	prompt = normalize(prompt)
+	value = normalize(value)
+	cursor = normalize(cursor)
+	cursorWidth := StringWidth(cursor)
+	if cursorWidth > width {
+		cursor = ansi.Truncate(cursor, width, "")
+		cursorWidth = StringWidth(cursor)
+	}
+	available := width - cursorWidth
+	if StringWidth(prompt) > available {
+		prompt = ansi.Truncate(prompt, available, "")
+	}
+	available -= StringWidth(prompt)
+	if available < 0 {
+		available = 0
+	}
+	if StringWidth(value) > available {
+		if available <= 1 {
+			value = ""
+		} else {
+			value = ansi.TruncateLeft(value, StringWidth(value)-(available-1), "…")
+		}
+	}
+	return padOrTruncate(prompt+value+cursor, width)
+}
+
+func normalize(value string) string {
 	var out strings.Builder
-	used := 0
 	for index := 0; index < len(value); {
 		if value[index] == '\x1b' {
 			next := skipANSI(value, index)
@@ -301,12 +354,11 @@ func clip(value string, width int) string {
 			continue
 		}
 		r, size := utf8.DecodeRuneInString(value[index:])
-		cell := runewidth.RuneWidth(r)
-		if used+cell > width {
-			break
+		if unicode.IsControl(r) || r == '\u007f' {
+			out.WriteByte(' ')
+		} else {
+			out.WriteString(value[index : index+size])
 		}
-		out.WriteString(value[index : index+size])
-		used += cell
 		index += size
 	}
 	return out.String()

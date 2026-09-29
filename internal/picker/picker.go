@@ -393,6 +393,7 @@ type Model struct {
 	cursor int
 	width  int
 	height int
+	sized  bool
 
 	// expanded is used for empty-query groups. collapsed is an explicit user
 	// collapse in a non-empty query, where matching groups otherwise unfold.
@@ -612,6 +613,7 @@ func (m *Model) SetQuery(query string) {
 // SetSize updates the terminal dimensions used by View.
 func (m *Model) SetSize(width, height int) {
 	m.width, m.height = width, height
+	m.sized = true
 }
 
 func (m *Model) applyRemoteBatch(batch RemoteBatch) {
@@ -1165,8 +1167,11 @@ func (m Model) collapseCurrent() (tea.Model, tea.Cmd) {
 // Bubble Tea supplies dimensions, the compact legacy frame is used because
 // there is no rectangle to paint yet.
 func (m Model) View() string {
-	if m.width <= 0 || m.height <= 0 {
+	if !m.sized {
 		return m.legacyView()
+	}
+	if m.width <= 0 || m.height <= 0 {
+		return ""
 	}
 	return m.fullView()
 }
@@ -1243,7 +1248,7 @@ func (m Model) fullView() string {
 	items := make([]shell.Item, 0, len(m.rows))
 	for index, row := range m.rows {
 		selected := index == m.cursor
-		item := shell.Item{Selectable: row.Kind != HeaderRow, Selected: selected}
+		item := shell.Item{Selectable: row.Kind == PlaceRow, Selected: selected}
 		switch row.Kind {
 		case HeaderRow:
 			arrow := "▸"
@@ -1254,22 +1259,24 @@ func (m Model) fullView() string {
 			if label == "." || label == "/" || label == "" {
 				label = row.Group
 			}
-			item.Primary = arrow + " " + label
+			primary := arrow + " " + label
 			if row.Error != "" {
-				item.Primary += " — " + row.Error
+				primary += " — " + row.Error
 			} else if !row.Expanded {
-				item.Primary += " (" + itoa(row.ChildCount) + ")"
+				primary += " (" + itoa(row.ChildCount) + ")"
 			}
+			item.Primary = m.style(m.theme.Muted).Render(primary)
 		case NewContainerRow:
-			item.Primary = "  └ " + row.Place.DisplayRemainder
+			item.Primary = "  " + m.style(m.theme.Muted).Render("└ ") + row.Place.DisplayRemainder
 		case PlaceRow:
+			following := index+1 < len(m.rows) && m.rows[index+1].Kind != HeaderRow && m.rows[index+1].groupKey == row.groupKey
 			spine := "├"
-			if index+1 >= len(m.rows) || m.rows[index+1].Kind == HeaderRow || m.rows[index+1].Group != row.Group {
+			if !following {
 				spine = "└"
 			}
 			prefix := "  "
 			if row.Depth > 1 {
-				prefix = strings.Repeat("  ", row.Depth-1) + "│ "
+				prefix = strings.Repeat("  ", row.Depth-1) + m.style(m.theme.Muted).Render("│ ")
 			}
 			primary := m.highlight(row.Remainder, row.Matches, selected)
 			primary = strings.ReplaceAll(primary, "/", m.style(m.theme.Muted).Render(" │ "))
@@ -1296,18 +1303,30 @@ func (m Model) fullView() string {
 			} else {
 				primary = strings.TrimSpace(primary)
 			}
-			item.Primary = prefix + spine + " " + primary
-			item.Secondary = m.placeMetadata(row.Place)
+			item.Primary = prefix + m.style(m.theme.Muted).Render(spine+" ") + primary
+			continuation := "  "
+			if following {
+				continuation = "│ "
+			}
+			secondaryPrefix := prefix + m.style(m.theme.Muted).Render(continuation)
+			if row.Place.Kind == ContainerKind {
+				secondaryPrefix += "  "
+			}
+			metadata := m.placeMetadata(row.Place, m.width-shell.StringWidth(secondaryPrefix))
+			if shell.StringWidth(metadata) > 0 {
+				item.Secondary = secondaryPrefix + metadata
+			}
 		}
-		if index+1 >= len(m.rows) || (index+1 < len(m.rows) && (m.rows[index+1].Kind == HeaderRow || m.rows[index+1].Group != row.Group)) {
+		if index+1 < len(m.rows) && m.rows[index+1].Kind == HeaderRow && m.rows[index+1].groupKey != row.groupKey {
 			item.Separator = true
 		}
 		items = append(items, item)
 	}
 
-	search := "Search: " + string(m.query) + m.style(m.theme.Highlight).Render("▌")
+	cursor := m.style(m.theme.Highlight).Render("▌")
+	search := shell.PromptLine(m.width, "Search: ", string(m.query), cursor)
 	if m.renameMode {
-		search = "rename: " + string(m.renameInput) + m.style(m.theme.Highlight).Render("▌")
+		search = shell.PromptLine(m.width, "rename: ", string(m.renameInput), cursor)
 	}
 	dialog := ""
 	if m.confirmKill {
@@ -1323,7 +1342,6 @@ func (m Model) fullView() string {
 		Paint: func(value string, selected bool) string {
 			style := m.surfaceStyle(m.theme.Foreground)
 			if selected && m.theme.Color {
-				value = shell.Plain(value)
 				style = style.Background(lipgloss.Color(normalizeColor(m.theme.SelectionBackground)))
 			}
 			return style.Render(value)
@@ -1333,10 +1351,10 @@ func (m Model) fullView() string {
 	})
 }
 
-func (m Model) placeMetadata(place Place) string {
+func (m Model) placeMetadata(place Place, width int) string {
 	if place.Kind == ProjectKind {
 		if place.GitContext != nil {
-			return m.gitContextLine(*place.GitContext)
+			return m.gitContextLine(*place.GitContext, width)
 		}
 		if errText := m.gitErrors[place.Path]; errText != "" {
 			return m.style(m.theme.Muted).Render("git: error " + errText)
@@ -1371,35 +1389,106 @@ func (m Model) placeMetadata(place Place) string {
 	if preview := previewLine(place.Preview); preview != "" {
 		return m.style(m.theme.Muted).Render(preview)
 	}
-	return ""
+	return m.style(m.theme.Muted).Render("no agents")
 }
 
-func (m Model) gitContextLine(context GitContext) string {
-	parts := make([]string, 0, 4)
-	muted := func(value string) string { return m.style(m.theme.Muted).Render(value) }
-	if context.Identity != "" {
-		parts = append(parts, muted(context.Identity))
-	}
+func (m Model) gitContextLine(context GitContext, width int) string {
+	identity := context.Identity
+	changes := ""
 	if context.Adds != 0 || context.Deletes != 0 {
 		if context.Adds != 0 {
-			parts = append(parts, m.style("green").Render("+"+itoa(context.Adds)))
+			changes += "+" + itoa(context.Adds)
 		}
 		if context.Deletes != 0 {
-			parts = append(parts, m.style("red").Render("-"+itoa(context.Deletes)))
+			if changes != "" {
+				changes += " "
+			}
+			changes += "-" + itoa(context.Deletes)
 		}
 	} else if context.Dirty {
-		parts = append(parts, m.style("yellow").Render("*"))
+		changes = "*"
 	}
+	divergence := ""
 	if context.Ahead > 0 {
-		parts = append(parts, muted("↑"+itoa(context.Ahead)))
+		divergence += "↑" + itoa(context.Ahead)
 	}
 	if context.Behind > 0 {
-		parts = append(parts, muted("↓"+itoa(context.Behind)))
+		if divergence != "" {
+			divergence += " "
+		}
+		divergence += "↓" + itoa(context.Behind)
 	}
-	if len(parts) == 0 {
-		return muted("clean")
+	if identity == "" && changes == "" && divergence == "" {
+		return m.style(m.theme.Muted).Render("clean")
+	}
+	if width <= 0 {
+		return ""
+	}
+	if gitWidth(identity, changes, divergence) > width {
+		// Divergence is the least important field and is dropped first.
+		divergence = ""
+	}
+	if gitWidth(identity, changes, divergence) > width {
+		// Keep the change signal while discarding its counts.
+		if context.Adds != 0 || context.Deletes != 0 {
+			changes = ""
+			if context.Adds != 0 {
+				changes += "+"
+			}
+			if context.Deletes != 0 {
+				if changes != "" {
+					changes += " "
+				}
+				changes += "-"
+			}
+		}
+	}
+	if gitWidth(identity, changes, divergence) > width {
+		// Identity is retained longest; only now may it be truncated.
+		suffix := gitWidth("", changes, divergence)
+		if suffix > 0 {
+			suffix++ // separator between identity and the retained suffix
+		}
+		identity = shell.Truncate(identity, width-suffix, "…")
+	}
+	if gitWidth(identity, changes, divergence) > width {
+		// A one-cell surface cannot fit a separated suffix; identity wins.
+		changes = ""
+		divergence = ""
+		identity = shell.Truncate(identity, width, "…")
+	}
+	parts := make([]string, 0, 4)
+	if identity != "" {
+		parts = append(parts, m.style(m.theme.Muted).Render(identity))
+	}
+	if changes != "" {
+		for _, change := range strings.Fields(changes) {
+			if strings.HasPrefix(change, "+") {
+				parts = append(parts, m.style("green").Render(change))
+			} else if strings.HasPrefix(change, "-") {
+				parts = append(parts, m.style("red").Render(change))
+			} else {
+				parts = append(parts, m.style("yellow").Render(change))
+			}
+		}
+	}
+	if divergence != "" {
+		parts = append(parts, m.style(m.theme.Muted).Render(divergence))
 	}
 	return strings.Join(parts, " ")
+}
+
+func gitWidth(identity, changes, divergence string) int {
+	parts := make([]string, 0, 3)
+	for _, value := range []string{identity, changes, divergence} {
+		if value != "" {
+			parts = append(parts, value)
+		}
+	}
+	if len(parts) == 0 {
+		return 0
+	}
+	return shell.StringWidth(strings.Join(parts, " "))
 }
 
 func agentDotColor(agent capabilities.Agent) string {
@@ -1429,28 +1518,62 @@ func stoppedAge(now, since time.Time) string {
 
 func (m Model) hints() []shell.Hint {
 	if m.renameMode {
-		return []shell.Hint{{Key: firstKey(defaultKeyMap.Accept), Label: "accept"}, {Key: firstKey(defaultKeyMap.Clear), Label: "cancel"}}
+		return []shell.Hint{m.hint(defaultKeyMap.Accept, "accept"), m.hint(defaultKeyMap.Clear, "cancel")}
 	}
 	if m.confirmKill {
-		return []shell.Hint{{Key: "y", Label: "kill"}, {Key: "n", Label: "cancel"}}
+		return []shell.Hint{m.hintKey("y", "kill"), m.hintKey("n", "cancel")}
 	}
-	hints := []shell.Hint{{Key: firstKey(defaultKeyMap.Up), Label: "up"}, {Key: firstKey(defaultKeyMap.Down), Label: "down"}}
-	if len(m.rows) > 0 && m.cursor < len(m.rows) {
-		switch m.rows[m.cursor].Kind {
-		case HeaderRow:
-			hints = append(hints, shell.Hint{Key: firstKey(defaultKeyMap.Accept), Label: "expand"}, shell.Hint{Key: firstKey(defaultKeyMap.Expand), Label: "expand"}, shell.Hint{Key: firstKey(defaultKeyMap.Collapse), Label: "collapse"})
-		case PlaceRow:
-			hints = append(hints, shell.Hint{Key: firstKey(defaultKeyMap.Accept), Label: "open"})
+	hints := make([]shell.Hint, 0, 10)
+	if len(m.rows) > 0 {
+		hints = append(hints, m.hintKeys("↑↓", "move"))
+		if m.cursor < len(m.rows) {
+			switch m.rows[m.cursor].Kind {
+			case HeaderRow:
+				hints = append(hints, m.hint(defaultKeyMap.Accept, "expand"), m.hintKeys("←→", "fold"))
+			case PlaceRow:
+				hints = append(hints, m.hint(defaultKeyMap.Accept, "open"), m.hint(defaultKeyMap.Collapse, "fold"))
+			default:
+				hints = append(hints, m.hint(defaultKeyMap.Collapse, "fold"))
+			}
 		}
 	}
-	hints = append(hints, shell.Hint{Key: firstKey(defaultKeyMap.Clear), Label: "cancel"})
-	if m.currentContainer() && len(m.query) == 0 {
-		hints = append(hints, shell.Hint{Key: firstKey(defaultKeyMap.Rename), Label: "rename"}, shell.Hint{Key: firstKey(defaultKeyMap.Kill), Label: "kill"})
+	hints = append(hints, m.hint(defaultKeyMap.Clear, "cancel"))
+	if len(m.query) == 0 && (len(m.markedTargets()) > 0 || m.currentContainer()) {
+		hints = append(hints, m.hint(defaultKeyMap.Kill, "kill"))
 	}
 	if m.currentContainer() {
-		hints = append(hints, shell.Hint{Key: firstKey(defaultKeyMap.MarkNext), Label: "mark"})
+		hints = append(hints, m.hint(defaultKeyMap.Rename, "rename"), m.hint(defaultKeyMap.MarkNext, "mark"))
 	}
 	return hints
+}
+
+func (m Model) hint(binding key.Binding, label string) shell.Hint {
+	return m.hintKey(firstKey(binding), label)
+}
+
+func (m Model) hintKey(keyValue, label string) shell.Hint {
+	return shell.Hint{Key: m.style(m.theme.Highlight).Bold(true).Render(displayKey(keyValue)), Label: label}
+}
+
+func (m Model) hintKeys(keyValue, label string) shell.Hint {
+	return shell.Hint{Key: m.style(m.theme.Highlight).Bold(true).Render(keyValue), Label: label}
+}
+
+func displayKey(value string) string {
+	switch value {
+	case "up":
+		return "↑"
+	case "down":
+		return "↓"
+	case "left":
+		return "←"
+	case "right":
+		return "→"
+	case "shift+tab":
+		return "⇧tab"
+	default:
+		return value
+	}
 }
 
 func firstKey(binding key.Binding) string {
