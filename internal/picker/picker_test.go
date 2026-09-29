@@ -168,6 +168,38 @@ func TestMachinePlacesAlwaysIncludesLocalMachine(t *testing.T) {
 	}
 }
 
+func TestApplyAgentDotsRanksUnseenWorkingAndSeen(t *testing.T) {
+	places := ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "dev", Machine: "laptop"}})
+	places = ApplyAgentDots(places, []capabilities.Agent{
+		{Container: "dev", State: "working"},
+		{Container: "dev", State: "stopped", Seen: true},
+		{Container: "dev", State: "stopped", Seen: false},
+	})
+	if len(places[0].Decorations) != 1 || places[0].Decorations[0].Text != "●" || places[0].Decorations[0].Style != DecorationRed {
+		t.Fatalf("place = %#v, want one red urgent dot", places[0])
+	}
+
+	places = ApplyAgentDots(places, []capabilities.Agent{{Container: "dev", State: "working"}})
+	if len(places[0].Decorations) != 1 || places[0].Decorations[0].Style != DecorationYellow {
+		t.Fatalf("place = %#v, want one yellow working dot", places[0])
+	}
+	places = ApplyAgentDots(places, []capabilities.Agent{{Container: "dev", State: "stopped", Seen: true}})
+	if len(places[0].Decorations) != 1 || places[0].Decorations[0].Style != DecorationGreen {
+		t.Fatalf("place = %#v, want one green seen-stopped dot", places[0])
+	}
+}
+
+func TestApplyAgentDotsMatchesAgentsToTheirContainer(t *testing.T) {
+	places := ContainerPlaces([]capabilities.Container{
+		{ID: "$1", Name: "api", Machine: "laptop"},
+		{ID: "$2", Name: "web", Machine: "laptop"},
+	})
+	places = ApplyAgentDots(places, []capabilities.Agent{{Container: "web", State: "working"}})
+	if len(places[0].Decorations) != 0 || len(places[1].Decorations) != 1 {
+		t.Fatalf("places = %#v, want only web decorated", places)
+	}
+}
+
 func TestContainerPlacesFoldByMachineAndRenderCreateRowAndPreview(t *testing.T) {
 	places := ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "dev", Machine: "laptop", Preview: "shell$"}})
 	model := NewModel(places, Theme{})

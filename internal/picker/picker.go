@@ -66,7 +66,14 @@ type PreviewBatch struct {
 type RemoteBatch struct {
 	Machine string
 	Places  []Place
+	Agents  []capabilities.Agent
 	Error   string
+}
+
+// AgentBatch is the asynchronous local agent listing used for container dots.
+type AgentBatch struct {
+	Agents []capabilities.Agent
+	Error  string
 }
 
 // Place is the additive item model used by the picker. SearchText and
@@ -316,6 +323,7 @@ type Model struct {
 	gitPool        *gitLoadPool
 	gitTimeout     time.Duration
 	remoteCmds     []tea.Cmd
+	agentCmd       tea.Cmd
 	remoteMachines []string
 	groupErrors    map[groupKey]string
 }
@@ -361,10 +369,20 @@ func (m Model) WithRemoteCommands(commands []tea.Cmd) Model {
 	return m
 }
 
+// WithAgentCommand starts asynchronous agent discovery for local container
+// dots when the selected backend exposes the AgentSource capability.
+func (m Model) WithAgentCommand(command tea.Cmd) Model {
+	m.agentCmd = command
+	return m
+}
+
 // Init implements tea.Model. Git context and screen previews are started
 // independently of input handling, so opening the picker never waits on I/O.
 func (m Model) Init() tea.Cmd {
 	commands := append([]tea.Cmd(nil), m.remoteCmds...)
+	if m.agentCmd != nil {
+		commands = append(commands, m.agentCmd)
+	}
 	if m.previewCmd != nil {
 		commands = append(commands, m.previewCmd)
 	}
@@ -507,7 +525,8 @@ func (m *Model) applyRemoteBatch(batch RemoteBatch) {
 		m.remoteMachines = append(m.remoteMachines, machine)
 	}
 	m.groupErrors[key] = batch.Error
-	for _, place := range batch.Places {
+	places := ApplyAgentDots(batch.Places, batch.Agents)
+	for _, place := range places {
 		if place.Machine == "" {
 			place.Machine = machine
 		}
@@ -846,6 +865,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.SetPreview(ref, preview)
 		}
 		return m, nil
+	case AgentBatch:
+		if msg.Error == "" {
+			m.places = ApplyAgentDots(m.places, msg.Agents)
+			m.rebuild()
+		}
+		return m, nil
 	case RemoteBatch:
 		m.applyRemoteBatch(msg)
 		return m, nil
@@ -1141,6 +1166,12 @@ func (m Model) decorationStyle(decoration Decoration) lipgloss.Style {
 		color = m.theme.Muted
 	case DecorationAccent:
 		color = m.theme.Highlight
+	case DecorationRed:
+		color = "red"
+	case DecorationYellow:
+		color = "yellow"
+	case DecorationGreen:
+		color = "green"
 	}
 	return m.style(color)
 }

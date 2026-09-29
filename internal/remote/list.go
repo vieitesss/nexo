@@ -23,6 +23,7 @@ const DefaultMachineTimeout = 5 * time.Second
 type MachineResult struct {
 	Machine    string                   `json:"machine"`
 	Containers []capabilities.Container `json:"containers,omitempty"`
+	Agents     []capabilities.Agent     `json:"agents,omitempty"`
 	Error      string                   `json:"error,omitempty"`
 }
 
@@ -96,6 +97,46 @@ func (l Lister) ListMachine(ctx context.Context, machine string) MachineResult {
 	return result
 }
 
+// ListMachineWithAgents lists containers and, when available, the agent
+// statuses from the same machine. An unavailable remote nexo binary is a
+// best-effort omission: containers remain usable and no error is reported.
+func (l Lister) ListMachineWithAgents(ctx context.Context, machine string) MachineResult {
+	result := l.ListMachine(ctx, machine)
+	if result.Error != "" {
+		return result
+	}
+	agents, err := l.ListAgentsMachine(ctx, machine)
+	if err == nil {
+		result.Agents = agents
+	}
+	return result
+}
+
+// ListAgentsMachine reads the optional remote nexo agent listing. Callers that
+// use this as decoration data should ignore errors, because older machines may
+// not have nexo installed.
+func (l Lister) ListAgentsMachine(ctx context.Context, machine string) ([]capabilities.Agent, error) {
+	machine = strings.TrimSpace(machine)
+	if machine == "" {
+		return nil, errors.New("machine name is empty")
+	}
+	if l.Runner == nil {
+		return nil, errors.New("remote agent listing requires a command runner")
+	}
+	timeout := l.Timeout
+	if timeout <= 0 {
+		timeout = DefaultMachineTimeout
+	}
+	machineCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	args := l.sshArgs(machine, shellCommand("nexo", "agents", "--json"))
+	output, err := l.Runner.Run(machineCtx, "ssh", args...)
+	if err != nil {
+		return nil, err
+	}
+	return decodeAgents(output)
+}
+
 // List queries all configured machines in parallel. Results retain the input
 // order while each machine's own timeout controls completion.
 func (l Lister) List(ctx context.Context, machines []string) []MachineResult {
@@ -128,16 +169,11 @@ func uniqueMachines(machines []string) []string {
 }
 
 func (l Lister) run(ctx context.Context, machine string) ([]byte, error) {
-	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=5"}
-	if l.SSHConfig != "" {
-		args = append(args, "-F", l.SSHConfig)
-	}
-	args = append(args, machine)
+	command := shellCommand("herdr", "workspace", "list")
 	if l.Backend == backend.Tmux {
-		args = append(args, shellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}"))
-	} else {
-		args = append(args, shellCommand("herdr", "workspace", "list"))
+		command = shellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
 	}
+	args := l.sshArgs(machine, command)
 	output, err := l.Runner.Run(ctx, "ssh", args...)
 	if err != nil {
 		if l.Backend == backend.Tmux && isNoServer(err, output) {
@@ -153,6 +189,22 @@ func (l Lister) run(ctx context.Context, machine string) ([]byte, error) {
 		return nil, fmt.Errorf("ssh %s: %w", machine, err)
 	}
 	return output, nil
+}
+
+func (l Lister) sshArgs(machine, command string) []string {
+	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=5"}
+	if l.SSHConfig != "" {
+		args = append(args, "-F", l.SSHConfig)
+	}
+	return append(args, machine, command)
+}
+
+func decodeAgents(output []byte) ([]capabilities.Agent, error) {
+	var agents []capabilities.Agent
+	if err := json.Unmarshal(output, &agents); err != nil {
+		return nil, fmt.Errorf("decode remote nexo agents: %w", err)
+	}
+	return agents, nil
 }
 
 func isNoServer(err error, output []byte) bool {

@@ -40,6 +40,34 @@ func TestListMachineUsesSSHBatchModeAndOptionalConfig(t *testing.T) {
 	}
 }
 
+func TestListMachineWithAgentsReadsRemoteNexoJSON(t *testing.T) {
+	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		command := args[len(args)-1]
+		if strings.Contains(command, "nexo") {
+			return []byte(`[{"container":"api","state":"stopped","seen":false}]`), nil
+		}
+		return []byte("$1\tapi\n"), nil
+	}), backend.Tmux, "")
+	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	if result.Error != "" || len(result.Containers) != 1 || len(result.Agents) != 1 || result.Agents[0].Container != "api" {
+		t.Fatalf("result = %#v, want containers and remote agents", result)
+	}
+}
+
+func TestListMachineWithAgentsIgnoresMissingRemoteNexo(t *testing.T) {
+	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		command := args[len(args)-1]
+		if strings.Contains(command, "nexo") {
+			return nil, errors.New("nexo: command not found")
+		}
+		return []byte("$1\tapi\n"), nil
+	}), backend.Tmux, "")
+	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	if result.Error != "" || len(result.Containers) != 1 || len(result.Agents) != 0 {
+		t.Fatalf("result = %#v, want containers without dots", result)
+	}
+}
+
 func TestListMachineTreatsTmuxNoServerStderrAsEmpty(t *testing.T) {
 	lister := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return nil, &exec.ExitError{Stderr: []byte("no server running on /tmp/tmux-1000/default\n")}

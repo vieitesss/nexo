@@ -3,7 +3,28 @@ package picker
 import (
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/vieitesss/nexo/internal/capabilities"
 )
+
+func TestRemoteBatchAddsContainersAndAgentDots(t *testing.T) {
+	model := NewModel([]Place{MachinePlace("local")}, DefaultTheme)
+	updated, _ := model.Update(RemoteBatch{
+		Machine: "devbox",
+		Places:  []Place{{Kind: ContainerKind, Machine: "devbox", Group: "devbox", ContainerID: "$1", ContainerName: "api", DisplayRemainder: "api", SearchText: "api"}},
+		Agents:  []capabilities.Agent{{Container: "api", State: "stopped", Seen: false}},
+	})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = updated.(Model)
+	if len(model.Rows()) != 4 || len(model.Rows()[2].Place.Decorations) != 1 || model.Rows()[2].Place.Decorations[0].Style != DecorationRed {
+		t.Fatalf("rows = %#v, want remote container with urgent dot", model.Rows())
+	}
+}
 
 func TestRemoteBatchAddsContainersAndUnreachableHeader(t *testing.T) {
 	model := NewModel([]Place{MachinePlace("local")}, DefaultTheme)
