@@ -39,14 +39,53 @@ func TestDiscoverExpandsConfiguredPathsAndHomeRepositories(t *testing.T) {
 	}
 }
 
-func TestDiscoverExpandsHomePrefixes(t *testing.T) {
+func TestDiscoverExpansionForms(t *testing.T) {
 	home := t.TempDir()
-	root := filepath.Join(home, "work")
-	mustMkdir(t, filepath.Join(root, "project"))
+	dir := filepath.Join(home, "configured")
+	mustMkdir(t, filepath.Join(home, "home-project"))
+	mustMkdir(t, filepath.Join(dir, "direct"))
+	mustMkdir(t, filepath.Join(dir, "nested", "project"))
 
-	got := Discover(config.ProjectsConfig{Paths: []string{"~/work", "$HOME/work/"}}, home)
-	if len(got.Candidates) != 1 || got.Candidates[0].Path != filepath.Join(root, "project") {
-		t.Fatalf("candidates = %#v, want expanded home paths", got.Candidates)
+	tests := []struct {
+		name    string
+		pattern string
+		want    []Candidate
+	}{
+		{name: "tilde", pattern: "~", want: []Candidate{{Path: filepath.Join(home, "configured"), Group: home}, {Path: filepath.Join(home, "home-project"), Group: home}}},
+		{name: "tilde slash", pattern: "~/", want: []Candidate{{Path: filepath.Join(home, "configured"), Group: home}, {Path: filepath.Join(home, "home-project"), Group: home}}},
+		{name: "home variable", pattern: "$HOME", want: []Candidate{{Path: filepath.Join(home, "configured"), Group: home}, {Path: filepath.Join(home, "home-project"), Group: home}}},
+		{name: "home variable slash", pattern: "$HOME/", want: []Candidate{{Path: filepath.Join(home, "configured"), Group: home}, {Path: filepath.Join(home, "home-project"), Group: home}}},
+		{name: "directory", pattern: dir, want: []Candidate{{Path: filepath.Join(dir, "direct"), Group: dir}, {Path: filepath.Join(dir, "nested"), Group: dir}}},
+		{name: "directory slash", pattern: dir + string(filepath.Separator), want: []Candidate{{Path: filepath.Join(dir, "direct"), Group: dir}, {Path: filepath.Join(dir, "nested"), Group: dir}}},
+		{name: "directory wildcard", pattern: dir + string(filepath.Separator) + "*", want: []Candidate{{Path: filepath.Join(dir, "nested", "project"), Group: filepath.Join(dir, "nested")}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := Discover(config.ProjectsConfig{Paths: []string{test.pattern}}, home)
+			if len(got.Warnings) != 0 {
+				t.Fatalf("warnings = %v, want none", got.Warnings)
+			}
+			if !reflect.DeepEqual(got.Candidates, test.want) {
+				t.Fatalf("candidates = %#v, want %#v", got.Candidates, test.want)
+			}
+		})
+	}
+}
+
+func TestDiscoverEmptyHomeSkipsHomeExpansionsAndGitDiscovery(t *testing.T) {
+	tests := []string{"~", "~/", "$HOME", "$HOME/", "$HOME/work", "$HOME/work/*"}
+	got := Discover(config.ProjectsConfig{Paths: tests, GitFromHome: true}, "")
+	if len(got.Candidates) != 0 {
+		t.Fatalf("candidates = %#v, want none", got.Candidates)
+	}
+	if len(got.Warnings) != len(tests)+1 {
+		t.Fatalf("warnings = %#v, want one per home operation", got.Warnings)
+	}
+}
+
+func TestCanonicalRejectsEmptyPath(t *testing.T) {
+	if _, err := canonical(""); err == nil {
+		t.Fatal("canonical(\"\") error = nil, want rejection")
 	}
 }
 

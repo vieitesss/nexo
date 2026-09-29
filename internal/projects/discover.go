@@ -2,6 +2,7 @@
 package projects
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,6 +63,10 @@ func Discover(cfg config.ProjectsConfig, home string) Discovery {
 	}
 
 	if cfg.GitFromHome {
+		if home == "" {
+			discovery.Warnings = append(discovery.Warnings, "skip git-from-home: home directory is unavailable")
+			return discovery
+		}
 		homePath, err := canonical(home)
 		if err != nil {
 			discovery.warnRead(home, err)
@@ -103,6 +108,9 @@ func expandHome(pattern, home string) (string, bool) {
 }
 
 func canonical(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("path is empty")
+	}
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
