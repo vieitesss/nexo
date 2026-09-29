@@ -117,7 +117,7 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		return 2
 	}
 	if options.Help {
-		printHelp(stdout)
+		printHelp(stdout, registry)
 		return 0
 	}
 	if options.Version {
@@ -184,11 +184,15 @@ func printVersion(stdout io.Writer) {
 	_, _ = fmt.Fprintf(stdout, "nexo %s\n", version.String())
 }
 
-func printHelp(stdout io.Writer) {
+func printHelp(stdout io.Writer, registry *commands.Registry) {
 	if stdout == nil {
 		return
 	}
+	commandsText := "backend"
+	if registry != nil {
+		commandsText = strings.Join(registry.Names(), ", ")
+	}
 	_, _ = fmt.Fprintln(stdout, "Usage: nexo [flags] <command> [args]")
-	_, _ = fmt.Fprintln(stdout, "\nCommands: backend (feature commands register independently)")
+	_, _ = fmt.Fprintf(stdout, "\nCommands: %s\n", commandsText)
 	_, _ = fmt.Fprintln(stdout, "\nFlags: --backend auto|tmux|herdr, -c/--config-file PATH, --json, --version")
 }

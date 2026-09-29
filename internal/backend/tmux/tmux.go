@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/runner"
 )
@@ -19,6 +20,7 @@ import (
 type Backend struct {
 	Runner runner.CommandRunner
 	Inside bool
+	agents *Source
 }
 
 // New constructs a tmux backend using the supplied command runner. The
@@ -28,7 +30,7 @@ func New(r runner.CommandRunner, inside ...bool) *Backend {
 	if len(inside) > 0 {
 		inTmux = inside[0]
 	}
-	return &Backend{Runner: r, Inside: inTmux}
+	return &Backend{Runner: r, Inside: inTmux, agents: NewAgentSource(r)}
 }
 
 // Name identifies this backend.
@@ -159,3 +161,25 @@ func isMissingSession(err error) bool {
 }
 
 func sessionName(path string) string { return projects.TargetName(path) }
+
+// ConfigureAgents applies the shared agents configuration to the tmux source.
+func (b *Backend) ConfigureAgents(cfg config.AgentsConfig) {
+	b.agents.ConfigureAgents(cfg)
+}
+
+// ListAgents implements capabilities.AgentSource.
+func (b *Backend) ListAgents(ctx context.Context) ([]capabilities.Agent, error) {
+	return b.agents.ListAgents(ctx)
+}
+
+// MarkAgentSeen records focus entering one exact stopped pane.
+func (b *Backend) MarkAgentSeen(ctx context.Context, paneID string) error {
+	return b.agents.MarkSeen(ctx, paneID)
+}
+
+// WatchAgents runs the tmux agent poller until ctx is canceled.
+func (b *Backend) WatchAgents(ctx context.Context) error {
+	return b.agents.Watch(ctx)
+}
+
+var _ capabilities.AgentSource = (*Backend)(nil)

@@ -1,5 +1,7 @@
 package capabilities
 
+import "time"
+
 // Pane is a pane exposed by a backend.
 type Pane struct {
 	ID          string `json:"id"`
@@ -10,9 +12,11 @@ type Pane struct {
 
 // Agent is an agent pane exposed by a backend.
 type Agent struct {
-	ID          string `json:"id"`
-	PaneID      string `json:"pane_id"`
-	Name        string `json:"name"`
-	Working     bool   `json:"working"`
-	SeenStopped bool   `json:"seen_stopped"`
+	PaneID       string     `json:"pane_id"`
+	Target       string     `json:"target"`
+	Harness      string     `json:"harness"`
+	State        string     `json:"state"`
+	Seen         bool       `json:"seen"`
+	StoppedSince *time.Time `json:"stopped_since,omitempty"`
+	Branch       string     `json:"branch,omitempty"`
 }

@@ -23,6 +23,7 @@ import (
 type Config struct {
 	Backend        string `toml:"backend"`
 	ProjectsConfig `toml:",inline"`
+	Agents         AgentsConfig `toml:"agents"`
 }
 
 // Load reads a required configuration file.
@@ -75,6 +76,7 @@ func parse(contents []byte, path string) (Config, error) {
 	if err := validateBackend(cfg.Backend); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "backend")
 	}
+	cfg.Agents = cfg.Agents.WithDefaults()
 	return cfg, nil
 }
 
