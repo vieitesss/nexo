@@ -105,4 +105,87 @@ func TestTmuxAdapterIntegration(t *testing.T) {
 	if !strings.Contains(string(newAgent), "NEXO_AGENT_NAVIGATOR_INLINE=1") {
 		t.Fatalf("new agent binding = %q, want nexo binding", newAgent)
 	}
+
+	writeConfig := func(placeKey, agentKey string) {
+		t.Helper()
+		contents := fmt.Sprintf("[tmux]\nplace-key = %q\nagent-key = %q\npopup-width = \"70%%\"\npopup-height = \"60%%\"\npopup-x = \"C\"\npopup-y = \"C\"\n", placeKey, agentKey)
+		if err := os.WriteFile(configPath, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if output, err := runTmux("run-shell", command); err != nil {
+			t.Fatalf("re-run adapter: %v\n%s", err, output)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	// Re-running with a user replacement at the remembered key must not
+	// overwrite it (same key, with a user rebinding).
+	writeConfig("C-z", "M-a")
+	userPlace, _ = runTmux("list-keys", "-T", "root", "C-z")
+	if !strings.Contains(string(userPlace), "user binding") {
+		t.Fatalf("same-key user binding = %q, want preserved binding", userPlace)
+	}
+
+	// A changed key leaves a user replacement at the old key untouched.
+	writeConfig("C-w", "M-a")
+	oldUserPlace, _ := runTmux("list-keys", "-T", "root", "C-z")
+	newPlace, _ := runTmux("list-keys", "-T", "root", "C-w")
+	if !strings.Contains(string(oldUserPlace), "user binding") || !strings.Contains(string(newPlace), "NEXO_PLACE_PICKER_INLINE=1") {
+		t.Fatalf("changed-key bindings: old=%q new=%q", oldUserPlace, newPlace)
+	}
+
+	// A same-key re-run with no user replacement is allowed to refresh nexo.
+	writeConfig("C-w", "M-a")
+	newPlace, _ = runTmux("list-keys", "-T", "root", "C-w")
+	if !strings.Contains(string(newPlace), "NEXO_PLACE_PICKER_INLINE=1") {
+		t.Fatalf("same-key nexo binding = %q, want nexo binding", newPlace)
+	}
+
+	// A changed key after a user replacement at the remembered key preserves
+	// the user command and installs the new nexo key.
+	if output, err := runTmux("bind-key", "-n", "C-w", "display-message", "user changed binding"); err != nil {
+		t.Fatalf("install changed user binding: %v\n%s", err, output)
+	}
+	writeConfig("C-v", "M-a")
+	oldUserPlace, _ = runTmux("list-keys", "-T", "root", "C-w")
+	newPlace, _ = runTmux("list-keys", "-T", "root", "C-v")
+	if !strings.Contains(string(oldUserPlace), "user changed binding") || !strings.Contains(string(newPlace), "NEXO_PLACE_PICKER_INLINE=1") {
+		t.Fatalf("changed-key user bindings: old=%q new=%q", oldUserPlace, newPlace)
+	}
+
+	// A changed key with no user replacement removes only the old nexo key.
+	writeConfig("C-y", "M-a")
+	oldNexoPlace, _ := runTmux("list-keys", "-T", "root", "C-v")
+	newPlace, _ = runTmux("list-keys", "-T", "root", "C-y")
+	if !strings.Contains(string(oldNexoPlace), "unknown key") || !strings.Contains(string(newPlace), "NEXO_PLACE_PICKER_INLINE=1") {
+		t.Fatalf("changed-key nexo bindings: old=%q new=%q", oldNexoPlace, newPlace)
+	}
+
+	// Disabling an unmodified nexo key removes it.
+	writeConfig("none", "M-a")
+	removedPlace, _ := runTmux("list-keys", "-T", "root", "C-y")
+	if !strings.Contains(string(removedPlace), "unknown key") {
+		t.Fatalf("disabled nexo place binding = %q, want removed", removedPlace)
+	}
+
+	// Disabling a key after a user replacement preserves the user command.
+	writeConfig("C-u", "M-a")
+	if output, err := runTmux("bind-key", "-n", "C-u", "display-message", "user none binding"); err != nil {
+		t.Fatalf("install user none binding: %v\n%s", err, output)
+	}
+	writeConfig("none", "M-a")
+	userNonePlace, _ := runTmux("list-keys", "-T", "root", "C-u")
+	if !strings.Contains(string(userNonePlace), "user none binding") {
+		t.Fatalf("disabled user binding = %q, want preserved binding", userNonePlace)
+	}
+
+	// The same ownership rules apply to the agent navigator binding.
+	if output, err := runTmux("bind-key", "M-a", "display-message", "user agent binding"); err != nil {
+		t.Fatalf("install user agent binding: %v\n%s", err, output)
+	}
+	writeConfig("none", "none")
+	userNoneAgent, _ := runTmux("list-keys", "-T", "prefix", "M-a")
+	if !strings.Contains(string(userNoneAgent), "user agent binding") {
+		t.Fatalf("disabled user agent binding = %q, want preserved binding", userNoneAgent)
+	}
 }

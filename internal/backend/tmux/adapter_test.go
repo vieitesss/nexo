@@ -77,6 +77,8 @@ func TestInitRemovesRecordedBindingsWhenKeysChange(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"show-option -gqv @nexo-place-key": []byte("root:C-s\n"),
 		"show-option -gqv @nexo-agent-key": []byte("prefix:a\n"),
+		"list-keys -T root C-s":            []byte("bind-key -T root C-s display-popup NEXO_PLACE_PICKER_INLINE=1\n"),
+		"list-keys -T prefix a":            []byte("bind-key -T prefix a display-popup NEXO_AGENT_NAVIGATOR_INLINE=1\n"),
 		"show-option -gqv focus-events":    []byte("on\n"),
 	}}
 	cfg := config.TmuxConfig{PlaceKey: "C-x", AgentKey: "none"}

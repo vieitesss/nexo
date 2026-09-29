@@ -54,24 +54,52 @@ func (b *Backend) bind(ctx context.Context, mode, table, option, key, configOpti
 	if err != nil {
 		return err
 	}
-	ownsTarget := previousKey != "" && previousTable == table && previousKey == key
-	if previousKey != "" && !ownsTarget {
+
+	// The option is only a hint about where nexo last installed a binding. A
+	// user can replace that binding without knowing about the option, so always
+	// inspect the current command before treating it as ours.
+	var previousBinding string
+	var previousBound bool
+	if previousKey != "" {
+		previousBinding, previousBound, err = b.currentBinding(ctx, previousTable, previousKey)
+		if err != nil {
+			return err
+		}
+	}
+	previousIsNexo := previousBound && isNexoBinding(previousBinding)
+	previousIsTarget := previousKey != "" && previousTable == table && previousKey == key
+
+	var targetBinding string
+	var targetBound bool
+	if key != "" {
+		if previousIsTarget {
+			targetBinding, targetBound = previousBinding, previousBound
+		} else {
+			targetBinding, targetBound, err = b.currentBinding(ctx, table, key)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	if previousBound && !previousIsNexo && !previousIsTarget {
+		if err := b.reportConflict(ctx, previousTable, previousKey, configOption); err != nil {
+			return err
+		}
+	}
+	if previousBound && previousIsNexo && !previousIsTarget {
 		if err := b.unbind(ctx, previousTable, previousKey); err != nil {
 			return err
 		}
 	}
+	if targetBound && !isNexoBinding(targetBinding) {
+		if err := b.reportConflict(ctx, table, key, configOption); err != nil {
+			return err
+		}
+		return nil
+	}
 	if key == "" {
 		return b.recordBinding(ctx, option, table, key)
-	}
-	if !ownsTarget {
-		bound, err := b.run(ctx, "list-keys", "-T", table, key)
-		if err == nil && strings.TrimSpace(string(bound)) != "" {
-			message := fmt.Sprintf("nexo: tmux key %q is already bound; change %s or set it to 'none'", key, configOption)
-			if _, err := b.run(ctx, "display-message", message); err != nil {
-				return fmt.Errorf("report tmux key conflict: %w", err)
-			}
-			return nil
-		}
 	}
 
 	bindArgs := []string{}
@@ -83,6 +111,45 @@ func (b *Backend) bind(ctx context.Context, mode, table, option, key, configOpti
 		return err
 	}
 	return b.recordBinding(ctx, option, table, key)
+}
+
+func (b *Backend) currentBinding(ctx context.Context, table, key string) (string, bool, error) {
+	binding, err := b.run(ctx, "list-keys", "-T", table, key)
+	if err != nil {
+		// tmux exits non-zero when a key is not bound. Other failures (for
+		// example, a missing server) must not be mistaken for ownership.
+		if isMissingKey(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("read tmux binding for %s:%s: %w", table, key, err)
+	}
+	return string(binding), strings.TrimSpace(string(binding)) != "", nil
+}
+
+func isMissingKey(err error) bool {
+	var tmuxErr *Error
+	if !errors.As(err, &tmuxErr) {
+		return false
+	}
+	message := strings.ToLower(tmuxErr.Stderr)
+	return strings.Contains(message, "unknown key") ||
+		strings.Contains(message, "no such key") ||
+		strings.Contains(message, "key not found")
+}
+
+func isNexoBinding(binding string) bool {
+	return strings.Contains(binding, "NEXO_PLACE_PICKER_INLINE=1") ||
+		strings.Contains(binding, "NEXO_AGENT_NAVIGATOR_INLINE=1") ||
+		strings.Contains(binding, "nexo --backend=tmux") ||
+		strings.Contains(binding, "nexo --backend tmux")
+}
+
+func (b *Backend) reportConflict(ctx context.Context, table, key, configOption string) error {
+	message := fmt.Sprintf("nexo: tmux key %q in table %q is already bound; change %s or set it to 'none'", key, table, configOption)
+	if _, err := b.run(ctx, "display-message", message); err != nil {
+		return fmt.Errorf("report tmux key conflict: %w", err)
+	}
+	return nil
 }
 
 func normalizeKey(key string) string {
