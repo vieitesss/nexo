@@ -9,8 +9,10 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/vieitesss/nexo/internal/backend"
+	"github.com/vieitesss/nexo/internal/backend/herdr"
 	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/proxy"
@@ -80,7 +82,7 @@ func runRemoteOpen(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	return openRemoteContainer(ctx, invocation, machine, container, result.Kind)
+	return openRemoteContainerWithResolver(ctx, invocation, machine, container, result.Kind)
 }
 
 func runRemoteNew(ctx context.Context, invocation Invocation) error {
@@ -106,7 +108,7 @@ func runRemoteNew(ctx context.Context, invocation Invocation) error {
 		if err := createHerdrRemoteWorkspace(ctx, invocation, machine, name); err != nil {
 			return err
 		}
-		return openRemoteContainer(ctx, invocation, machine, name, result.Kind)
+		return openRemoteContainerWithResolver(ctx, invocation, machine, name, result.Kind)
 	}
 	if err := tmux.ValidateProxyIdentity(machine, name); err != nil {
 		return err
@@ -184,16 +186,8 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	if !configuredMachine(invocation.Config.Remote.Machines, machine) {
-		return fmt.Errorf("remote machine %q is not configured", machine)
-	}
-	result, err := listRemoteMachine(ctx, invocation, machine)
-	if err != nil {
-		return err
-	}
-	if result.Kind == remote.KindHerdr {
-		return fmt.Errorf("remote machine %q runs Herdr; there is no local proxy to close", machine)
-	}
+	// Closing is local-only. Do not probe the remote machine: links are often
+	// down precisely when a stale local proxy needs to be removed.
 	container = tmux.CanonicalContainerName(container)
 	if _, ok := invocation.Adapter.(capabilities.RemoteProxy); !ok {
 		return fmt.Errorf("backend %q does not support remote proxies", invocation.Selection.Kind)
@@ -221,36 +215,114 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 }
 
 func runRemoteAttach(ctx context.Context, invocation Invocation) error {
-	if len(invocation.Args) != 3 {
+	fromEnv := len(invocation.Args) == 2 && invocation.Args[1] == "--from-env"
+	if !fromEnv && len(invocation.Args) != 3 {
 		return errors.New("remote attach requires MACHINE CONTAINER")
 	}
-	machine := strings.TrimSpace(invocation.Args[1])
+	if fromEnv && invocation.Selection.Kind != backend.Herdr {
+		return errors.New("remote attach --from-env requires the Herdr backend")
+	}
 	if invocation.Selection.Kind != backend.Tmux && invocation.Selection.Kind != backend.Herdr {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
-	if invocation.Selection.Kind == backend.Herdr && !configuredMachine(invocation.Config.Remote.Machines, machine) {
+	if invocation.Selection.Kind == backend.Herdr && !fromEnv {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
 	if _, ok := invocation.Adapter.(capabilities.RemoteProxy); !ok {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
-	container := tmux.CanonicalContainerName(strings.TrimSpace(invocation.Args[2]))
-	if err := validateRemoteMachine(invocation.Config.Remote.Machines, machine); err != nil {
-		return err
+	var machine, container string
+	if fromEnv {
+		machine = os.Getenv("NEXO_PROXY_MACHINE")
+		container = os.Getenv("NEXO_PROXY_CONTAINER")
+		if err := herdr.ValidateProxyIdentity(machine, container); err != nil {
+			return err
+		}
+	} else {
+		machine = strings.TrimSpace(invocation.Args[1])
+		container = tmux.CanonicalContainerName(strings.TrimSpace(invocation.Args[2]))
+		if err := validateRemoteMachine(invocation.Config.Remote.Machines, machine); err != nil {
+			return err
+		}
+		if container == "" {
+			return errors.New("remote attach requires a container")
+		}
 	}
-	if container == "" {
-		return errors.New("remote attach requires a container")
+	if invocation.Selection.Kind == backend.Herdr && !configuredMachine(invocation.Config.Remote.Machines, machine) {
+		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
 	transport := tmux.NewCommandTransport(invocation.Config.Remote)
 	if invocation.Config.Remote.EffectiveTransport() != "ssh" {
-		return transport.Attach(ctx, machine, container)
+		attachErr := transport.Attach(ctx, machine, container)
+		if fromEnv {
+			return finishHerdrProxyAttach(invocation, attachErr)
+		}
+		return attachErr
 	}
 	initial, maximum := invocation.Config.Remote.ReconnectDelays()
 	input := invocation.Stdin
 	if input == nil {
 		input = os.Stdin
 	}
-	return proxy.RunReconnect(ctx, transport, nil, input, machine, container, initial, maximum)
+	attachErr := proxy.RunReconnect(ctx, transport, nil, input, machine, container, initial, maximum)
+	if fromEnv {
+		return finishHerdrProxyAttach(invocation, attachErr)
+	}
+	return attachErr
+}
+
+func finishHerdrProxyAttach(invocation Invocation, attachErr error) error {
+	cleanupErr := closeHerdrProxyWorkspace(invocation)
+	if attachErr != nil && cleanupErr != nil {
+		return errors.Join(attachErr, cleanupErr)
+	}
+	if attachErr != nil {
+		return attachErr
+	}
+	return cleanupErr
+}
+
+func closeHerdrProxyWorkspace(invocation Invocation) error {
+	if invocation.Runner == nil {
+		return errors.New("close Herdr proxy workspace requires a command runner")
+	}
+	paneID := strings.TrimSpace(os.Getenv("HERDR_PANE_ID"))
+	if paneID == "" {
+		return errors.New("HERDR_PANE_ID is required to close the Herdr proxy workspace")
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	output, err := invocation.Runner.Run(cleanupCtx, "herdr", "pane", "get", paneID)
+	if err != nil {
+		return fmt.Errorf("find Herdr proxy workspace: %w", err)
+	}
+	workspaceID, err := decodePaneWorkspaceID(output)
+	if err != nil {
+		return err
+	}
+	if _, err := invocation.Runner.Run(cleanupCtx, "herdr", "workspace", "close", workspaceID); err != nil {
+		return fmt.Errorf("close Herdr proxy workspace %s: %w", workspaceID, err)
+	}
+	return nil
+}
+
+func decodePaneWorkspaceID(output []byte) (string, error) {
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	raw := output
+	if json.Unmarshal(output, &envelope) == nil && len(envelope.Result) > 0 && string(envelope.Result) != "null" {
+		raw = envelope.Result
+	}
+	var result struct {
+		Pane struct {
+			WorkspaceID string `json:"workspace_id"`
+		} `json:"pane"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil || strings.TrimSpace(result.Pane.WorkspaceID) == "" {
+		return "", errors.New("herdr proxy pane did not report a workspace id")
+	}
+	return result.Pane.WorkspaceID, nil
 }
 
 func listRemoteMachine(ctx context.Context, invocation Invocation, machine string) (remote.MachineResult, error) {
@@ -300,6 +372,17 @@ func remoteContainerName(invocation Invocation) (string, error) {
 	return name, nil
 }
 
+func openRemoteContainerWithResolver(ctx context.Context, invocation Invocation, machine, container string, kind remote.Kind) error {
+	if invocation.ContainerResolver != nil {
+		actions, err := invocation.ContainerResolver.ResolveContainerActions(ctx, machine)
+		if err != nil {
+			return err
+		}
+		return actions.OpenContainer(ctx, container)
+	}
+	return openRemoteContainer(ctx, invocation, machine, container, kind)
+}
+
 func openRemoteContainer(ctx context.Context, invocation Invocation, machine, container string, kind remote.Kind) error {
 	switch kind {
 	case remote.KindHerdr:
@@ -331,7 +414,7 @@ func openNativeHerdrContainer(ctx context.Context, invocation Invocation, machin
 		return fmt.Errorf("list Herdr machines: %w", err)
 	}
 	if !herdrMachineSaved(output, machine) {
-		if _, err := invocation.Runner.Run(ctx, "herdr", "machine", "add", "--label", machine, machine); err != nil {
+		if _, err := invocation.Runner.Run(ctx, "herdr", "machine", "add", machine, "--label", machine); err != nil {
 			return fmt.Errorf("save Herdr machine %q: %w", machine, err)
 		}
 		if invocation.Stdout != nil {
@@ -348,36 +431,19 @@ func openNativeHerdrContainer(ctx context.Context, invocation Invocation, machin
 }
 
 func herdrMachineSaved(output []byte, machine string) bool {
-	var value any
-	if json.Unmarshal(output, &value) == nil && jsonContainsMachine(value, machine) {
-		return true
+	// Herdr 0.9 returns a direct array of saved machine rows. Match the SSH
+	// target, not the display label, and do not treat disabled rows as usable.
+	var rows []struct {
+		Target  string `json:"target"`
+		Enabled *bool  `json:"enabled"`
 	}
-	for _, line := range strings.Split(string(output), "\n") {
-		if strings.TrimSpace(line) == machine {
+	if err := json.Unmarshal(output, &rows); err != nil {
+		return false
+	}
+	for _, row := range rows {
+		enabled := row.Enabled == nil || *row.Enabled
+		if enabled && strings.TrimSpace(row.Target) == machine {
 			return true
-		}
-	}
-	return false
-}
-
-func jsonContainsMachine(value any, machine string) bool {
-	switch current := value.(type) {
-	case []any:
-		for _, item := range current {
-			if jsonContainsMachine(item, machine) {
-				return true
-			}
-		}
-	case map[string]any:
-		for key, item := range current {
-			if key == "label" || key == "name" || key == "machine" || key == "target" || key == "ssh_target" || key == "sshTarget" {
-				if text, ok := item.(string); ok && strings.TrimSpace(text) == machine {
-					return true
-				}
-			}
-			if jsonContainsMachine(item, machine) {
-				return true
-			}
 		}
 	}
 	return false

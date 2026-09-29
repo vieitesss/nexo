@@ -9,30 +9,35 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/proxy"
 )
 
 const proxyToken = "nexo-proxy"
 
-// ConfigureRemoteConfig supplies proxy settings and the optional explicit
-// config path forwarded to the child process in a proxy pane.
-func (b *Backend) ConfigureRemoteConfig(remote config.RemoteConfig, configPath string) {
+// ConfigureRemoteConfig supplies the optional explicit config path forwarded to
+// the child process in a proxy pane.
+func (b *Backend) ConfigureRemoteConfig(_ config.RemoteConfig, configPath string) {
 	if b == nil {
 		return
 	}
-	b.proxyConfig = remote
 	b.proxyConfigPath = configPath
 }
 
-// ValidateProxyIdentity rejects identity bytes that cannot safely be stored in
-// Herdr metadata or passed to the hidden attach command.
+// ValidateProxyIdentity rejects identity values that Herdr would normalize,
+// truncate, or interpret as terminal input. Validation deliberately happens
+// before creating anything so every stored token is exact.
 func ValidateProxyIdentity(machine, container string) error {
-	machine = strings.TrimSpace(machine)
-	container = strings.TrimSpace(container)
 	if machine == "" {
 		return errors.New("herdr remote proxy requires a machine")
+	}
+	if machine != strings.TrimSpace(machine) {
+		return errors.New("herdr remote proxy machine cannot have leading or trailing whitespace")
 	}
 	if strings.HasPrefix(machine, "-") {
 		return fmt.Errorf("machine %q starts with '-'", machine)
@@ -40,10 +45,26 @@ func ValidateProxyIdentity(machine, container string) error {
 	if container == "" {
 		return errors.New("herdr remote proxy requires a container")
 	}
-	if strings.ContainsAny(machine+container, "\x00\r\n\t") {
-		return errors.New("herdr remote proxy names cannot contain NUL, newline, or tab")
+	if container != strings.TrimSpace(container) {
+		return errors.New("herdr remote proxy container cannot have leading or trailing whitespace")
+	}
+	identity := machine + "/" + container
+	if utf8.RuneCountInString(identity) > 80 {
+		return errors.New("herdr remote proxy identity cannot exceed 80 characters")
+	}
+	if hasControlOrFormat(identity) {
+		return errors.New("herdr remote proxy names cannot contain control or format characters")
 	}
 	return nil
+}
+
+func hasControlOrFormat(value string) bool {
+	for _, r := range value {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // ProxySessionID resolves an exact proxy identity from Herdr's metadata token.
@@ -59,7 +80,7 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 	if err != nil {
 		return "", err
 	}
-	identity := strings.TrimSpace(machine) + "/" + strings.TrimSpace(container)
+	identity := machine + "/" + container
 	for _, workspace := range workspaces {
 		if workspace.Tokens[proxyToken] == identity {
 			return workspace.ID, nil
@@ -74,9 +95,11 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	if b == nil || b.Runner == nil {
 		return errors.New("herdr remote proxy requires a command runner")
 	}
-	machine = strings.TrimSpace(machine)
-	container = strings.TrimSpace(container)
 	if err := ValidateProxyIdentity(machine, container); err != nil {
+		return err
+	}
+	command, err := b.proxyPaneCommand(machine, container)
+	if err != nil {
 		return err
 	}
 	workspaceID, err := b.ProxySessionID(ctx, machine, container)
@@ -90,27 +113,60 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 
 	identity := machine + "/" + container
 	label := identity
-	output, err := b.run(ctx, "workspace", "create", "--label", label, "--focus")
+	output, err := b.run(ctx, "workspace", "create", "--label", label,
+		"--env", "NEXO_PROXY_MACHINE="+machine,
+		"--env", "NEXO_PROXY_CONTAINER="+container, "--focus")
 	if err != nil {
 		return err
 	}
 	workspaceID, paneID := decodeCreatedWorkspace(output)
 	if workspaceID == "" || paneID == "" {
+		failure := errors.New("herdr remote proxy did not report a workspace and pane id")
 		if workspaceID != "" {
-			_, _ = b.run(ctx, "workspace", "close", workspaceID)
+			return b.operationWithCleanup(failure, workspaceID)
 		}
-		return errors.New("herdr remote proxy did not report a workspace and pane id")
+		return failure
 	}
 	if _, err := b.run(ctx, "workspace", "report-metadata", workspaceID, "--source", "nexo", "--token", proxyToken+"="+identity); err != nil {
-		_, _ = b.run(ctx, "workspace", "close", workspaceID)
-		return err
+		return b.operationWithCleanup(err, workspaceID)
 	}
-	command := b.proxyPaneCommand(machine, container)
+	if err := b.verifyProxyToken(ctx, workspaceID, identity); err != nil {
+		return b.operationWithCleanup(err, workspaceID)
+	}
 	if _, err := b.run(ctx, "pane", "send-text", paneID, command+"\n"); err != nil {
-		_, _ = b.run(ctx, "workspace", "close", workspaceID)
-		return err
+		return b.operationWithCleanup(err, workspaceID)
 	}
 	return nil
+}
+
+func (b *Backend) verifyProxyToken(ctx context.Context, workspaceID, identity string) error {
+	workspaces, err := b.listWorkspaces(ctx)
+	if err != nil {
+		return fmt.Errorf("verify proxy workspace token: %w", err)
+	}
+	for _, workspace := range workspaces {
+		if workspace.ID == workspaceID && workspace.Tokens[proxyToken] == identity {
+			return nil
+		}
+	}
+	return errors.New("herdr remote proxy token did not retain its exact identity")
+}
+
+const proxyCleanupTimeout = 5 * time.Second
+
+func (b *Backend) operationWithCleanup(operationErr error, workspaceID string) error {
+	cleanupErr := b.closeWorkspace(workspaceID)
+	if cleanupErr != nil {
+		return fmt.Errorf("%w (also failed to close proxy workspace %s: %v)", operationErr, workspaceID, cleanupErr)
+	}
+	return operationErr
+}
+
+func (b *Backend) closeWorkspace(workspaceID string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), proxyCleanupTimeout)
+	defer cancel()
+	_, err := b.run(cleanupCtx, "workspace", "close", workspaceID)
+	return err
 }
 
 // ProxyTarget returns the remote identity attached by the current Herdr pane.
@@ -172,14 +228,9 @@ func decodeCreatedWorkspace(output []byte) (workspaceID, paneID string) {
 	return result.Workspace.ID, result.RootPane.ID
 }
 
-func (b *Backend) proxyPaneCommand(machine, container string) string {
+func (b *Backend) proxyPaneCommand(_, _ string) (string, error) {
 	binary := proxyBinary()
-	parts := []string{shellQuote(binary), "--backend", "herdr"}
-	if b.proxyConfigPath != "" {
-		parts = append(parts, "--config-file", shellQuote(b.proxyConfigPath))
-	}
-	parts = append(parts, "remote", "attach", "--", shellQuote(machine), shellQuote(container))
-	return strings.Join(parts, " ")
+	return proxy.AttachCommand(binary, "herdr", b.proxyConfigPath, "", "", true)
 }
 
 func proxyBinary() string {
@@ -191,10 +242,6 @@ func proxyBinary() string {
 		binary = absolute
 	}
 	return binary
-}
-
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 var _ capabilities.RemoteProxy = (*Backend)(nil)

@@ -42,7 +42,8 @@ type MachineResult struct {
 	Error      string                   `json:"error,omitempty"`
 }
 
-// Lister runs one selected multiplexer backend's list operation remotely.
+// Lister runs the selected backend locally and decodes the detected remote
+// kind for each machine's listing.
 type Lister struct {
 	Runner     runner.CommandRunner
 	Backend    backend.Kind
@@ -51,8 +52,8 @@ type Lister struct {
 	DetectKind bool
 }
 
-// NewLister creates an SSH lister. The selected backend is the only backend
-// queried during this invocation, in line with backend selection semantics.
+// NewLister creates an SSH lister. Backend selection controls local decoding;
+// a detected remote kind controls the remote listing command.
 func NewLister(commandRunner runner.CommandRunner, selected backend.Kind, sshConfig string) Lister {
 	return Lister{
 		Runner:    commandRunner,
@@ -234,7 +235,7 @@ func (l Lister) runWithAgents(ctx context.Context, machine string) ([]byte, erro
 // one listing gathered in this SSH round trip. A running Herdr server wins;
 // tmux is the fallback for machines that do not expose Herdr.
 func (l Lister) remoteListingCommand(withAgents bool) string {
-	herdrStatus := shellCommand("herdr", "status", "server", "--json") + " >/dev/null 2>&1"
+	herdrStatus := shellCommand("herdr", "status", "server", "--json")
 	herdrList := shellCommand("herdr", "workspace", "list")
 	tmuxList := l.backendTmuxCommand()
 	herdrAgents := shellCommand("nexo", "--backend", string(backend.Herdr), "agents", "--json")
@@ -243,16 +244,21 @@ func (l Lister) remoteListingCommand(withAgents bool) string {
 	if withAgents {
 		agentFrames = "; printf '\\n%s\\n' " + shellCommand(agentFrameStart) + "; AGENT_COMMAND 2>/dev/null || true; printf '\\n%s\\n' " + shellCommand(agentFrameEnd)
 	}
+	// Herdr status exits successfully even when no server is running. Parse its
+	// running field before selecting the one authoritative listing command.
 	return strings.Join([]string{
-		"herdr_status=1",
-		"herdr_listing=''",
-		"if " + herdrStatus + "; then herdr_listing=$(" + herdrList + "); test $? -eq 0 && herdr_status=0; fi",
-		"if test $herdr_status -eq 0; then printf '%s\\n' " + shellCommand(remoteKindFrameStart+string(KindHerdr)) + "; printf '%s\\n' \"$herdr_listing\"" + strings.ReplaceAll(agentFrames, "AGENT_COMMAND", herdrAgents) + "; else printf '%s\\n' " + shellCommand(remoteKindFrameStart+string(KindTmux)) + "; " + tmuxList + strings.ReplaceAll(agentFrames, "AGENT_COMMAND", tmuxAgents) + "; fi",
+		"herdr_running=0",
+		"herdr_status=$(" + herdrStatus + " 2>/dev/null) || herdr_status=''",
+		"herdr_compact=$(printf '%s' \"$herdr_status\" | tr -d '[:space:]')",
+		"case \"$herdr_compact\" in *'\"running\":true'*) herdr_running=1;; esac",
+		"listing_status=0",
+		"if test $herdr_running -eq 1; then listing_output=$(" + herdrList + ") || listing_status=$?; printf '%s\\n' " + shellCommand(remoteKindFrameStart+string(KindHerdr)) + "; printf '%s\\n' \"$listing_output\"" + strings.ReplaceAll(agentFrames, "AGENT_COMMAND", herdrAgents) + "; else listing_output=$(" + tmuxList + ") || listing_status=$?; printf '%s\\n' " + shellCommand(remoteKindFrameStart+string(KindTmux)) + "; printf '%s\\n' \"$listing_output\"" + strings.ReplaceAll(agentFrames, "AGENT_COMMAND", tmuxAgents) + "; fi",
+		"exit $listing_status",
 	}, "; ")
 }
 
 func (l Lister) backendTmuxCommand() string {
-	return shellCommand("tmux", "list-sessions", "-F", "#{session_id}\\t#{session_name}")
+	return shellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
 }
 
 func (l Lister) runCommand(ctx context.Context, machine, command string) ([]byte, error) {
@@ -260,6 +266,12 @@ func (l Lister) runCommand(ctx context.Context, machine, command string) ([]byte
 	output, err := l.Runner.Run(ctx, "ssh", args...)
 	if err != nil {
 		if isNoServer(err, output) {
+			// Detection emits the kind before tmux reports its no-server status.
+			// Preserve that frame so a stopped tmux machine is a successful empty
+			// listing rather than an incorrectly decoded Herdr result.
+			if l.DetectKind && bytesHasRemoteKind(output) {
+				return output, nil
+			}
 			return []byte{}, nil
 		}
 		if text := strings.TrimSpace(string(output)); text != "" {
@@ -300,9 +312,13 @@ func splitRemoteKind(output []byte, fallback backend.Kind) (Kind, []byte) {
 		kind = KindHerdr
 	}
 	lines := strings.Split(string(output), "\n")
-	listing := make([]string, 0, len(lines))
-	for _, line := range lines {
+	// The kind marker is control data and is valid only as the first non-empty
+	// line emitted by our probe. Never scan listing or optional agent payload.
+	for index, line := range lines {
 		line = strings.TrimSuffix(line, "\r")
+		if strings.TrimSpace(line) == "" && index == 0 {
+			continue
+		}
 		if strings.HasPrefix(line, remoteKindFrameStart) {
 			switch strings.TrimPrefix(line, remoteKindFrameStart) {
 			case string(KindHerdr):
@@ -310,11 +326,16 @@ func splitRemoteKind(output []byte, fallback backend.Kind) (Kind, []byte) {
 			case string(KindTmux):
 				kind = KindTmux
 			}
-			continue
+			lines = append(lines[:index], lines[index+1:]...)
 		}
-		listing = append(listing, line)
+		break
 	}
-	return kind, []byte(strings.Join(listing, "\n"))
+	return kind, []byte(strings.Join(lines, "\n"))
+}
+
+func bytesHasRemoteKind(output []byte) bool {
+	text := string(output)
+	return strings.Contains(text, remoteKindFrameStart+string(KindTmux)) || strings.Contains(text, remoteKindFrameStart+string(KindHerdr))
 }
 
 func splitAgentFrame(output []byte) (listing, agents []byte) {
@@ -327,7 +348,7 @@ func splitAgentFrame(output []byte) (listing, agents []byte) {
 				start = index
 			}
 		case agentFrameEnd:
-			if start >= 0 {
+			if start >= 0 && end < 0 {
 				end = index
 			}
 		}
@@ -335,10 +356,11 @@ func splitAgentFrame(output []byte) (listing, agents []byte) {
 	if start < 0 {
 		return output, nil
 	}
+	listing = []byte(strings.Join(lines[:start], "\n"))
 	if end < 0 || end <= start {
-		return []byte(strings.Join(lines[:start], "\n")), nil
+		return listing, nil
 	}
-	return []byte(strings.Join(lines[:start], "\n")), []byte(strings.Join(lines[start+1:end], "\n"))
+	return listing, []byte(strings.Join(lines[start+1:end], "\n"))
 }
 
 func (l Lister) sshArgs(machine, command string) []string {

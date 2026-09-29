@@ -29,7 +29,7 @@ nest a Herdr client in a pane. If `MACHINE` is not already in Herdr's saved
 machine list, nexo explicitly runs:
 
 ```sh
-herdr machine add --label MACHINE MACHINE
+herdr machine add MACHINE --label MACHINE
 ```
 
 It reports that the machine was saved, then reports that the selected

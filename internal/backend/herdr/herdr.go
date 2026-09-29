@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
-	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/runner"
 )
@@ -23,7 +22,6 @@ type Backend struct {
 	Runner runner.CommandRunner
 	agents *Source
 
-	proxyConfig     config.RemoteConfig
 	proxyConfigPath string
 }
 

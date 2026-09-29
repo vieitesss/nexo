@@ -30,11 +30,13 @@ An empty discovery result is `[]`.
 ## `nexo remote list [--json]`
 
 `nexo remote list` lists containers from every configured machine. With
-`--json`, it writes one array whose per-machine objects have this shape:
+`--json`, it writes one array whose per-machine objects have this shape. A
+successful listing includes `kind`, either `tmux` or `herdr`:
 
 ```json
 {
   "machine": "devbox",
+  "kind": "tmux",
   "containers": [
     {"id": "$1", "name": "api", "machine": "devbox"}
   ]

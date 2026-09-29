@@ -8,27 +8,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/proxy"
 )
 
-const (
-	proxySessionOption      = "@nexo-proxy"
-	healthyAttachmentPeriod = proxy.HealthyAttachmentPeriod
-)
-
-// ProxyTransport is retained as the tmux adapter's compatibility alias for
-// the backend-neutral attachment transport.
-type ProxyTransport = proxy.Transport
-
-// ProxyClock is retained as the tmux adapter's compatibility alias for the
-// backend-neutral reconnect clock.
-type ProxyClock = proxy.Clock
-
-// RunReconnect is the backend-neutral reconnect loop used by tmux and Herdr.
-var RunReconnect = proxy.RunReconnect
+const proxySessionOption = "@nexo-proxy"
 
 type commandProxyTransport struct {
 	config config.RemoteConfig
@@ -93,8 +80,10 @@ func ValidateProxyIdentity(machine, container string) error {
 	if strings.HasSuffix(container, ";") {
 		return errors.New("tmux remote proxy container cannot end with ';'")
 	}
-	if strings.ContainsAny(machine+container, "\x00\r\n\t") {
-		return errors.New("tmux remote proxy names cannot contain NUL, newline, or tab")
+	for _, r := range machine + container {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return errors.New("tmux remote proxy names cannot contain control or format characters")
+		}
 	}
 	return nil
 }
@@ -152,12 +141,19 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	}
 
 	name := machine + "/" + container
+	if _, err := b.proxyPaneCommand(machine, container); err != nil {
+		return err
+	}
 	sessionID, err := b.ProxySessionID(ctx, machine, container)
 	if err != nil {
 		return err
 	}
 	if sessionID == "" {
-		output, err := b.run(ctx, "new-session", "-d", "-P", "-F", "#{session_id}", "-s", EscapeSessionName(name), b.proxyPaneCommand(machine, container))
+		command, err := b.proxyPaneCommand(machine, container)
+		if err != nil {
+			return err
+		}
+		output, err := b.run(ctx, "new-session", "-d", "-P", "-F", "#{session_id}", "-s", EscapeSessionName(name), command)
 		if err != nil {
 			return err
 		}
@@ -187,14 +183,8 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	return b.runInteractive(ctx, "attach-session", "-t", sessionID)
 }
 
-func (b *Backend) proxyPaneCommand(machine, container string) string {
-	binary := proxyBinary()
-	parts := []string{shellQuote(binary), "--backend", "tmux"}
-	if b.proxyConfigPath != "" {
-		parts = append(parts, "--config-file", shellQuote(b.proxyConfigPath))
-	}
-	parts = append(parts, "remote", "attach", "--", shellQuote(machine), shellQuote(container))
-	return strings.Join(parts, " ")
+func (b *Backend) proxyPaneCommand(machine, container string) (string, error) {
+	return proxy.AttachCommand(proxyBinary(), "tmux", b.proxyConfigPath, machine, container, false)
 }
 
 func proxyBinary() string {
@@ -209,10 +199,10 @@ func proxyBinary() string {
 }
 
 // NewCommandTransport returns the process transport used by the hidden attach
-// command. It is exported for command wiring while tests use ProxyTransport.
-func NewCommandTransport(remote config.RemoteConfig) ProxyTransport {
+// command.
+func NewCommandTransport(remote config.RemoteConfig) proxy.Transport {
 	return commandProxyTransport{config: remote}
 }
 
 var _ capabilities.RemoteProxy = (*Backend)(nil)
-var _ ProxyTransport = commandProxyTransport{}
+var _ proxy.Transport = commandProxyTransport{}

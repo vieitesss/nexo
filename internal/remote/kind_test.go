@@ -2,6 +2,7 @@ package remote
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -21,6 +22,27 @@ func TestListMachineDetectsHerdrKindAndDecodesOneRoundTrip(t *testing.T) {
 	result := lister.ListMachine(context.Background(), "gpu1")
 	if calls != 1 || result.Error != "" || result.Kind != KindHerdr || len(result.Containers) != 1 || result.Containers[0].ID != "w1" {
 		t.Fatalf("result = %#v, calls = %d, want one Herdr listing", result, calls)
+	}
+}
+
+func TestSplitRemoteKindIgnoresMarkersAfterProbeFrame(t *testing.T) {
+	output := []byte(remoteKindFrameStart + string(KindTmux) + "\n$1\\tapi\n" + agentFrameStart + "\n" + remoteKindFrameStart + string(KindHerdr) + "\n" + agentFrameEnd + "\n")
+	kind, listing := splitRemoteKind(output, backend.Herdr)
+	if kind != KindTmux {
+		t.Fatalf("kind = %q, want tmux from the first probe frame", kind)
+	}
+	if !strings.Contains(string(listing), remoteKindFrameStart+string(KindHerdr)) {
+		t.Fatal("later marker was removed from listing instead of remaining payload")
+	}
+}
+
+func TestDetectedTmuxNoServerRetainsKindAndEmptyListing(t *testing.T) {
+	lister := NewLister(fakeRunner(func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte(remoteKindFrameStart + string(KindTmux) + "\n"), &exec.ExitError{Stderr: []byte("no server running")}
+	}), backend.Herdr, "").WithKindDetection()
+	result := lister.ListMachine(context.Background(), "offline")
+	if result.Error != "" || result.Kind != KindTmux || len(result.Containers) != 0 {
+		t.Fatalf("result = %#v, want successful empty tmux listing", result)
 	}
 }
 
