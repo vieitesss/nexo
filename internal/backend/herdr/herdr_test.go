@@ -120,6 +120,18 @@ func TestOpenProjectDoesNotUseOtherWorkspaceTabPath(t *testing.T) {
 	}
 }
 
+func TestFocusPaneUsesExactAgentPaneID(t *testing.T) {
+	runner := &fakeRunner{}
+	backend := New(runner)
+	if err := backend.FocusPane(context.Background(), "w1:p2"); err != nil {
+		t.Fatalf("FocusPane() error = %v", err)
+	}
+	want := []call{{name: "herdr", args: []string{"agent", "focus", "w1:p2"}}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
 func TestOpenProjectWorkspaceIDForcesFocus(t *testing.T) {
 	runner := &fakeRunner{}
 	backend := New(runner)

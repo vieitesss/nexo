@@ -101,6 +101,22 @@ func TestOpenProjectReportsTypedTmuxErrorWithStderr(t *testing.T) {
 	}
 }
 
+func TestFocusPaneSwitchesContainerWindowAndPaneByExactID(t *testing.T) {
+	runner := &fakeRunner{}
+	backend := New(runner, true)
+	if err := backend.FocusPane(context.Background(), "%7"); err != nil {
+		t.Fatalf("FocusPane() error = %v", err)
+	}
+	want := []call{
+		{name: "tmux", args: []string{"switch-client", "-t", "%7"}},
+		{name: "tmux", args: []string{"select-window", "-t", "%7"}},
+		{name: "tmux", args: []string{"select-pane", "-t", "%7"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
 func TestOpenProjectRejectsContainerSelectionOnTmux(t *testing.T) {
 	backend := New(&fakeRunner{})
 	err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{ContainerID: "container-1"})
