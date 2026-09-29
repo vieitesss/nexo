@@ -66,7 +66,14 @@ type PreviewBatch struct {
 type RemoteBatch struct {
 	Machine string
 	Places  []Place
+	Agents  []capabilities.Agent
 	Error   string
+}
+
+// AgentBatch is the asynchronous local agent listing used for container dots.
+type AgentBatch struct {
+	Agents []capabilities.Agent
+	Error  string
 }
 
 // Place is the additive item model used by the picker. SearchText and
@@ -288,6 +295,91 @@ type group struct {
 	error  string
 }
 
+type rowIdentity struct {
+	kind     RowKind
+	groupKey groupKey
+	place    Place
+	ordinal  int
+}
+
+func (m Model) cursorIdentity() (rowIdentity, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return rowIdentity{}, false
+	}
+	row := m.rows[m.cursor]
+	return rowIdentity{kind: row.Kind, groupKey: row.groupKey, place: row.Place, ordinal: rowOrdinal(m.rows, m.cursor)}, true
+}
+
+func rowOrdinal(rows []Row, index int) int {
+	if index < 0 || index >= len(rows) {
+		return 0
+	}
+	row := rows[index]
+	ordinal := 0
+	for _, candidate := range rows[:index] {
+		if candidate.Kind == row.Kind && candidate.groupKey == row.groupKey {
+			ordinal++
+		}
+	}
+	return ordinal
+}
+
+func samePlace(first, second Place) bool {
+	if first.Kind != second.Kind || first.Machine != second.Machine {
+		return false
+	}
+	if first.ContainerID != "" || second.ContainerID != "" {
+		return first.ContainerID != "" && first.ContainerID == second.ContainerID
+	}
+	if first.Path != "" || second.Path != "" {
+		return first.Path != "" && first.Path == second.Path
+	}
+	return first.Group == second.Group && first.DisplayRemainder == second.DisplayRemainder
+}
+
+func (m *Model) restoreCursor(previous rowIdentity, keepPrevious bool) {
+	if keepPrevious {
+		for index, row := range m.rows {
+			if row.Kind != previous.kind {
+				continue
+			}
+			if row.Kind == PlaceRow {
+				if !samePlace(row.Place, previous.place) {
+					continue
+				}
+				m.cursor = index
+				return
+			}
+			if row.groupKey != previous.groupKey || rowOrdinal(m.rows, index) != previous.ordinal {
+				continue
+			}
+			m.cursor = index
+			return
+		}
+		// If a selected place disappeared, retain its group context rather than
+		// silently selecting whichever row inherited its numeric index.
+		if previous.kind == PlaceRow {
+			for index, row := range m.rows {
+				if row.Kind == HeaderRow && row.groupKey == previous.groupKey && rowOrdinal(m.rows, index) == previous.ordinal {
+					m.cursor = index
+					return
+				}
+			}
+		}
+		for index, row := range m.rows {
+			if row.groupKey == previous.groupKey {
+				m.cursor = index
+				return
+			}
+		}
+	}
+	if len(m.rows) == 0 {
+		m.cursor = 0
+		return
+	}
+	m.cursor = 0
+}
+
 // Model is the Bubble Tea place picker model.
 type Model struct {
 	places []Place
@@ -316,6 +408,7 @@ type Model struct {
 	gitPool        *gitLoadPool
 	gitTimeout     time.Duration
 	remoteCmds     []tea.Cmd
+	agentCmd       tea.Cmd
 	remoteMachines []string
 	groupErrors    map[groupKey]string
 }
@@ -361,10 +454,20 @@ func (m Model) WithRemoteCommands(commands []tea.Cmd) Model {
 	return m
 }
 
+// WithAgentCommand starts asynchronous agent discovery for local container
+// dots when the selected backend exposes the AgentSource capability.
+func (m Model) WithAgentCommand(command tea.Cmd) Model {
+	m.agentCmd = command
+	return m
+}
+
 // Init implements tea.Model. Git context and screen previews are started
 // independently of input handling, so opening the picker never waits on I/O.
 func (m Model) Init() tea.Cmd {
 	commands := append([]tea.Cmd(nil), m.remoteCmds...)
+	if m.agentCmd != nil {
+		commands = append(commands, m.agentCmd)
+	}
 	if m.previewCmd != nil {
 		commands = append(commands, m.previewCmd)
 	}
@@ -507,12 +610,14 @@ func (m *Model) applyRemoteBatch(batch RemoteBatch) {
 		m.remoteMachines = append(m.remoteMachines, machine)
 	}
 	m.groupErrors[key] = batch.Error
-	for _, place := range batch.Places {
-		if place.Machine == "" {
-			place.Machine = machine
+	places := append([]Place(nil), batch.Places...)
+	for index := range places {
+		if places[index].Machine == "" {
+			places[index].Machine = machine
 		}
-		m.places = append(m.places, place)
 	}
+	places = ApplyAgentDotsForMachine(places, batch.Agents, machine)
+	m.places = append(m.places, places...)
 	m.rebuild()
 }
 
@@ -533,6 +638,7 @@ func PlaceGroupKey(place Place) GroupKey {
 func placeGroupKey(place Place) groupKey { return PlaceGroupKey(place) }
 
 func (m *Model) rebuild() {
+	previous, keepPrevious := m.cursorIdentity()
 	groups := make([]group, 0)
 	byKey := make(map[groupKey]int)
 	for order, place := range m.places {
@@ -573,7 +679,7 @@ func (m *Model) rebuild() {
 				}
 			}
 		}
-		m.clampCursor()
+		m.restoreCursor(previous, keepPrevious)
 		return
 	}
 
@@ -652,7 +758,7 @@ func (m *Model) rebuild() {
 		copy(m.rows[insertAt+1:], m.rows[insertAt:])
 		m.rows[insertAt] = Row{Kind: NewContainerRow, Group: groupKey.Name, groupKey: groupKey, Place: MachinePlace(groupKey.Name)}
 	}
-	m.clampCursor()
+	m.restoreCursor(previous, keepPrevious)
 }
 
 func groupHasContainers(g group) bool {
@@ -844,6 +950,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PreviewBatch:
 		for ref, preview := range msg.Previews {
 			m.SetPreview(ref, preview)
+		}
+		return m, nil
+	case AgentBatch:
+		if msg.Error == "" {
+			m.places = ApplyAgentDotsForMachine(m.places, msg.Agents, LocalMachine())
+			m.rebuild()
 		}
 		return m, nil
 	case RemoteBatch:
@@ -1141,6 +1253,12 @@ func (m Model) decorationStyle(decoration Decoration) lipgloss.Style {
 		color = m.theme.Muted
 	case DecorationAccent:
 		color = m.theme.Highlight
+	case DecorationRed:
+		color = "red"
+	case DecorationYellow:
+		color = "yellow"
+	case DecorationGreen:
+		color = "green"
 	}
 	return m.style(color)
 }

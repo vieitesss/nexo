@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/remote"
@@ -38,6 +39,7 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
 	places := picker.ProjectPlaces(discovery.Candidates)
 	var previewCmd func() tea.Msg
+	var agentCmd tea.Cmd
 	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
 		containers, err := lister.ListContainers(ctx)
 		if err != nil {
@@ -47,6 +49,18 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 		places = append(places, picker.MachinePlaces(containers)...)
 		if reader, ok := invocation.Adapter.(capabilities.ScreenReader); ok {
 			previewCmd = previewCommand(ctx, reader, containers)
+		}
+	}
+	if configurable, ok := invocation.Adapter.(interface{ ConfigureAgents(config.AgentsConfig) }); ok {
+		configurable.ConfigureAgents(invocation.Config.Agents)
+	}
+	if source, ok := invocation.Adapter.(capabilities.AgentSource); ok {
+		agentCmd = func() tea.Msg {
+			agents, err := source.ListAgents(ctx)
+			if err != nil {
+				return picker.AgentBatch{Error: err.Error()}
+			}
+			return picker.AgentBatch{Agents: agents}
 		}
 	}
 	for _, warning := range discovery.Warnings {
@@ -65,6 +79,9 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 
 	theme := picker.ThemeFromTerminal(ctx, picker.ThemeQuery{Reader: os.Stdin, Writer: os.Stdout}, 100*time.Millisecond)
 	model := picker.NewModel(places, theme, picker.NewGitContextLoader(invocation.Runner))
+	if agentCmd != nil {
+		model = model.WithAgentCommand(agentCmd)
+	}
 	if previewCmd != nil {
 		model = model.WithPreviewCommand(previewCmd)
 	}
@@ -286,8 +303,8 @@ func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
 		}
 		seen[machine] = true
 		commands = append(commands, func() tea.Msg {
-			result := lister.ListMachine(ctx, machine)
-			return picker.RemoteBatch{Machine: result.Machine, Places: picker.ContainerPlaces(result.Containers), Error: result.Error}
+			result := lister.ListMachineWithAgents(ctx, machine)
+			return picker.RemoteBatch{Machine: result.Machine, Places: picker.ContainerPlaces(result.Containers), Agents: result.Agents, Error: result.Error}
 		})
 	}
 	return commands

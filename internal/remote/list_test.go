@@ -40,6 +40,63 @@ func TestListMachineUsesSSHBatchModeAndOptionalConfig(t *testing.T) {
 	}
 }
 
+func TestListMachineWithAgentsReadsRemoteNexoJSONInOnePinnedSSHCommand(t *testing.T) {
+	calls := 0
+	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		calls++
+		command := args[len(args)-1]
+		if !strings.Contains(command, "--backend") || !strings.Contains(command, "'tmux'") {
+			t.Fatalf("remote command = %q, want explicit tmux backend", command)
+		}
+		return []byte("$1\tapi\n" + agentFrameStart + "\n[{\"container\":\"api\",\"state\":\"stopped\",\"seen\":false}]\n" + agentFrameEnd + "\n"), nil
+	}), backend.Tmux, "")
+	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	if result.Error != "" || len(result.Containers) != 1 || len(result.Agents) != 1 || result.Agents[0].Container != "api" {
+		t.Fatalf("result = %#v, want containers and remote agents", result)
+	}
+	if calls != 1 {
+		t.Fatalf("ssh calls = %d, want one combined listing", calls)
+	}
+}
+
+func TestListMachineWithAgentsIgnoresMissingRemoteNexo(t *testing.T) {
+	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		command := args[len(args)-1]
+		if !strings.Contains(command, agentFrameStart) {
+			return nil, errors.New("unexpected unframed command")
+		}
+		return []byte("$1\tapi\n" + agentFrameStart + "\n" + agentFrameEnd + "\n"), nil
+	}), backend.Tmux, "")
+	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	if result.Error != "" || len(result.Containers) != 1 || len(result.Agents) != 0 {
+		t.Fatalf("result = %#v, want containers without dots", result)
+	}
+}
+
+func TestListMachineWithAgentsIgnoresInvalidRemoteAgentJSON(t *testing.T) {
+	lister := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("$1\tapi\n" + agentFrameStart + "\nnot-json\n" + agentFrameEnd + "\n"), nil
+	}), backend.Tmux, "")
+	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	if result.Error != "" || len(result.Containers) != 1 || len(result.Agents) != 0 {
+		t.Fatalf("result = %#v, want containers without invalid agent data", result)
+	}
+}
+
+func TestListMachineWithAgentsPinsHerdrBackend(t *testing.T) {
+	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		command := args[len(args)-1]
+		if !strings.Contains(command, "'nexo' '--backend' 'herdr' 'agents' '--json'") || !strings.Contains(command, "printf '\\n%s\\n'") {
+			t.Fatalf("remote command = %q, want explicit backend and framed output", command)
+		}
+		return []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"api"}]}}` + "\n" + agentFrameStart + "\n[]\n" + agentFrameEnd + "\n"), nil
+	}), backend.Herdr, "")
+	result := lister.ListMachineWithAgents(context.Background(), "gpu1")
+	if result.Error != "" || len(result.Containers) != 1 || result.Containers[0].ID != "w1" {
+		t.Fatalf("result = %#v, want one Herdr container", result)
+	}
+}
+
 func TestListMachineTreatsTmuxNoServerStderrAsEmpty(t *testing.T) {
 	lister := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return nil, &exec.ExitError{Stderr: []byte("no server running on /tmp/tmux-1000/default\n")}

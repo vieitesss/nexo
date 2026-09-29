@@ -157,6 +157,7 @@ func (s *Source) ListAgents(ctx context.Context) ([]capabilities.Agent, error) {
 			agents = append(agents, capabilities.Agent{
 				PaneID:       current.PaneID,
 				Target:       current.PaneID,
+				ContainerID:  current.WorkspaceID,
 				Container:    container,
 				Window:       window,
 				Harness:      agentName(current),

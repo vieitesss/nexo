@@ -118,3 +118,7 @@ _Avoid_: popup, switcher
 Optional backend-neutral `container` and `window` labels shown by the agent
 navigator. They are display values only; `target` remains opaque and is passed
 to the selected backend for focus.
+
+**Agent container identity**:
+The stable backend-native identity used to associate an agent pane with its
+container. It is distinct from the optional display labels.

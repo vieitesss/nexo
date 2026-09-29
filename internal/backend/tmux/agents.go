@@ -19,15 +19,16 @@ import (
 )
 
 type pane struct {
-	id        string
-	target    string
-	container string
-	window    string
-	pid       string
-	command   string
-	path      string
-	harness   string
-	branch    string
+	id          string
+	target      string
+	containerID string
+	container   string
+	window      string
+	pid         string
+	command     string
+	path        string
+	harness     string
+	branch      string
 }
 
 type agentState struct {
@@ -209,6 +210,7 @@ func (s *Source) listAgents(ctx context.Context) ([]capabilities.Agent, error) {
 			agents = append(agents, capabilities.Agent{
 				PaneID:       current.id,
 				Target:       current.target,
+				ContainerID:  current.containerID,
 				Container:    current.container,
 				Window:       current.window,
 				Harness:      current.harness,
@@ -227,7 +229,7 @@ func (s *Source) listAgents(ctx context.Context) ([]capabilities.Agent, error) {
 }
 
 func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pane, error) {
-	format := "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_index}\t#{pane_current_path}"
+	format := "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{session_id}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_index}\t#{pane_current_path}"
 	output, err := s.runner.Run(ctx, "tmux", "list-panes", "-a", "-F", format)
 	if err != nil {
 		return nil, fmt.Errorf("list tmux panes: %w", err)
@@ -245,12 +247,24 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		if len(fields) < 7 {
 			continue
 		}
-		windowField := 4
-		windowIndexField := 5
-		paneIndexField := 6
-		pathField := 7
-		if len(fields) < 8 {
-			// Accept the pre-window-name format from older tmux adapters.
+		containerIDField := 3
+		containerField := 4
+		windowField := 5
+		windowIndexField := 6
+		paneIndexField := 7
+		pathField := 8
+		if len(fields) == 8 {
+			// Accept the pre-session-id format from older tmux adapters.
+			containerIDField = -1
+			containerField = 3
+			windowField = 4
+			windowIndexField = 5
+			paneIndexField = 6
+			pathField = 7
+		} else if len(fields) < 8 {
+			// Accept the older format without a window name.
+			containerIDField = -1
+			containerField = 3
 			windowField = 4
 			windowIndexField = 4
 			paneIndexField = 5
@@ -272,15 +286,20 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		if harness == "" {
 			continue
 		}
+		containerID := ""
+		if containerIDField >= 0 {
+			containerID = strings.TrimSpace(fields[containerIDField])
+		}
 		p := pane{
-			id:        strings.TrimSpace(fields[0]),
-			pid:       strings.TrimSpace(fields[1]),
-			command:   current,
-			path:      strings.TrimSpace(fields[pathField]),
-			container: strings.TrimSpace(fields[3]),
-			window:    strings.TrimSpace(fields[windowField]),
-			target:    fmt.Sprintf("%s:%s.%s", fields[3], fields[windowIndexField], fields[paneIndexField]),
-			harness:   harness,
+			id:          strings.TrimSpace(fields[0]),
+			pid:         strings.TrimSpace(fields[1]),
+			command:     current,
+			path:        strings.TrimSpace(fields[pathField]),
+			containerID: containerID,
+			container:   strings.TrimSpace(fields[containerField]),
+			window:      strings.TrimSpace(fields[windowField]),
+			target:      fmt.Sprintf("%s:%s.%s", fields[containerField], fields[windowIndexField], fields[paneIndexField]),
+			harness:     harness,
 		}
 		p.branch = s.branch(ctx, p.path)
 		result = append(result, p)

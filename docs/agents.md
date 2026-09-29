@@ -7,6 +7,7 @@ has this shape:
 {
   "pane_id": "%4",
   "target": "work:1.2",
+  "container_id": "$1",
   "container": "work",
   "window": "editor",
   "harness": "pi",
@@ -20,9 +21,12 @@ has this shape:
 `state` is `working` or `stopped`. `seen` is meaningful for stopped agents;
 on tmux it is true only after the exact pane has received focus. `stopped_since`
 is an RFC3339 timestamp and is omitted while an agent is working. `branch` is
-omitted when the pane is not in a named branch. `container` and `window` are optional
-backend-neutral display labels; they are omitted when the backend cannot provide them.
-`target` remains opaque and is the value passed to the backend when focusing an agent.
+omitted when the pane is not in a named branch. `container_id` is the
+stable backend-native identity of the owning container and is omitted when the
+backend cannot provide it. `container` and `window` are
+optional backend-neutral display labels; they are omitted when the backend
+cannot provide them. `target` remains opaque and is the value passed to the
+backend when focusing an agent.
 
 The text form prints target, harness, state, seen/unseen, and branch as
 tab-separated columns. On Herdr, agent status and seen state come from

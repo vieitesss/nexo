@@ -168,6 +168,38 @@ func TestMachinePlacesAlwaysIncludesLocalMachine(t *testing.T) {
 	}
 }
 
+func TestApplyAgentDotsRanksUnseenWorkingAndSeen(t *testing.T) {
+	places := ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "dev", Machine: "laptop"}})
+	places = ApplyAgentDots(places, []capabilities.Agent{
+		{Container: "dev", State: "working"},
+		{Container: "dev", State: "stopped", Seen: true},
+		{Container: "dev", State: "stopped", Seen: false},
+	})
+	if len(places[0].Decorations) != 1 || places[0].Decorations[0].Text != "●" || places[0].Decorations[0].Style != DecorationRed {
+		t.Fatalf("place = %#v, want one red urgent dot", places[0])
+	}
+
+	places = ApplyAgentDots(places, []capabilities.Agent{{Container: "dev", State: "working"}})
+	if len(places[0].Decorations) != 1 || places[0].Decorations[0].Style != DecorationYellow {
+		t.Fatalf("place = %#v, want one yellow working dot", places[0])
+	}
+	places = ApplyAgentDots(places, []capabilities.Agent{{Container: "dev", State: "stopped", Seen: true}})
+	if len(places[0].Decorations) != 1 || places[0].Decorations[0].Style != DecorationGreen {
+		t.Fatalf("place = %#v, want one green seen-stopped dot", places[0])
+	}
+}
+
+func TestApplyAgentDotsMatchesAgentsToTheirContainer(t *testing.T) {
+	places := ContainerPlaces([]capabilities.Container{
+		{ID: "$1", Name: "api", Machine: "laptop"},
+		{ID: "$2", Name: "web", Machine: "laptop"},
+	})
+	places = ApplyAgentDots(places, []capabilities.Agent{{Container: "web", State: "working"}})
+	if len(places[0].Decorations) != 0 || len(places[1].Decorations) != 1 {
+		t.Fatalf("places = %#v, want only web decorated", places)
+	}
+}
+
 func TestContainerPlacesFoldByMachineAndRenderCreateRowAndPreview(t *testing.T) {
 	places := ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "dev", Machine: "laptop", Preview: "shell$"}})
 	model := NewModel(places, Theme{})
@@ -182,6 +214,96 @@ func TestContainerPlacesFoldByMachineAndRenderCreateRowAndPreview(t *testing.T) 
 	}
 	if got := model.View(); !strings.Contains(got, "dev  shell$") || !strings.Contains(got, "+ new container…") {
 		t.Fatalf("view = %q, want preview and create row", got)
+	}
+}
+
+func TestAsyncRebuildKeepsSelectedPlaceByIdentity(t *testing.T) {
+	places := ContainerPlaces([]capabilities.Container{
+		{ID: "$1", Name: "api", Machine: "host"},
+		{ID: "$2", Name: "app", Machine: "host"},
+	})
+	model := NewModel(places, Theme{})
+	model.SetQuery("p")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	if model.Rows()[model.Cursor()].Place.ContainerID != "$2" {
+		t.Fatalf("before async update selected = %#v, want $2", model.Rows()[model.Cursor()].Place)
+	}
+
+	updated, _ = model.Update(RemoteBatch{
+		Machine: "host",
+		Places:  []Place{{Kind: ContainerKind, Machine: "host", Group: "host", ContainerID: "$3", ContainerName: "project", SearchText: "project", DisplayRemainder: "project"}},
+	})
+	model = updated.(Model)
+	if selected := model.Rows()[model.Cursor()].Place; selected.ContainerID != "$2" {
+		t.Fatalf("after async update selected = %#v, want same place $2", selected)
+	}
+}
+
+func TestAsyncRebuildKeepsSelectedHeaderIdentity(t *testing.T) {
+	places := []Place{
+		{Kind: ProjectKind, Group: "/local", Path: "/local/api"},
+		{Kind: ProjectKind, Group: "/other", Path: "/other/app"},
+	}
+	model := NewModel(places, Theme{})
+	model.SetQuery("p")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	if row := model.Rows()[model.Cursor()]; row.Kind != HeaderRow || row.Group != "/other" {
+		t.Fatalf("before async update row = %#v, want /other header", row)
+	}
+	updated, _ = model.Update(RemoteBatch{
+		Machine: "devbox",
+		Places:  []Place{{Kind: ContainerKind, Machine: "devbox", Group: "devbox", ContainerID: "$3", ContainerName: "project", SearchText: "project", DisplayRemainder: "project"}},
+	})
+	model = updated.(Model)
+	row := model.Rows()[model.Cursor()]
+	if row.Kind != HeaderRow || row.Group != "/other" {
+		t.Fatalf("after async update row = %#v, want same /other header", row)
+	}
+}
+
+func TestAsyncRebuildKeepsSelectedCreateRowIdentity(t *testing.T) {
+	model := NewModel(ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "api", Machine: "local"}}), Theme{})
+	model.SetQuery("p")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	if row := model.Rows()[model.Cursor()]; row.Kind != NewContainerRow || row.Group != "local" {
+		t.Fatalf("before async update row = %#v, want local create row", row)
+	}
+	updated, _ = model.Update(RemoteBatch{
+		Machine: "devbox",
+		Places:  []Place{{Kind: ContainerKind, Machine: "devbox", Group: "devbox", ContainerID: "$2", ContainerName: "project", SearchText: "project", DisplayRemainder: "project"}},
+	})
+	model = updated.(Model)
+	row := model.Rows()[model.Cursor()]
+	if row.Kind != NewContainerRow || row.Group != "local" {
+		t.Fatalf("after async update row = %#v, want same local create row", row)
+	}
+}
+
+func TestAsyncGitReparentKeepsSelectedProjectIdentity(t *testing.T) {
+	model := NewModel([]Place{
+		{Kind: ProjectKind, Group: "/projects/primary", Path: "/projects/primary"},
+		{Kind: ProjectKind, Group: "/projects/linked", Path: "/projects/linked"},
+	}, Theme{})
+	model.SetQuery("linked")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	if row := model.Rows()[model.Cursor()]; row.Kind != PlaceRow || row.Place.Path != "/projects/linked" {
+		t.Fatalf("before async update row = %#v, want linked project", row)
+	}
+	updated, _ = model.Update(GitContextMsg{Path: "/projects/linked", Context: GitContext{PrimaryPath: "/projects/primary"}})
+	model = updated.(Model)
+	row := model.Rows()[model.Cursor()]
+	if row.Kind != PlaceRow || row.Place.Path != "/projects/linked" || row.Place.Group != "/projects/primary" {
+		t.Fatalf("after async update row = %#v, want reparented linked project", row)
 	}
 }
 
