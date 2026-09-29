@@ -217,6 +217,31 @@ func TestContainerPlacesFoldByMachineAndRenderCreateRowAndPreview(t *testing.T) 
 	}
 }
 
+func TestAsyncRebuildKeepsSelectedPlaceByIdentity(t *testing.T) {
+	places := ContainerPlaces([]capabilities.Container{
+		{ID: "$1", Name: "api", Machine: "host"},
+		{ID: "$2", Name: "app", Machine: "host"},
+	})
+	model := NewModel(places, Theme{})
+	model.SetQuery("p")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	if model.Rows()[model.Cursor()].Place.ContainerID != "$2" {
+		t.Fatalf("before async update selected = %#v, want $2", model.Rows()[model.Cursor()].Place)
+	}
+
+	updated, _ = model.Update(RemoteBatch{
+		Machine: "host",
+		Places:  []Place{{Kind: ContainerKind, Machine: "host", Group: "host", ContainerID: "$3", ContainerName: "project", SearchText: "project", DisplayRemainder: "project"}},
+	})
+	model = updated.(Model)
+	if selected := model.Rows()[model.Cursor()].Place; selected.ContainerID != "$2" {
+		t.Fatalf("after async update selected = %#v, want same place $2", selected)
+	}
+}
+
 func TestPreviewBatchUpdatesContainerWithoutRebuildingPicker(t *testing.T) {
 	model := NewModel(ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "one", Machine: "host"}}), Theme{})
 	updated, _ := model.Update(PreviewBatch{Previews: map[ContainerRef]string{{Machine: "host", ID: "$1"}: "shell$"}})

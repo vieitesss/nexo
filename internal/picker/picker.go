@@ -295,6 +295,38 @@ type group struct {
 	error  string
 }
 
+func (m Model) cursorPlace() (Place, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.rows) || m.rows[m.cursor].Kind != PlaceRow {
+		return Place{}, false
+	}
+	return m.rows[m.cursor].Place, true
+}
+
+func samePlace(first, second Place) bool {
+	if first.Kind != second.Kind || first.Machine != second.Machine {
+		return false
+	}
+	if first.ContainerID != "" || second.ContainerID != "" {
+		return first.ContainerID != "" && first.ContainerID == second.ContainerID
+	}
+	if first.Path != "" || second.Path != "" {
+		return first.Path != "" && first.Path == second.Path
+	}
+	return first.Group == second.Group && first.DisplayRemainder == second.DisplayRemainder
+}
+
+func (m *Model) restoreCursor(previous Place, keepPrevious bool) {
+	if keepPrevious {
+		for index, row := range m.rows {
+			if row.Kind == PlaceRow && samePlace(row.Place, previous) {
+				m.cursor = index
+				return
+			}
+		}
+	}
+	m.clampCursor()
+}
+
 // Model is the Bubble Tea place picker model.
 type Model struct {
 	places []Place
@@ -552,6 +584,7 @@ func PlaceGroupKey(place Place) GroupKey {
 func placeGroupKey(place Place) groupKey { return PlaceGroupKey(place) }
 
 func (m *Model) rebuild() {
+	previous, keepPrevious := m.cursorPlace()
 	groups := make([]group, 0)
 	byKey := make(map[groupKey]int)
 	for order, place := range m.places {
@@ -592,7 +625,7 @@ func (m *Model) rebuild() {
 				}
 			}
 		}
-		m.clampCursor()
+		m.restoreCursor(previous, keepPrevious)
 		return
 	}
 
@@ -671,7 +704,7 @@ func (m *Model) rebuild() {
 		copy(m.rows[insertAt+1:], m.rows[insertAt:])
 		m.rows[insertAt] = Row{Kind: NewContainerRow, Group: groupKey.Name, groupKey: groupKey, Place: MachinePlace(groupKey.Name)}
 	}
-	m.clampCursor()
+	m.restoreCursor(previous, keepPrevious)
 }
 
 func groupHasContainers(g group) bool {
