@@ -19,9 +19,10 @@ import (
 // Backend is the tmux backend. Capabilities are added independently as each
 // feature is implemented.
 type Backend struct {
-	Runner runner.CommandRunner
-	Inside bool
-	agents *Source
+	Runner   runner.CommandRunner
+	Inside   bool
+	agents   *Source
+	notifier *Notifier
 }
 
 // New constructs a tmux backend using the supplied command runner. The
@@ -31,7 +32,10 @@ func New(r runner.CommandRunner, inside ...bool) *Backend {
 	if len(inside) > 0 {
 		inTmux = inside[0]
 	}
-	return &Backend{Runner: r, Inside: inTmux, agents: NewAgentSource(r)}
+	notifier := NewNotifier(r)
+	agents := NewAgentSource(r)
+	agents.SetNotifier(notifier)
+	return &Backend{Runner: r, Inside: inTmux, agents: agents, notifier: notifier}
 }
 
 // Name identifies this backend.
@@ -284,6 +288,15 @@ func sessionName(path string) string { return projects.TargetName(path) }
 // ConfigureAgents applies the shared agents configuration to the tmux source.
 func (b *Backend) ConfigureAgents(cfg config.AgentsConfig) {
 	b.agents.ConfigureAgents(cfg)
+	b.notifier.ConfigureSound(cfg.Sound)
+}
+
+// Notify implements capabilities.Notifier for tmux desktop notifications.
+func (b *Backend) Notify(ctx context.Context, message string) error {
+	if b == nil || b.notifier == nil {
+		return errors.New("tmux notifier is unavailable")
+	}
+	return b.notifier.Notify(ctx, message)
 }
 
 // ListAgents implements capabilities.AgentSource.

@@ -42,3 +42,25 @@ On tmux, `nexo agents watch` runs the poller; only one watcher is active for a
 server at a time. The watcher enables tmux `focus-events` before installing
 its focus hooks; without that server option, tmux does not emit pane focus
 transitions. This lets a focus transition mark that exact pane seen.
+
+## Notifications
+
+On tmux, only `nexo agents watch` sends desktop notifications; plain agent
+listing and focus hooks never send them. Each working-to-stopped transition is
+queued durably under the per-server state lock. Notifications use `notify-send`
+on Linux and `osascript` on macOS; when the selected tool is unavailable the
+notification is skipped. The agent settings default to `notify = true` and
+`sound = false`; setting `[agents] sound = true` plays a short sound with the
+notification. A single three-second rate limit is shared by all panes: stops
+inside that window are coalesced into one trailing notification (for example,
+`claude · work:1.2 and 2 more agents stopped`), so no transition is lost across
+rate limiting or watcher restarts. Pending entries are discarded if their pane
+works again or disappears before delivery.
+
+Herdr owns this capability natively, so nexo does not send notifications when
+Herdr is selected. This was verified read-only with `herdr --default-config`
+and `herdr api schema --json`: the default config exposes `[ui.toast]` delivery
+(`off`, `herdr`, `terminal`, or `system`) and `[ui.sound] enabled`, while the
+API schema exposes `notification.show` with a title, optional body and a sound
+of `none`, `done`, or `request`. Herdr's own agent state and notification
+settings therefore remain authoritative and nexo sends no duplicate toast.

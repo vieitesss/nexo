@@ -37,8 +37,18 @@ type agentState struct {
 	Seen          bool       `json:"seen"`
 }
 
+type pendingNotification struct {
+	ID      uint64 `json:"id"`
+	PaneID  string `json:"pane_id"`
+	Harness string `json:"harness"`
+	Target  string `json:"target"`
+}
+
 type persistedStates struct {
-	Agents map[string]agentState `json:"agents"`
+	Agents             map[string]agentState `json:"agents"`
+	Pending            []pendingNotification `json:"pending_notifications,omitempty"`
+	NextNotificationID uint64                `json:"next_notification_id,omitempty"`
+	LastNotification   time.Time             `json:"last_notification,omitempty"`
 }
 
 var errWatcherAlreadyRunning = errors.New("tmux agent watcher already running")
@@ -51,6 +61,7 @@ type Source struct {
 	now      func() time.Time
 	stateDir string
 	server   string
+	notifier capabilities.Notifier
 	mu       sync.Mutex
 }
 
@@ -87,6 +98,13 @@ func (s *Source) SetStateDir(dir string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stateDir = dir
+}
+
+// SetNotifier attaches the optional backend notifier used by the watcher.
+func (s *Source) SetNotifier(notifier capabilities.Notifier) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notifier = notifier
 }
 
 // ListAgents implements capabilities.AgentSource.
@@ -127,11 +145,39 @@ func (s *Source) listAgents(ctx context.Context) ([]capabilities.Agent, error) {
 	}
 
 	now := s.now()
+	present := make(map[string]struct{}, len(panes))
+	for _, current := range panes {
+		present[current.id] = struct{}{}
+	}
+	working := make(map[string]struct{}, len(observed))
+	for _, current := range observed {
+		if current.working {
+			working[current.id] = struct{}{}
+		}
+	}
 	var agents []capabilities.Agent
-	err = s.updateStates(func(states map[string]agentState) error {
+	err = s.updatePersisted(func(saved *persistedStates) error {
+		if !cfg.NotificationsEnabled() {
+			saved.Pending = nil
+		}
+		// A pending transition is obsolete once its pane is working again or
+		// disappears from tmux. Keep entries for panes whose screen capture
+		// failed; the pane may still exist and can be delivered on the next poll.
+		filtered := saved.Pending[:0]
+		for _, pending := range saved.Pending {
+			if _, ok := present[pending.PaneID]; !ok {
+				continue
+			}
+			if _, ok := working[pending.PaneID]; ok {
+				continue
+			}
+			filtered = append(filtered, pending)
+		}
+		saved.Pending = filtered
+
 		agents = make([]capabilities.Agent, 0, len(observed))
 		for _, current := range observed {
-			state := states[current.id]
+			state := saved.Agents[current.id]
 			if state.LastIndicator.IsZero() {
 				state.LastIndicator = now
 				state.State = "working"
@@ -143,6 +189,15 @@ func (s *Source) listAgents(ctx context.Context) ([]capabilities.Agent, error) {
 				state.StoppedSince = nil
 				state.Seen = false
 			} else if now.Sub(state.LastIndicator) >= time.Duration(cfg.IdleSeconds)*time.Second {
+				if state.State != "stopped" && cfg.NotificationsEnabled() {
+					saved.NextNotificationID++
+					saved.Pending = append(saved.Pending, pendingNotification{
+						ID:      saved.NextNotificationID,
+						PaneID:  current.id,
+						Harness: current.harness,
+						Target:  current.target,
+					})
+				}
 				state.State = "stopped"
 				if state.StoppedSince == nil {
 					stoppedAt := state.LastIndicator.Add(time.Duration(cfg.IdleSeconds) * time.Second)
@@ -150,7 +205,7 @@ func (s *Source) listAgents(ctx context.Context) ([]capabilities.Agent, error) {
 					state.Seen = false
 				}
 			}
-			states[current.id] = state
+			saved.Agents[current.id] = state
 			agents = append(agents, capabilities.Agent{
 				PaneID:       current.id,
 				Target:       current.target,
@@ -272,25 +327,25 @@ func (s *Source) serverName(ctx context.Context) string {
 	return name
 }
 
-func (s *Source) readStates() (map[string]agentState, error) {
+func (s *Source) readPersistedStates() (persistedStates, error) {
 	contents, err := os.ReadFile(s.statePath("json"))
 	if errors.Is(err, os.ErrNotExist) {
-		return make(map[string]agentState), nil
+		return persistedStates{Agents: make(map[string]agentState)}, nil
 	}
 	if err != nil {
-		return nil, err
+		return persistedStates{}, err
 	}
 	var saved persistedStates
 	if err := json.Unmarshal(contents, &saved); err != nil {
-		return nil, err
+		return persistedStates{}, err
 	}
 	if saved.Agents == nil {
 		saved.Agents = make(map[string]agentState)
 	}
-	return saved.Agents, nil
+	return saved, nil
 }
 
-func (s *Source) updateStates(update func(map[string]agentState) error) error {
+func (s *Source) updatePersisted(update func(*persistedStates) error) error {
 	if s.server == "" {
 		return errors.New("tmux agent state has no server")
 	}
@@ -306,17 +361,14 @@ func (s *Source) updateStates(update func(map[string]agentState) error) error {
 		return fmt.Errorf("lock agent state: %w", err)
 	}
 	defer release()
-	states, err := s.readStates()
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	saved, err := s.readPersistedStates()
+	if err != nil {
 		return fmt.Errorf("read agent state: %w", err)
 	}
-	if states == nil {
-		states = make(map[string]agentState)
-	}
-	if err := update(states); err != nil {
+	if err := update(&saved); err != nil {
 		return err
 	}
-	contents, err := json.MarshalIndent(persistedStates{Agents: states}, "", "  ")
+	contents, err := json.MarshalIndent(saved, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal agent state: %w", err)
 	}
@@ -326,8 +378,78 @@ func (s *Source) updateStates(update func(map[string]agentState) error) error {
 	return nil
 }
 
+func (s *Source) updateStates(update func(map[string]agentState) error) error {
+	return s.updatePersisted(func(saved *persistedStates) error {
+		return update(saved.Agents)
+	})
+}
+
 func (s *Source) statePath(suffix string) string {
 	return statefile.Path(s.stateDir, s.server, suffix)
+}
+
+// deliverPending sends one trailing, coalesced notification for all pending
+// transitions once the durable rate-limit window has elapsed. It is called
+// only by Watch; listing agents and focus hooks never send notifications.
+func (s *Source) deliverPending(ctx context.Context) error {
+	s.mu.Lock()
+	notifier := s.notifier
+	cfg := s.config.WithDefaults()
+	now := s.now()
+	server := s.server
+	stateDir := s.stateDir
+	s.mu.Unlock()
+	if notifier == nil || !cfg.NotificationsEnabled() || server == "" {
+		return nil
+	}
+	if stateDir == "" {
+		stateDir = statefile.DefaultDir()
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return fmt.Errorf("create agent state directory: %w", err)
+	}
+	release, err := acquireFileLock(statefile.Path(stateDir, server, "state.lock"), false)
+	if err != nil {
+		return fmt.Errorf("lock agent state: %w", err)
+	}
+	saved, readErr := s.readPersistedStates()
+	release()
+	if readErr != nil {
+		return fmt.Errorf("read agent state: %w", readErr)
+	}
+	if len(saved.Pending) == 0 || (!saved.LastNotification.IsZero() && now.Sub(saved.LastNotification) < notificationInterval) {
+		return nil
+	}
+	message := formatPendingNotification(saved.Pending)
+	ids := make(map[uint64]struct{}, len(saved.Pending))
+	for _, pending := range saved.Pending {
+		ids[pending.ID] = struct{}{}
+	}
+	// A failed notification remains durable and will be retried on the next
+	// poll. State is acknowledged only after the runner reports success.
+	if err := notifier.Notify(ctx, message); err != nil {
+		return nil
+	}
+	return s.updatePersisted(func(current *persistedStates) error {
+		remaining := current.Pending[:0]
+		for _, pending := range current.Pending {
+			if _, sent := ids[pending.ID]; !sent {
+				remaining = append(remaining, pending)
+			}
+		}
+		current.Pending = remaining
+		if len(ids) > 0 {
+			current.LastNotification = now
+		}
+		return nil
+	})
+}
+
+func formatPendingNotification(pending []pendingNotification) string {
+	if len(pending) == 1 {
+		return fmt.Sprintf("%s · %s stopped", pending[0].Harness, pending[0].Target)
+	}
+	return fmt.Sprintf("%s · %s and %d more agents stopped", pending[0].Harness, pending[0].Target, len(pending)-1)
 }
 
 // MarkSeen marks a stopped pane seen after focus enters that exact pane.
@@ -392,12 +514,18 @@ func (s *Source) Watch(ctx context.Context) error {
 	if _, err := s.ListAgents(ctx); err != nil {
 		return err
 	}
+	if err := s.deliverPending(ctx); err != nil {
+		return err
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
 			if _, err := s.ListAgents(ctx); err != nil {
+				return err
+			}
+			if err := s.deliverPending(ctx); err != nil {
 				return err
 			}
 		}

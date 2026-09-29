@@ -1,11 +1,13 @@
 package config
 
-// AgentsConfig controls agent discovery and polling.
+// AgentsConfig controls agent discovery, polling, and notifications.
 type AgentsConfig struct {
 	Processes      []string          `toml:"processes"`
 	IdleSeconds    int               `toml:"idle-seconds"`
 	PollInterval   int               `toml:"poll-interval"`
 	WorkingPattern map[string]string `toml:"working-pattern"`
+	Notify         *bool             `toml:"notify"` // notify working-to-stopped transitions
+	Sound          bool              `toml:"sound"`  // play a short notification sound
 }
 
 var defaultAgentProcesses = []string{"pi", "claude", "codex", "opencode", "hermes", "aider", "cursor"}
@@ -24,7 +26,17 @@ func (c AgentsConfig) WithDefaults() AgentsConfig {
 	if c.WorkingPattern == nil {
 		c.WorkingPattern = map[string]string{}
 	}
+	if c.Notify == nil {
+		enabled := true
+		c.Notify = &enabled
+	}
 	return c
+}
+
+// NotificationsEnabled reports whether stop notifications are enabled. A nil
+// value is treated as the documented default of true.
+func (c AgentsConfig) NotificationsEnabled() bool {
+	return c.Notify == nil || *c.Notify
 }
 
 // DefaultAgentProcesses returns the built-in harness allowlist.
