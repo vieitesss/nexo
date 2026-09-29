@@ -77,6 +77,22 @@ func TestListCommandJSONIsStable(t *testing.T) {
 	}
 }
 
+func TestListPlacesKeepsProjectAndMachineNamespacesSeparate(t *testing.T) {
+	var output strings.Builder
+	host := picker.LocalMachine()
+	err := writePlaces(&output, []picker.Place{
+		{Kind: picker.ProjectKind, Group: host, DisplayRemainder: "project"},
+		{Kind: picker.ContainerKind, Machine: host, Group: host, DisplayRemainder: "container"},
+	})
+	if err != nil {
+		t.Fatalf("writePlaces() error = %v", err)
+	}
+	want := host + ":\n  project\n" + host + ":\n  container\n"
+	if got := output.String(); got != want {
+		t.Fatalf("output = %q, want separate typed groups %q", got, want)
+	}
+}
+
 func TestListCommandPrintsGroups(t *testing.T) {
 	var output strings.Builder
 	err := writeCandidates(&output, []projects.Candidate{{Path: "/a", Group: "/group", Git: true, LinkedWorktree: true}})

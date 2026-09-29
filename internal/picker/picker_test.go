@@ -161,6 +161,13 @@ func TestEnterAcceptsPlaceButNotHeader(t *testing.T) {
 	}
 }
 
+func TestMachinePlacesAlwaysIncludesLocalMachine(t *testing.T) {
+	places := MachinePlaces([]capabilities.Container{{ID: "remote-1", Name: "dev", Machine: "remote"}})
+	if len(places) != 2 || places[0].Machine != LocalMachine() || places[1].Machine != "remote" {
+		t.Fatalf("machine places = %#v, want local and remote create rows", places)
+	}
+}
+
 func TestContainerPlacesFoldByMachineAndRenderCreateRowAndPreview(t *testing.T) {
 	places := ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "dev", Machine: "laptop", Preview: "shell$"}})
 	model := NewModel(places, Theme{})

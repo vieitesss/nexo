@@ -143,22 +143,21 @@ func ContainerPlaces(containers []capabilities.Container) []Place {
 }
 
 // MachinePlaces returns one create affordance per machine represented by the
-// containers, or the local machine when there are no containers.
+// containers, always including the local machine for creating a new local
+// container.
 func MachinePlaces(containers []capabilities.Container) []Place {
-	machines := make(map[string]bool)
-	var places []Place
+	local := LocalMachine()
+	machines := map[string]bool{local: true}
+	places := []Place{MachinePlace(local)}
 	for _, container := range containers {
 		machine := container.Machine
 		if machine == "" {
-			machine = LocalMachine()
+			machine = local
 		}
 		if !machines[machine] {
 			machines[machine] = true
 			places = append(places, MachinePlace(machine))
 		}
-	}
-	if len(places) == 0 {
-		places = append(places, MachinePlace(LocalMachine()))
 	}
 	return places
 }
@@ -255,10 +254,14 @@ type Row struct {
 	Marked     bool
 }
 
-type groupKey struct {
-	kind PlaceKind
-	name string
+// GroupKey identifies a displayed group without conflating project and
+// machine namespaces that happen to share the same label.
+type GroupKey struct {
+	Kind PlaceKind
+	Name string
 }
+
+type groupKey = GroupKey
 
 type group struct {
 	key    groupKey
@@ -440,12 +443,21 @@ func (m *Model) SetSize(width, height int) {
 	m.width, m.height = width, height
 }
 
-func placeGroupKey(place Place) groupKey {
+// PlaceGroupKey is the grouping identity shared by the picker and scripted
+// place listings. Container affordances use the machine namespace; projects
+// use the configured parent namespace.
+func PlaceGroupKey(place Place) GroupKey {
 	if place.Kind == ContainerKind || place.Kind == NewContainerKind {
-		return groupKey{kind: ContainerKind, name: place.Machine}
+		machine := place.Machine
+		if machine == "" {
+			machine = place.Group
+		}
+		return GroupKey{Kind: ContainerKind, Name: machine}
 	}
-	return groupKey{kind: ProjectKind, name: place.Group}
+	return GroupKey{Kind: ProjectKind, Name: place.Group}
 }
+
+func placeGroupKey(place Place) groupKey { return PlaceGroupKey(place) }
 
 func (m *Model) rebuild() {
 	groups := make([]group, 0)
@@ -456,7 +468,7 @@ func (m *Model) rebuild() {
 		if !ok {
 			index = len(groups)
 			byKey[key] = index
-			groups = append(groups, group{key: key, name: key.name})
+			groups = append(groups, group{key: key, name: key.Name})
 		}
 		groups[index].places = append(groups[index].places, place)
 		groups[index].orders = append(groups[index].orders, order)
@@ -520,7 +532,7 @@ func (m *Model) rebuild() {
 	for _, hit := range ranked {
 		if !visible[hit.group] && !m.expanded[hit.group] {
 			if !seenFolded[hit.group] {
-				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.name, groupKey: hit.group, ChildCount: m.groupCount(groups, hit.group)})
+				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.Name, groupKey: hit.group, ChildCount: m.groupCount(groups, hit.group)})
 				seenFolded[hit.group] = true
 				lastRenderedGroup = hit.group
 			}
@@ -528,13 +540,13 @@ func (m *Model) rebuild() {
 		}
 		if m.collapsed[hit.group] {
 			if lastRenderedGroup != hit.group {
-				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.name, groupKey: hit.group, ChildCount: m.groupCount(groups, hit.group)})
+				m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.Name, groupKey: hit.group, ChildCount: m.groupCount(groups, hit.group)})
 				lastRenderedGroup = hit.group
 			}
 			continue
 		}
 		if lastRenderedGroup != hit.group {
-			m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.name, groupKey: hit.group, Expanded: visible[hit.group] || m.expanded[hit.group], ChildCount: m.groupCount(groups, hit.group)})
+			m.rows = append(m.rows, Row{Kind: HeaderRow, Group: hit.group.Name, groupKey: hit.group, Expanded: visible[hit.group] || m.expanded[hit.group], ChildCount: m.groupCount(groups, hit.group)})
 			lastRenderedGroup = hit.group
 		}
 		positions := hit.rem.Positions
@@ -554,7 +566,7 @@ func (m *Model) rebuild() {
 		}
 		m.rows = append(m.rows, Row{})
 		copy(m.rows[insertAt+1:], m.rows[insertAt:])
-		m.rows[insertAt] = Row{Kind: NewContainerRow, Group: groupKey.name, groupKey: groupKey, Place: MachinePlace(groupKey.name)}
+		m.rows[insertAt] = Row{Kind: NewContainerRow, Group: groupKey.Name, groupKey: groupKey, Place: MachinePlace(groupKey.Name)}
 	}
 	m.clampCursor()
 }

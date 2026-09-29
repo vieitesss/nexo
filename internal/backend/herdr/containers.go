@@ -226,10 +226,18 @@ func decodePaneWorkspace(output []byte) (string, error) {
 		raw = output
 	}
 	var paneResult struct {
+		Pane struct {
+			WorkspaceID string `json:"workspace_id"`
+		} `json:"pane"`
+		// Keep accepting the unwrapped shape for older command fixtures. Herdr
+		// 0.9 returns the pane_info object under result.pane.
 		WorkspaceID string `json:"workspace_id"`
 	}
 	if err := json.Unmarshal(raw, &paneResult); err != nil {
 		return "", fmt.Errorf("decode herdr pane: %w", err)
+	}
+	if paneResult.Pane.WorkspaceID != "" {
+		return paneResult.Pane.WorkspaceID, nil
 	}
 	return paneResult.WorkspaceID, nil
 }

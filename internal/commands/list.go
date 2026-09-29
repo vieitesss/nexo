@@ -101,16 +101,17 @@ func listPlaces(ctx context.Context, invocation Invocation) error {
 }
 
 func writePlaces(stdout io.Writer, places []picker.Place) error {
-	groups := make([]string, 0)
-	byGroup := make(map[string][]picker.Place)
+	groups := make([]picker.GroupKey, 0)
+	byGroup := make(map[picker.GroupKey][]picker.Place)
 	for _, place := range places {
-		if _, ok := byGroup[place.Group]; !ok {
-			groups = append(groups, place.Group)
+		key := picker.PlaceGroupKey(place)
+		if _, ok := byGroup[key]; !ok {
+			groups = append(groups, key)
 		}
-		byGroup[place.Group] = append(byGroup[place.Group], place)
+		byGroup[key] = append(byGroup[key], place)
 	}
 	for _, group := range groups {
-		if _, err := fmt.Fprintf(stdout, "%s:\n", group); err != nil {
+		if _, err := fmt.Fprintf(stdout, "%s:\n", group.Name); err != nil {
 			return err
 		}
 		for _, place := range byGroup[group] {

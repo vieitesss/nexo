@@ -79,36 +79,50 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	if final.Cancelled() {
 		return nil
 	}
+	resolver := containerActionResolver(invocation)
 	if target, name, ok := final.RenameTargetRequest(); ok {
-		if !isLocalContainer(target.Machine) {
-			return fmt.Errorf("container machine %q is not supported", target.Machine)
+		actions, err := resolver.ResolveContainerActions(ctx, target.Machine)
+		if err != nil {
+			return err
 		}
-		renamer, supported := invocation.Adapter.(capabilities.ContainerRenamer)
-		if !supported {
-			return fmt.Errorf("backend %q does not support renaming containers", invocation.Selection.Kind)
-		}
-		return renamer.RenameContainer(ctx, target.ID, name)
+		return actions.RenameContainer(ctx, target.ID, name)
 	}
 	if targets, ok := final.KillTargetsRequest(); ok {
-		ids := make([]string, 0, len(targets))
+		// A selection can span machines. Resolve each machine once and keep the
+		// picker order within that machine so native batch close operations still
+		// receive one confirmation for the complete selection.
+		groups := make([]containerTargetGroup, 0)
 		for _, target := range targets {
-			if !isLocalContainer(target.Machine) {
-				return fmt.Errorf("container machine %q is not supported", target.Machine)
+			groupIndex := -1
+			for index := range groups {
+				if groups[index].machine == target.Machine {
+					groupIndex = index
+					break
+				}
 			}
-			ids = append(ids, target.ID)
+			if groupIndex < 0 {
+				groups = append(groups, containerTargetGroup{machine: target.Machine})
+				groupIndex = len(groups) - 1
+			}
+			groups[groupIndex].ids = append(groups[groupIndex].ids, target.ID)
 		}
-		if killer, supported := invocation.Adapter.(capabilities.ContainerBatchKiller); supported {
-			// The batch capability receives the whole selection exactly once;
-			// the backend may issue one native close command per container.
-			return killer.KillContainers(ctx, ids)
-		}
-		killer, supported := invocation.Adapter.(capabilities.ContainerKiller)
-		if !supported {
-			return fmt.Errorf("backend %q does not support killing containers", invocation.Selection.Kind)
-		}
-		for _, id := range ids {
-			if err := killer.KillContainer(ctx, id); err != nil {
+		for _, group := range groups {
+			actions, err := resolver.ResolveContainerActions(ctx, group.machine)
+			if err != nil {
 				return err
+			}
+			if killer, supported := actions.(capabilities.ContainerBatchKiller); supported {
+				// The batch capability receives the whole per-machine selection
+				// exactly once; the backend may issue one native close per ID.
+				if err := killer.KillContainers(ctx, group.ids); err != nil {
+					return err
+				}
+				continue
+			}
+			for _, id := range group.ids {
+				if err := actions.KillContainer(ctx, id); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -124,24 +138,85 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 		return fmt.Errorf("place kind %q is not openable yet", place.Kind)
 	}
 	if place.Kind == picker.ContainerKind {
-		if !isLocalContainer(place.Machine) {
-			return fmt.Errorf("container machine %q is not supported", place.Machine)
+		actions, err := resolver.ResolveContainerActions(ctx, place.Machine)
+		if err != nil {
+			return err
 		}
-		if containerOpener, supported := invocation.Adapter.(capabilities.ContainerOpener); supported {
-			return containerOpener.OpenContainer(ctx, place.ContainerID)
-		}
-		// Keep the existing project-opener seam usable for adapters that model
-		// an existing container as an OpenOptions selection.
-		if opener, supported := invocation.Adapter.(capabilities.ProjectOpener); supported {
-			return opener.OpenProject(ctx, "", capabilities.OpenOptions{ContainerID: place.ContainerID})
-		}
-		return fmt.Errorf("backend %q does not support opening containers", invocation.Selection.Kind)
+		return actions.OpenContainer(ctx, place.ContainerID)
 	}
 	opener, ok := invocation.Adapter.(capabilities.ProjectOpener)
 	if !ok {
 		return fmt.Errorf("backend %q does not support opening projects", invocation.Selection.Kind)
 	}
 	return opener.OpenProject(ctx, place.Path, capabilities.OpenOptions{})
+}
+
+type containerTargetGroup struct {
+	machine string
+	ids     []string
+}
+
+type localContainerResolver struct {
+	adapter any
+}
+
+func containerActionResolver(invocation Invocation) capabilities.ContainerActionResolver {
+	if invocation.ContainerResolver != nil {
+		return invocation.ContainerResolver
+	}
+	return localContainerResolver{adapter: invocation.Adapter}
+}
+
+// ResolveContainerActions wraps the selected backend as the local machine's
+// source. A future remote resolver can be supplied on Invocation without
+// changing the picker command's action routing.
+func (r localContainerResolver) ResolveContainerActions(_ context.Context, machine string) (capabilities.ContainerActions, error) {
+	if !isLocalContainer(machine) {
+		return nil, fmt.Errorf("container machine %q is not supported", machine)
+	}
+	return localContainerActions(r), nil
+}
+
+type localContainerActions struct {
+	adapter any
+}
+
+func (a localContainerActions) OpenContainer(ctx context.Context, id string) error {
+	if opener, ok := a.adapter.(capabilities.ContainerOpener); ok {
+		return opener.OpenContainer(ctx, id)
+	}
+	// Keep the existing project-opener seam usable for adapters that model an
+	// existing container as an OpenOptions selection.
+	if opener, ok := a.adapter.(capabilities.ProjectOpener); ok {
+		return opener.OpenProject(ctx, "", capabilities.OpenOptions{ContainerID: id})
+	}
+	return errors.New("local backend does not support opening containers")
+}
+
+func (a localContainerActions) RenameContainer(ctx context.Context, id, name string) error {
+	if renamer, ok := a.adapter.(capabilities.ContainerRenamer); ok {
+		return renamer.RenameContainer(ctx, id, name)
+	}
+	return errors.New("local backend does not support renaming containers")
+}
+
+func (a localContainerActions) KillContainer(ctx context.Context, id string) error {
+	if killer, ok := a.adapter.(capabilities.ContainerKiller); ok {
+		return killer.KillContainer(ctx, id)
+	}
+	return errors.New("local backend does not support killing containers")
+}
+
+func (a localContainerActions) KillContainers(ctx context.Context, ids []string) error {
+	if killer, ok := a.adapter.(capabilities.ContainerBatchKiller); ok {
+		return killer.KillContainers(ctx, ids)
+	}
+	for _, id := range ids {
+		if err := a.KillContainer(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isLocalContainer(machine string) bool {

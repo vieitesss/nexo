@@ -82,7 +82,7 @@ func TestContainerActionsUseNativeHerdrCommands(t *testing.T) {
 func TestKillContainersKillsCurrentWorkspaceLast(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "pane-current")
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"pane get pane-current": []byte(`{"result":{"workspace_id":"workspace-1"}}`),
+		"pane get pane-current": []byte(`{"result":{"type":"pane_info","pane":{"pane_id":"pane-current","workspace_id":"workspace-1","tab_id":"tab-1","terminal_id":"terminal-1","focused":true,"agent_status":"idle","revision":1}}}`),
 	}}
 	if err := New(runner).KillContainers(context.Background(), []string{"workspace-1", "workspace-2"}); err != nil {
 		t.Fatalf("KillContainers() error = %v", err)

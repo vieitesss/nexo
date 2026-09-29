@@ -13,6 +13,7 @@ import (
 
 import (
 	"github.com/vieitesss/nexo/internal/backend"
+	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
 )
@@ -24,10 +25,14 @@ type Invocation struct {
 	ConfigPath string
 	Runner     runner.CommandRunner
 	Adapter    any
-	Stdout     io.Writer
-	Stderr     io.Writer
-	JSON       bool
-	Args       []string
+	// ContainerResolver optionally supplies machine-specific container
+	// actions. When absent, place picker commands wrap Adapter as the local
+	// machine source.
+	ContainerResolver capabilities.ContainerActionResolver
+	Stdout            io.Writer
+	Stderr            io.Writer
+	JSON              bool
+	Args              []string
 }
 
 // Command is a registered nexo subcommand.
