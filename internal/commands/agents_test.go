@@ -62,7 +62,7 @@ func TestAgentsCommandJSONUsesAgentSchema(t *testing.T) {
 	}
 	err := command.Run(context.Background(), Invocation{
 		Adapter: fakeAgentSource{agents: []capabilities.Agent{
-			{PaneID: "%1", Target: "work:1.2", Harness: "pi", State: "stopped", StoppedSince: &stopped},
+			{PaneID: "%1", Target: "work:1.2", ContainerID: "$1", Harness: "pi", State: "stopped", StoppedSince: &stopped},
 			{PaneID: "%2", Target: "work:1.3", Harness: "codex", State: "working"},
 		}},
 		Stdout: &output,
@@ -75,7 +75,7 @@ func TestAgentsCommandJSONUsesAgentSchema(t *testing.T) {
 	if err := json.Unmarshal([]byte(output.String()), &got); err != nil {
 		t.Fatalf("JSON output = %q: %v", output.String(), err)
 	}
-	if len(got) != 2 || got[0]["state"] != "stopped" || got[0]["seen"] != false {
+	if len(got) != 2 || got[0]["state"] != "stopped" || got[0]["seen"] != false || got[0]["container_id"] != "$1" {
 		t.Fatalf("JSON output = %#v", got)
 	}
 	if _, ok := got[1]["stopped_since"]; ok {

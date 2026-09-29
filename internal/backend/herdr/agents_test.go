@@ -32,10 +32,10 @@ func TestAgentSourceMapsNativeStatuses(t *testing.T) {
 		t.Fatalf("ListAgents() returned %d agents, want 4: %#v", len(got), got)
 	}
 	want := []capabilities.Agent{
-		{PaneID: "w:p1", Target: "w:p1", Harness: "pi", State: "working"},
-		{PaneID: "w:p2", Target: "w:p2", Harness: "claude", State: "stopped", Seen: true, StoppedSince: timePtr(clock)},
-		{PaneID: "w:p3", Target: "w:p3", Harness: "codex", State: "stopped", StoppedSince: timePtr(clock)},
-		{PaneID: "w:p4", Target: "w:p4", Harness: "aider", State: "stopped", StoppedSince: timePtr(clock)},
+		{PaneID: "w:p1", Target: "w:p1", ContainerID: "w", Harness: "pi", State: "working"},
+		{PaneID: "w:p2", Target: "w:p2", ContainerID: "w", Harness: "claude", State: "stopped", Seen: true, StoppedSince: timePtr(clock)},
+		{PaneID: "w:p3", Target: "w:p3", ContainerID: "w", Harness: "codex", State: "stopped", StoppedSince: timePtr(clock)},
+		{PaneID: "w:p4", Target: "w:p4", ContainerID: "w", Harness: "aider", State: "stopped", StoppedSince: timePtr(clock)},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("agents = %#v, want %#v", got, want)

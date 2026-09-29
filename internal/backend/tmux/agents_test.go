@@ -43,7 +43,7 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 			joined := strings.Join(args, " ")
 			switch {
 			case strings.HasPrefix(joined, "list-panes"):
-				return []byte("%1\t99\tpi\twork\t1\t2\t/tmp\n"), nil
+				return []byte("%1\t99\tpi\t$1\twork\teditor\t1\t2\t/tmp\n"), nil
 			case strings.HasPrefix(joined, "display-message"):
 				return []byte("/tmp/tmux-test\n"), nil
 			case strings.HasPrefix(joined, "capture-pane"):
@@ -67,8 +67,8 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agents) != 1 || agents[0].State != "working" {
-		t.Fatalf("first state = %#v, want working", agents)
+	if len(agents) != 1 || agents[0].State != "working" || agents[0].ContainerID != "$1" {
+		t.Fatalf("first state = %#v, want working agent with stable container ID", agents)
 	}
 
 	screen = "prompt> "
