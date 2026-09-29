@@ -132,9 +132,9 @@ func TestFocusPaneSwitchesContainerWindowAndPaneByExactID(t *testing.T) {
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
-	states, err := backend.agents.readStates()
-	if err != nil || !states["%7"].Seen {
-		t.Fatalf("agent state after focus = %#v, err=%v; want seen", states["%7"], err)
+	states, err := backend.agents.readPersistedStates()
+	if err != nil || !states.Agents["%7"].Seen {
+		t.Fatalf("agent state after focus = %#v, err=%v; want seen", states.Agents["%7"], err)
 	}
 }
 
@@ -144,9 +144,9 @@ func TestFocusPaneSelectsAndAttachesOutsideTmux(t *testing.T) {
 	seedStoppedAgent(t, backend, "%7")
 	seenBeforeAttach := false
 	runner.interactiveCheck = func() {
-		states, err := backend.agents.readStates()
+		states, err := backend.agents.readPersistedStates()
 		if err == nil {
-			seenBeforeAttach = states["%7"].Seen
+			seenBeforeAttach = states.Agents["%7"].Seen
 		}
 	}
 	if err := backend.FocusPane(context.Background(), "%7"); err != nil {
