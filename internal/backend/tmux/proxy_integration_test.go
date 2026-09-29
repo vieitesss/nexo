@@ -79,8 +79,8 @@ func TestProxyUsesExactMetadataIdentityOnThrowawayTmux(t *testing.T) {
 	if len(lines) != 5 {
 		t.Fatalf("sessions = %q, want five exact proxy identities", output)
 	}
-	if !strings.Contains(string(output), "dev.box:edge/app.v1:blue") {
-		t.Fatalf("metadata lost punctuation: %q", output)
+	if !strings.Contains(string(output), "dev.box:edge/app_v1_blue") {
+		t.Fatalf("metadata did not use canonical container name: %q", output)
 	}
 	identities := make(map[string]bool)
 	for _, line := range lines {

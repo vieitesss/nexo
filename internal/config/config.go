@@ -79,6 +79,7 @@ func parse(contents []byte, path string) (Config, error) {
 		Backend string `toml:"backend"`
 		ProjectsConfig
 		Agents AgentsConfig `toml:"agents"`
+		Tmux   TmuxConfig   `toml:"tmux"`
 		Remote struct {
 			Machines         []string `toml:"machines"`
 			SSHConfig        string   `toml:"ssh-config"`
@@ -94,6 +95,7 @@ func parse(contents []byte, path string) (Config, error) {
 		Backend:        raw.Backend,
 		ProjectsConfig: raw.ProjectsConfig,
 		Agents:         raw.Agents,
+		Tmux:           raw.Tmux,
 		Remote: RemoteConfig{
 			Machines:  raw.Remote.Machines,
 			SSHConfig: raw.Remote.SSHConfig,

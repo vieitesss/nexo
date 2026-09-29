@@ -163,13 +163,22 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 		if err != nil {
 			return err
 		}
-		return actions.OpenContainer(ctx, place.ContainerID)
+		return actions.OpenContainer(ctx, containerOpenID(place))
 	}
 	opener, ok := invocation.Adapter.(capabilities.ProjectOpener)
 	if !ok {
 		return fmt.Errorf("backend %q does not support opening projects", invocation.Selection.Kind)
 	}
 	return opener.OpenProject(ctx, place.Path, capabilities.OpenOptions{})
+}
+
+func containerOpenID(place picker.Place) string {
+	if !isLocalContainer(place.Machine) && strings.TrimSpace(place.ContainerName) != "" {
+		// Remote tmux IDs are stable backend handles, but proxies attach by
+		// the displayed session name and use it for their local identity.
+		return place.ContainerName
+	}
+	return place.ContainerID
 }
 
 type containerTargetGroup struct {

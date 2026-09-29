@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -122,6 +123,27 @@ func TestRunReconnectStopsCancelableReaderBeforeNextAttach(t *testing.T) {
 	}
 }
 
+func TestRunReconnectCancelsRealFileReaderWhenTimerWins(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
+	transport := &fakeProxyTransport{failures: 1}
+	clock := &fakeProxyClock{}
+	started := time.Now()
+	if err := RunReconnect(context.Background(), transport, clock, reader, "devbox", "$1", time.Second, time.Second); err != nil {
+		t.Fatalf("RunReconnect() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("timer-won cleanup took %s", elapsed)
+	}
+	if transport.calls != 2 {
+		t.Fatalf("transport calls = %d, want retry after canceling file reader", transport.calls)
+	}
+}
+
 type blockingProxyClock struct {
 	release chan struct{}
 }
@@ -199,15 +221,19 @@ func TestProxyCreatesSessionWithQuotedAttachCommand(t *testing.T) {
 
 func TestTransportArgsHonorSSHConfigOnlyForSSH(t *testing.T) {
 	remote := config.RemoteConfig{SSHConfig: "/tmp/ssh config", Transport: "ssh"}
-	if got, want := transportArgs(remote, "devbox", "$1"), []string{"ssh", "-t", "-F", "/tmp/ssh config", "devbox", "tmux attach-session -t '$1'"}; !reflect.DeepEqual(got, want) {
+	if got, want := transportArgs(remote, "devbox", "$1"), []string{"ssh", "-t", "-F", "/tmp/ssh config", "devbox", "tmux attach-session -t '=$1'"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ssh transport args = %#v, want %#v", got, want)
 	}
 	remote.Transport = "mosh"
-	if got, want := transportArgs(remote, "devbox", "$1"), []string{"mosh", "devbox", "--", "tmux", "attach-session", "-t", "$1"}; !reflect.DeepEqual(got, want) {
+	if got, want := transportArgs(remote, "devbox", "$1"), []string{"mosh", "devbox", "--", "tmux", "attach-session", "-t", "=$1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("mosh transport args = %#v, want %#v", got, want)
 	}
 	remote.Transport = "et"
-	if got, want := transportArgs(remote, "devbox", "$1"), []string{"et", "devbox", "-c", "tmux attach-session -t '$1'"}; !reflect.DeepEqual(got, want) {
+	if got, want := transportArgs(remote, "devbox", "$1"), []string{"et", "devbox", "-c", "tmux attach-session -t '=$1'"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("et transport args = %#v, want %#v", got, want)
+	}
+	remote.Transport = "ssh"
+	if got, want := transportArgs(remote, "devbox", "app.v1:blue"), []string{"ssh", "-t", "-F", "/tmp/ssh config", "devbox", "tmux attach-session -t '=app_v1_blue'"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("canonical SSH transport args = %#v, want %#v", got, want)
 	}
 }

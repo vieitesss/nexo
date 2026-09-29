@@ -72,6 +72,7 @@ func runRemoteOpen(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
+	container = tmux.CanonicalContainerName(container)
 	if !configuredMachine(invocation.Config.Remote.Machines, machine) {
 		return fmt.Errorf("remote machine %q is not configured", machine)
 	}
@@ -128,14 +129,22 @@ func runRemoteNew(ctx context.Context, invocation Invocation) error {
 	if configPath := strings.TrimSpace(invocation.Config.Remote.SSHConfig); configPath != "" {
 		args = append(args, "-F", configPath)
 	}
-	args = append(args, machine, "tmux new-session -d -s "+remoteShellQuote(tmux.EscapeSessionName(name)))
-	if output, err := invocation.Runner.Run(ctx, "ssh", args...); err != nil {
+	args = append(args, machine, "tmux new-session -d -P -F '#{session_name}' -s "+remoteShellQuote(tmux.EscapeSessionName(name)))
+	output, err := invocation.Runner.Run(ctx, "ssh", args...)
+	if err != nil {
 		if text := strings.TrimSpace(string(output)); text != "" {
 			return fmt.Errorf("create remote container: %s", text)
 		}
 		return fmt.Errorf("create remote container on %s: %w", machine, err)
 	}
-	return proxy.Proxy(ctx, machine, name)
+	canonical := strings.TrimSpace(string(output))
+	if newline := strings.IndexByte(canonical, '\n'); newline >= 0 {
+		canonical = canonical[:newline]
+	}
+	if canonical == "" {
+		canonical = tmux.CanonicalContainerName(name)
+	}
+	return proxy.Proxy(ctx, machine, canonical)
 }
 
 func runRemoteClose(ctx context.Context, invocation Invocation) error {
@@ -166,6 +175,7 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
+	container = tmux.CanonicalContainerName(container)
 	if !configuredMachine(invocation.Config.Remote.Machines, machine) {
 		return fmt.Errorf("remote machine %q is not configured", machine)
 	}
@@ -205,7 +215,7 @@ func runRemoteAttach(ctx context.Context, invocation Invocation) error {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
 	machine := strings.TrimSpace(invocation.Args[1])
-	container := strings.TrimSpace(invocation.Args[2])
+	container := tmux.CanonicalContainerName(strings.TrimSpace(invocation.Args[2]))
 	if err := validateRemoteMachine(invocation.Config.Remote.Machines, machine); err != nil {
 		return err
 	}

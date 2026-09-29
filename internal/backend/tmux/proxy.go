@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/x/term"
@@ -150,6 +151,9 @@ func waitProxyRetry(ctx context.Context, clock ProxyClock, input io.Reader, dela
 	cleanup := func() {
 		stop()
 		<-done
+		if closer, ok := reader.(io.Closer); ok {
+			_ = closer.Close()
+		}
 		restore()
 	}
 	select {
@@ -174,8 +178,9 @@ func waitProxyRetry(ctx context.Context, clock ProxyClock, input io.Reader, dela
 }
 
 // startProxyInput returns a cancelable one-byte reader and a cleanup function
-// for terminal state. os.Stdin is duplicated before reading so canceling a
-// retry never closes the process's standard input.
+// for terminal state. os.File inputs use unix.Poll with a cancellation pipe so
+// stopping a retry wakes a genuinely blocked read. os.Stdin is duplicated
+// before reading so canceling a retry never closes the process's standard input.
 func startProxyInput(input io.Reader) (io.Reader, func(), chan struct{}, func(), bool) {
 	restore := func() {}
 
@@ -194,9 +199,15 @@ func startProxyInput(input io.Reader) (io.Reader, func(), chan struct{}, func(),
 			restore()
 			return nil, nil, nil, nil, false
 		}
-		duplicate := os.NewFile(uintptr(fd), file.Name())
+		cancel := make([]int, 2)
+		if err := unix.Pipe(cancel); err != nil {
+			_ = unix.Close(fd)
+			restore()
+			return nil, nil, nil, nil, false
+		}
+		reader := &pollProxyReader{fd: fd, cancelFD: cancel[0], cancelWriteFD: cancel[1]}
 		finished := make(chan struct{})
-		return duplicate, func() { _ = duplicate.Close() }, finished, restore, true
+		return reader, reader.cancel, finished, restore, true
 	}
 
 	closer, canClose := input.(io.Closer)
@@ -206,6 +217,66 @@ func startProxyInput(input io.Reader) (io.Reader, func(), chan struct{}, func(),
 	finished := make(chan struct{})
 	return input, func() { _ = closer.Close() }, finished, restore, true
 }
+
+// pollProxyReader waits for either input or a cancellation byte. Closing a
+// duplicated file descriptor does not interrupt an in-flight Linux read, but
+// polling a self-pipe does, which keeps retry cleanup bounded on terminals and
+// pipes alike.
+type pollProxyReader struct {
+	fd            int
+	cancelFD      int
+	cancelWriteFD int
+	cancelOnce    sync.Once
+	closeOnce     sync.Once
+}
+
+func (r *pollProxyReader) Read(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	pollfds := []unix.PollFd{
+		{Fd: int32(r.fd), Events: unix.POLLIN},
+		{Fd: int32(r.cancelFD), Events: unix.POLLIN},
+	}
+	for {
+		_, err := unix.Poll(pollfds, -1)
+		if err == unix.EINTR {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if pollfds[1].Revents != 0 {
+			return 0, errProxyInputCanceled
+		}
+		if pollfds[0].Revents == 0 {
+			continue
+		}
+		n, err := unix.Read(r.fd, buffer)
+		if err == unix.EINTR {
+			continue
+		}
+		return n, err
+	}
+}
+
+func (r *pollProxyReader) cancel() {
+	r.cancelOnce.Do(func() {
+		_, _ = unix.Write(r.cancelWriteFD, []byte{1})
+		_ = unix.Close(r.cancelWriteFD)
+	})
+}
+
+func (r *pollProxyReader) Close() error {
+	r.closeOnce.Do(func() {
+		_ = unix.Close(r.fd)
+		_ = unix.Close(r.cancelFD)
+		_ = unix.Close(r.cancelWriteFD)
+	})
+	return nil
+}
+
+var errProxyInputCanceled = errors.New("proxy input canceled")
 
 // availableProxyKey handles buffered test and prompt readers without racing a
 // zero-duration fake clock. Terminal files use the cancelable reader path.
@@ -240,18 +311,20 @@ func (t commandProxyTransport) Attach(ctx context.Context, machine, container st
 
 func transportArgs(remote config.RemoteConfig, machine, container string) []string {
 	transport := remote.EffectiveTransport()
+	container = CanonicalContainerName(container)
+	target := "=" + container
 	switch transport {
 	case "mosh":
-		return []string{"mosh", machine, "--", "tmux", "attach-session", "-t", container}
+		return []string{"mosh", machine, "--", "tmux", "attach-session", "-t", target}
 	case "et":
-		command := "tmux attach-session -t " + shellQuote(container)
+		command := "tmux attach-session -t " + shellQuote(target)
 		return []string{"et", machine, "-c", command}
 	default:
 		args := []string{"ssh", "-t"}
 		if strings.TrimSpace(remote.SSHConfig) != "" {
 			args = append(args, "-F", remote.SSHConfig)
 		}
-		args = append(args, machine, "tmux attach-session -t "+shellQuote(container))
+		args = append(args, machine, "tmux attach-session -t "+shellQuote(target))
 		return args
 	}
 }
@@ -289,6 +362,12 @@ func ValidateProxyIdentity(machine, container string) error {
 	return nil
 }
 
+// CanonicalContainerName applies tmux's session-name canonicalization for
+// punctuation that tmux rewrites when creating a session.
+func CanonicalContainerName(name string) string {
+	return strings.NewReplacer(".", "_", ":", "_").Replace(name)
+}
+
 // EscapeSessionName escapes tmux's format marker while retaining the display
 // name's bytes (apart from tmux's own canonicalization of '.' and ':').
 func EscapeSessionName(name string) string {
@@ -301,6 +380,7 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 	if b == nil || b.Runner == nil {
 		return "", errors.New("tmux remote proxy requires a command runner")
 	}
+	container = CanonicalContainerName(container)
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return "", err
 	}
@@ -329,7 +409,7 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 		return errors.New("tmux remote proxy requires a command runner")
 	}
 	machine = strings.TrimSpace(machine)
-	container = strings.TrimSpace(container)
+	container = CanonicalContainerName(strings.TrimSpace(container))
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return err
 	}
@@ -389,13 +469,6 @@ func proxyBinary() string {
 		binary = absolute
 	}
 	return binary
-}
-
-func shellQuote(value string) string {
-	if value == "" {
-		return "''"
-	}
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 // NewCommandTransport returns the process transport used by the hidden attach

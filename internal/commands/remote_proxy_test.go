@@ -37,6 +37,22 @@ func TestRemoteOpenRoutesThroughConfiguredRemoteProxy(t *testing.T) {
 	}
 }
 
+func TestRemoteOpenCanonicalizesTmuxContainerName(t *testing.T) {
+	proxy := &recordingRemoteProxy{}
+	err := (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
+		Adapter:   proxy,
+		Args:      []string{"open", "devbox/app.v1:blue"},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if proxy.opened != [2]string{"devbox", "app_v1_blue"} {
+		t.Fatalf("proxy call = %#v, want canonical devbox/app_v1_blue", proxy.opened)
+	}
+}
+
 type recordingKiller struct {
 	closed string
 }
@@ -81,15 +97,15 @@ func TestRemoteNewQuotesRemoteContainerName(t *testing.T) {
 				t.Fatalf("command = %q, want ssh", name)
 			}
 			got = append([]string(nil), args...)
-			return nil, nil
+			return []byte("name with spaces\n"), nil
 		}),
 		Args: []string{"new", "devbox", "name with spaces"},
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if !strings.Contains(got[len(got)-1], "'name with spaces'") {
-		t.Fatalf("remote command = %q, want quoted name", got[len(got)-1])
+	if !strings.Contains(got[len(got)-1], "tmux new-session -d -P -F '#{session_name}'") || !strings.Contains(got[len(got)-1], "'name with spaces'") {
+		t.Fatalf("remote command = %q, want printed canonical name and quoted name", got[len(got)-1])
 	}
 	if !reflect.DeepEqual(proxy.opened, [2]string{"devbox", "name with spaces"}) {
 		t.Fatalf("proxy call = %#v, want new target", proxy.opened)
