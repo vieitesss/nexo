@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -65,6 +66,21 @@ func TestLoadParsesProjectsAtTopLevel(t *testing.T) {
 	}
 	if len(got.Paths) != 1 || got.Paths[0] != "~/work/*" || !got.GitFromHome {
 		t.Fatalf("projects config = %#v, want top-level project settings", got.ProjectsConfig)
+	}
+}
+
+func TestLoadParsesAgentSettingsAndDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[agents.working-pattern]\naider = \"…\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Agents.IdleSeconds != 3 || got.Agents.PollInterval != 2 || len(got.Agents.Processes) != 7 || got.Agents.WorkingPattern["aider"] != "…" {
+		t.Fatalf("Agents = %#v, want defaults and aider pattern", got.Agents)
 	}
 }
 
@@ -140,7 +156,7 @@ func TestLoadOptionalMissingIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOptional() error = %v", err)
 	}
-	if got.Backend != "" || len(got.Paths) != 0 || got.GitFromHome {
+	if !reflect.DeepEqual(got, Config{}) {
 		t.Fatalf("config = %#v, want empty config", got)
 	}
 }
