@@ -53,6 +53,33 @@ func TestDecodeUnknownNestedKeyNamesFullPath(t *testing.T) {
 	}
 }
 
+func TestLoadParsesProjectsAtTopLevel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("paths = [\"~/work/*\"]\ngit-from-home = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(got.Paths) != 1 || got.Paths[0] != "~/work/*" || !got.GitFromHome {
+		t.Fatalf("projects config = %#v, want top-level project settings", got.ProjectsConfig)
+	}
+}
+
+func TestLoadRejectsUnknownTopLevelProjectKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("project-paths = [\"~/work\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "project-paths") {
+		t.Fatalf("Load() error = %v, want unknown top-level key", err)
+	}
+}
+
 func TestLoadParsesBackend(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("backend = \"tmux\"\n"), 0o600); err != nil {
@@ -113,7 +140,7 @@ func TestLoadOptionalMissingIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOptional() error = %v", err)
 	}
-	if got != (Config{}) {
+	if got.Backend != "" || len(got.Paths) != 0 || got.GitFromHome {
 		t.Fatalf("config = %#v, want empty config", got)
 	}
 }

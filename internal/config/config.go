@@ -21,7 +21,8 @@ import (
 // Backend is empty when no backend default was configured. "auto" is accepted
 // explicitly and means that the environment should be detected.
 type Config struct {
-	Backend string `toml:"backend"`
+	Backend        string `toml:"backend"`
+	ProjectsConfig `toml:",inline"`
 }
 
 // Load reads a required configuration file.
