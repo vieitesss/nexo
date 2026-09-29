@@ -248,8 +248,8 @@ func TestGitContextCommandsBoundConcurrencyAndTimeout(t *testing.T) {
 
 	// Input is handled synchronously while those commands are running.
 	started := time.Now()
-	updated, cmd := model.Update(teaRuneKey('x'))
-	if cmd != nil || updated.(Model).Query() != "x" || time.Since(started) > 50*time.Millisecond {
+	updated, cmd := model.Update(teaRuneKey('z'))
+	if cmd != nil || updated.(Model).Query() != "z" || time.Since(started) > 50*time.Millisecond {
 		t.Fatalf("Update() blocked on Git: cmd=%v model=%#v", cmd, updated)
 	}
 }
