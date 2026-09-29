@@ -47,20 +47,48 @@ func AgentDot(agents []capabilities.Agent) (Decoration, bool) {
 	return Decoration{Text: "●", Style: style}, true
 }
 
-// ApplyAgentDots decorates container places with the most urgent matching
-// agent. The input is copied so asynchronous updates cannot mutate a caller's
-// place slice, and prior agent dots are replaced rather than duplicated.
+// ApplyAgentDots decorates places using the agent's stable container identity
+// when available, with unique display labels as a compatibility fallback.
 func ApplyAgentDots(places []Place, agents []capabilities.Agent) []Place {
-	byContainer := make(map[string][]capabilities.Agent)
+	return applyAgentDots(places, agents, "")
+}
+
+// ApplyAgentDotsForMachine applies one source machine's agent snapshot without
+// touching places owned by other machines. The source machine is supplied by
+// the caller because Agent deliberately does not invent a machine identity.
+func ApplyAgentDotsForMachine(places []Place, agents []capabilities.Agent, machine string) []Place {
+	return applyAgentDots(places, agents, strings.TrimSpace(machine))
+}
+
+func applyAgentDots(places []Place, agents []capabilities.Agent, machine string) []Place {
+	byID := make(map[string][]capabilities.Agent)
+	byLabel := make(map[string][]capabilities.Agent)
 	for _, agent := range agents {
-		container := strings.TrimSpace(agent.Container)
-		if container != "" {
-			byContainer[container] = append(byContainer[container], agent)
+		if id := strings.TrimSpace(agent.ContainerID); id != "" {
+			byID[id] = append(byID[id], agent)
+			continue
+		}
+		if label := strings.TrimSpace(agent.Container); label != "" {
+			byLabel[label] = append(byLabel[label], agent)
 		}
 	}
+	labelCounts := make(map[string]int)
+	for _, place := range places {
+		if place.Kind != ContainerKind || !sameMachine(place, machine) {
+			continue
+		}
+		label := strings.TrimSpace(place.ContainerName)
+		if label != "" {
+			labelCounts[label]++
+		}
+	}
+
 	updated := append([]Place(nil), places...)
 	for index := range updated {
 		place := &updated[index]
+		if place.Kind != ContainerKind || !sameMachine(*place, machine) {
+			continue
+		}
 		decorations := make([]Decoration, 0, len(place.Decorations)+1)
 		for _, decoration := range place.Decorations {
 			if isAgentDot(decoration) {
@@ -68,14 +96,27 @@ func ApplyAgentDots(places []Place, agents []capabilities.Agent) []Place {
 			}
 			decorations = append(decorations, decoration)
 		}
-		if place.Kind == ContainerKind {
-			if dot, ok := AgentDot(byContainer[strings.TrimSpace(place.ContainerName)]); ok {
-				decorations = append(decorations, dot)
-			}
+		matches := byID[strings.TrimSpace(place.ContainerID)]
+		if len(matches) == 0 && labelCounts[strings.TrimSpace(place.ContainerName)] == 1 {
+			matches = byLabel[strings.TrimSpace(place.ContainerName)]
+		}
+		if dot, ok := AgentDot(matches); ok {
+			decorations = append(decorations, dot)
 		}
 		place.Decorations = decorations
 	}
 	return updated
+}
+
+func sameMachine(place Place, machine string) bool {
+	if machine == "" {
+		return true
+	}
+	placeMachine := strings.TrimSpace(place.Machine)
+	if placeMachine == "" {
+		placeMachine = LocalMachine()
+	}
+	return placeMachine == machine
 }
 
 func isAgentDot(decoration Decoration) bool {

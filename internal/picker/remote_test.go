@@ -43,3 +43,61 @@ func TestRemoteBatchAddsContainersAndUnreachableHeader(t *testing.T) {
 		t.Fatalf("view = %q, want unreachable reason", model.View())
 	}
 }
+
+func TestRemoteAgentDotsUseStableContainerIdentityAndAllowDuplicateLabels(t *testing.T) {
+	model := NewModel([]Place{MachinePlace(LocalMachine())}, DefaultTheme)
+	updated, _ := model.Update(RemoteBatch{
+		Machine: "devbox",
+		Places: []Place{
+			{Kind: ContainerKind, Machine: "devbox", Group: "devbox", ContainerID: "w1", ContainerName: "api", SearchText: "api", DisplayRemainder: "api"},
+			{Kind: ContainerKind, Machine: "devbox", Group: "devbox", ContainerID: "w2", ContainerName: "api", SearchText: "api", DisplayRemainder: "api"},
+		},
+		Agents: []capabilities.Agent{{ContainerID: "w1", State: "stopped", Seen: false}},
+	})
+	model = updated.(Model)
+	places := model.Places()
+	if len(places) != 3 {
+		t.Fatalf("places = %#v, want local plus two remote containers", places)
+	}
+	if len(places[1].Decorations) != 1 || places[1].Decorations[0].Style != DecorationRed {
+		t.Fatalf("first duplicate-label place = %#v, want urgent dot", places[1])
+	}
+	if len(places[2].Decorations) != 0 {
+		t.Fatalf("second duplicate-label place = %#v, want no dot", places[2])
+	}
+}
+
+func TestAgentBatchesStayScopedToTheirSourceMachineRegardlessOfArrivalOrder(t *testing.T) {
+	local := LocalMachine()
+	localPlace := Place{Kind: ContainerKind, Machine: local, Group: local, ContainerID: "same", ContainerName: "api", SearchText: "api", DisplayRemainder: "api"}
+	model := NewModel([]Place{localPlace}, DefaultTheme)
+	remoteBatch := RemoteBatch{
+		Machine: "devbox",
+		Places:  []Place{{Kind: ContainerKind, Machine: "devbox", Group: "devbox", ContainerID: "same", ContainerName: "api", SearchText: "api", DisplayRemainder: "api"}},
+		Agents:  []capabilities.Agent{{ContainerID: "same", State: "stopped", Seen: false}},
+	}
+	updated, _ := model.Update(remoteBatch)
+	model = updated.(Model)
+	updated, _ = model.Update(AgentBatch{})
+	model = updated.(Model)
+	places := model.Places()
+	if len(places) != 2 || len(places[1].Decorations) != 1 || places[1].Decorations[0].Style != DecorationRed {
+		t.Fatalf("remote-first places = %#v, want remote dot after empty local batch", places)
+	}
+
+	model = NewModel([]Place{localPlace}, DefaultTheme)
+	updated, _ = model.Update(AgentBatch{Agents: []capabilities.Agent{{ContainerID: "same", State: "working"}}})
+	model = updated.(Model)
+	updated, _ = model.Update(remoteBatch)
+	model = updated.(Model)
+	places = model.Places()
+	if len(places) != 2 {
+		t.Fatalf("local-first places = %#v, want two containers", places)
+	}
+	if len(places[0].Decorations) != 1 || places[0].Decorations[0].Style != DecorationYellow {
+		t.Fatalf("local place = %#v, want working dot", places[0])
+	}
+	if len(places[1].Decorations) != 1 || places[1].Decorations[0].Style != DecorationRed {
+		t.Fatalf("remote place = %#v, want urgent dot", places[1])
+	}
+}

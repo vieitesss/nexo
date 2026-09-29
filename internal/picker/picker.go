@@ -295,11 +295,33 @@ type group struct {
 	error  string
 }
 
-func (m Model) cursorPlace() (Place, bool) {
-	if m.cursor < 0 || m.cursor >= len(m.rows) || m.rows[m.cursor].Kind != PlaceRow {
-		return Place{}, false
+type rowIdentity struct {
+	kind     RowKind
+	groupKey groupKey
+	place    Place
+	ordinal  int
+}
+
+func (m Model) cursorIdentity() (rowIdentity, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return rowIdentity{}, false
 	}
-	return m.rows[m.cursor].Place, true
+	row := m.rows[m.cursor]
+	return rowIdentity{kind: row.Kind, groupKey: row.groupKey, place: row.Place, ordinal: rowOrdinal(m.rows, m.cursor)}, true
+}
+
+func rowOrdinal(rows []Row, index int) int {
+	if index < 0 || index >= len(rows) {
+		return 0
+	}
+	row := rows[index]
+	ordinal := 0
+	for _, candidate := range rows[:index] {
+		if candidate.Kind == row.Kind && candidate.groupKey == row.groupKey {
+			ordinal++
+		}
+	}
+	return ordinal
 }
 
 func samePlace(first, second Place) bool {
@@ -315,16 +337,47 @@ func samePlace(first, second Place) bool {
 	return first.Group == second.Group && first.DisplayRemainder == second.DisplayRemainder
 }
 
-func (m *Model) restoreCursor(previous Place, keepPrevious bool) {
+func (m *Model) restoreCursor(previous rowIdentity, keepPrevious bool) {
 	if keepPrevious {
 		for index, row := range m.rows {
-			if row.Kind == PlaceRow && samePlace(row.Place, previous) {
+			if row.Kind != previous.kind {
+				continue
+			}
+			if row.Kind == PlaceRow {
+				if !samePlace(row.Place, previous.place) {
+					continue
+				}
+				m.cursor = index
+				return
+			}
+			if row.groupKey != previous.groupKey || rowOrdinal(m.rows, index) != previous.ordinal {
+				continue
+			}
+			m.cursor = index
+			return
+		}
+		// If a selected place disappeared, retain its group context rather than
+		// silently selecting whichever row inherited its numeric index.
+		if previous.kind == PlaceRow {
+			for index, row := range m.rows {
+				if row.Kind == HeaderRow && row.groupKey == previous.groupKey && rowOrdinal(m.rows, index) == previous.ordinal {
+					m.cursor = index
+					return
+				}
+			}
+		}
+		for index, row := range m.rows {
+			if row.groupKey == previous.groupKey {
 				m.cursor = index
 				return
 			}
 		}
 	}
-	m.clampCursor()
+	if len(m.rows) == 0 {
+		m.cursor = 0
+		return
+	}
+	m.cursor = 0
 }
 
 // Model is the Bubble Tea place picker model.
@@ -557,13 +610,14 @@ func (m *Model) applyRemoteBatch(batch RemoteBatch) {
 		m.remoteMachines = append(m.remoteMachines, machine)
 	}
 	m.groupErrors[key] = batch.Error
-	places := ApplyAgentDots(batch.Places, batch.Agents)
-	for _, place := range places {
-		if place.Machine == "" {
-			place.Machine = machine
+	places := append([]Place(nil), batch.Places...)
+	for index := range places {
+		if places[index].Machine == "" {
+			places[index].Machine = machine
 		}
-		m.places = append(m.places, place)
 	}
+	places = ApplyAgentDotsForMachine(places, batch.Agents, machine)
+	m.places = append(m.places, places...)
 	m.rebuild()
 }
 
@@ -584,7 +638,7 @@ func PlaceGroupKey(place Place) GroupKey {
 func placeGroupKey(place Place) groupKey { return PlaceGroupKey(place) }
 
 func (m *Model) rebuild() {
-	previous, keepPrevious := m.cursorPlace()
+	previous, keepPrevious := m.cursorIdentity()
 	groups := make([]group, 0)
 	byKey := make(map[groupKey]int)
 	for order, place := range m.places {
@@ -900,7 +954,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case AgentBatch:
 		if msg.Error == "" {
-			m.places = ApplyAgentDots(m.places, msg.Agents)
+			m.places = ApplyAgentDotsForMachine(m.places, msg.Agents, LocalMachine())
 			m.rebuild()
 		}
 		return m, nil
