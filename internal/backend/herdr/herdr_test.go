@@ -67,6 +67,25 @@ func TestOpenProjectFocusesWorkspaceWhoseLabelContainsDirectoryName(t *testing.T
 	}
 }
 
+func TestOpenProjectFocusesFirstWorkspaceWhenLabelsBothContainDirectoryName(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-first","label":"app-first"},{"workspace_id":"workspace-second","label":"app-second"}]}}`),
+	}}
+	backend := New(runner)
+
+	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+
+	want := []call{
+		{name: "herdr", args: []string{"workspace", "list"}},
+		{name: "herdr", args: []string{"workspace", "focus", "workspace-first"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want first matching workspace: %#v", runner.calls, want)
+	}
+}
+
 func TestOpenProjectCreatesWorkspaceWhenNoLabelMatches(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-other","label":"other"}]}}`),
