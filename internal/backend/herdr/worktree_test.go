@@ -31,6 +31,20 @@ func TestCreateWorktreeUsesNativeHerdrOperation(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeUsesExistingHerdrBranch(t *testing.T) {
+	runner := &fakeRunner{}
+	destination := filepath.Join(t.TempDir(), "feature")
+	if _, err := New(runner).CreateWorktree(context.Background(), capabilities.WorktreeCreateOptions{
+		Repo: "/repo", Branch: "feature", Destination: destination,
+	}); err != nil {
+		t.Fatalf("CreateWorktree() error = %v", err)
+	}
+	want := []call{{name: "herdr", args: []string{"worktree", "create", "--cwd", "/repo", "--branch", "feature", "--path", destination, "--focus"}}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
 func TestCreateExistingWorktreeDestinationFailsBeforeRunner(t *testing.T) {
 	runner := &fakeRunner{}
 	destination := filepath.Join(t.TempDir(), "existing")

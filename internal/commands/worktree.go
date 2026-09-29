@@ -41,6 +41,9 @@ func (worktreeCommand) Run(ctx context.Context, invocation Invocation) error {
 	if !ok {
 		return fmt.Errorf("backend %q does not support creating worktrees", invocation.Selection.Kind)
 	}
+	if invocation.Stdout == nil {
+		return errors.New("worktree create requires stdout")
+	}
 
 	var restore func() error
 	if parsed.AddParent {
@@ -83,20 +86,43 @@ func (worktreeCommand) Run(ctx context.Context, invocation Invocation) error {
 	if result.Branch == "" {
 		result.Branch = parsed.Branch
 	}
-	if invocation.JSON {
-		if invocation.Stdout == nil {
-			return errors.New("worktree create requires stdout for JSON output")
-		}
-		return json.NewEncoder(invocation.Stdout).Encode(result)
+	if result.Repo == "" {
+		result.Repo = parsed.Repo
 	}
-	if invocation.Stdout == nil {
+	result.NewBranch = parsed.NewBranch
+
+	var outputErr error
+	if invocation.JSON {
+		outputErr = json.NewEncoder(invocation.Stdout).Encode(result)
+	} else {
+		_, outputErr = fmt.Fprintf(invocation.Stdout, "created worktree %s on %s\n", result.Path, result.Branch)
+	}
+	if outputErr == nil {
 		return nil
 	}
-	_, err = fmt.Fprintf(invocation.Stdout, "created worktree %s on %s\n", result.Path, result.Branch)
-	return err
+
+	var rollbackErr error
+	if remover, ok := invocation.Adapter.(capabilities.WorktreeRemover); ok {
+		rollbackErr = remover.RemoveWorktree(ctx, result)
+	} else {
+		rollbackErr = errors.New("backend cannot roll back a created worktree")
+	}
+	if restore != nil {
+		if configErr := restore(); configErr != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore config after output failure: %w", configErr))
+		}
+	}
+	if rollbackErr != nil {
+		return errors.Join(outputErr, rollbackErr)
+	}
+	return outputErr
 }
 
 func parseWorktreeCreateArgs(args []string) (worktreeCreateArgs, error) {
+	if len(args) == 0 || args[0] != "create" {
+		return worktreeCreateArgs{}, errors.New("worktree requires the create subcommand")
+	}
+	args = args[1:]
 	var parsed worktreeCreateArgs
 	positionals := make([]string, 0, 3)
 	for i := 0; i < len(args); i++ {

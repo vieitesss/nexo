@@ -24,12 +24,34 @@ func TestAddProjectPathPreservesCommentsAndFormatting(t *testing.T) {
 	if string(got) != want {
 		t.Fatalf("config = %q, want %q", got, want)
 	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("config mode = %v, %v; want 0640", info.Mode().Perm(), err)
+	}
 	if err := restore(); err != nil {
 		t.Fatal(err)
 	}
 	got, err = os.ReadFile(path)
 	if err != nil || string(got) != original {
 		t.Fatalf("restore() config = %q, %v", got, err)
+	}
+}
+
+func TestAddProjectPathHandlesLiteralAndMultilineStrings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	contents := "backend = '''\npaths = [\"not-a-key\"] # still a string\n# also text\n'''\npaths = [\"~/work\"] # preserve this comment\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := AddProjectPath(path, "/home/tester/projects", "/home/tester"); err != nil || !changed {
+		t.Fatalf("AddProjectPath() = (%v, %v), want changed", err, changed)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "backend = '''\npaths = [\"not-a-key\"] # still a string\n# also text\n'''\npaths = [\"~/work\", \"/home/tester/projects\"] # preserve this comment\n"
+	if string(got) != want {
+		t.Fatalf("config = %q, want %q", got, want)
 	}
 }
 

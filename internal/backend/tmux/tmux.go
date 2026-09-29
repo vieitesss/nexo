@@ -79,18 +79,39 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 		return capabilities.Worktree{}, fmt.Errorf("check worktree destination %q: %w", path, err)
 	}
 
+	branchExisted := false
+	if options.NewBranch {
+		branchExisted = b.branchExists(ctx, options.Repo, options.Branch)
+		if branchExisted {
+			return capabilities.Worktree{}, fmt.Errorf("branch %q already exists", options.Branch)
+		}
+	}
 	args := []string{"-C", options.Repo, "worktree", "add"}
 	if options.NewBranch {
-		args = append(args, "-b", options.Branch)
+		args = append(args, "-b", options.Branch, path)
+	} else {
+		args = append(args, path, options.Branch)
 	}
-	args = append(args, path, options.Branch)
 	if _, err := b.runGit(ctx, args...); err != nil {
+		rollbackErr := b.rollbackWorktree(ctx, options.Repo, path, options.NewBranch, options.Branch, branchExisted)
+		if rollbackErr != nil {
+			return capabilities.Worktree{}, errors.Join(err, rollbackErr)
+		}
 		return capabilities.Worktree{}, err
 	}
 
-	result := capabilities.Worktree{Path: path, Branch: options.Branch}
-	if err := b.OpenProject(ctx, path, capabilities.OpenOptions{}); err != nil {
-		rollbackErr := b.rollbackWorktree(ctx, options.Repo, path, options.NewBranch, options.Branch)
+	result := capabilities.Worktree{Path: path, Branch: options.Branch, Repo: options.Repo, NewBranch: options.NewBranch}
+	createdSession, err := b.openProject(ctx, path, capabilities.OpenOptions{})
+	if createdSession {
+		result.SessionName = projects.TargetName(path)
+	}
+	if err != nil {
+		rollbackErr := b.rollbackWorktree(ctx, options.Repo, path, options.NewBranch, options.Branch, branchExisted)
+		if createdSession {
+			if _, killErr := b.run(ctx, "kill-session", "-t", "="+projects.TargetName(path)); killErr != nil {
+				rollbackErr = errors.Join(rollbackErr, killErr)
+			}
+		}
 		if rollbackErr != nil {
 			return capabilities.Worktree{}, errors.Join(err, rollbackErr)
 		}
@@ -99,17 +120,48 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 	return result, nil
 }
 
-func (b *Backend) rollbackWorktree(ctx context.Context, repo, path string, newBranch bool, branch string) error {
-	var failures []error
-	if _, err := b.runGit(ctx, "-C", repo, "worktree", "remove", "--force", path); err != nil {
-		failures = append(failures, err)
+func (b *Backend) RemoveWorktree(ctx context.Context, worktree capabilities.Worktree) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("tmux worktree remover requires a command runner")
 	}
-	if newBranch {
+	path, err := filepath.Abs(worktree.Path)
+	if err != nil {
+		return fmt.Errorf("resolve worktree destination: %w", err)
+	}
+	if _, err := b.runGit(ctx, "-C", worktree.Repo, "worktree", "remove", "--force", path); err != nil {
+		return err
+	}
+	if worktree.NewBranch {
+		if _, err := b.runGit(ctx, "-C", worktree.Repo, "branch", "-D", worktree.Branch); err != nil {
+			return err
+		}
+	}
+	if worktree.SessionName != "" {
+		if _, err := b.run(ctx, "kill-session", "-t", "="+worktree.SessionName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Backend) rollbackWorktree(ctx context.Context, repo, path string, newBranch bool, branch string, branchExisted bool) error {
+	var failures []error
+	if _, err := os.Lstat(path); err == nil {
+		if _, removeErr := b.runGit(ctx, "-C", repo, "worktree", "remove", "--force", path); removeErr != nil {
+			failures = append(failures, removeErr)
+		}
+	}
+	if newBranch && !branchExisted && b.branchExists(ctx, repo, branch) {
 		if _, err := b.runGit(ctx, "-C", repo, "branch", "-D", branch); err != nil {
 			failures = append(failures, err)
 		}
 	}
 	return errors.Join(failures...)
+}
+
+func (b *Backend) branchExists(ctx context.Context, repo, branch string) bool {
+	_, err := b.runGit(ctx, "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	return err == nil
 }
 
 func (b *Backend) runGit(ctx context.Context, args ...string) ([]byte, error) {
@@ -126,30 +178,37 @@ func (b *Backend) runGit(ctx context.Context, args ...string) ([]byte, error) {
 
 // OpenProject opens path in a tmux session and focuses that session.
 func (b *Backend) OpenProject(ctx context.Context, path string, options capabilities.OpenOptions) error {
+	_, err := b.openProject(ctx, path, options)
+	return err
+}
+
+func (b *Backend) openProject(ctx context.Context, path string, options capabilities.OpenOptions) (bool, error) {
 	if options.ContainerID != "" {
-		return &UnsupportedError{Option: "--workspace-id"}
+		return false, &UnsupportedError{Option: "--workspace-id"}
 	}
 	if b == nil || b.Runner == nil {
-		return errors.New("tmux project opener requires a command runner")
+		return false, errors.New("tmux project opener requires a command runner")
 	}
 
 	name := projects.TargetName(path)
 	_, err := b.run(ctx, "has-session", "-t", "="+name)
 	exists := err == nil
 	if err != nil && !isMissingSession(err) {
-		return err
+		return false, err
 	}
+	created := false
 	if !exists {
 		if _, err := b.run(ctx, "new-session", "-d", "-s", name, "-c", path); err != nil {
-			return err
+			return false, err
 		}
+		created = true
 	}
 
 	if b.Inside {
 		_, err = b.run(ctx, "switch-client", "-t", "="+name)
-		return err
+		return created, err
 	}
-	return b.runInteractive(ctx, "attach-session", "-t", "="+name)
+	return created, b.runInteractive(ctx, "attach-session", "-t", "="+name)
 }
 
 func (b *Backend) runInteractive(ctx context.Context, operation string, args ...string) error {

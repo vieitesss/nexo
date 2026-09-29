@@ -71,17 +71,50 @@ func readConfigFile(path string) (contents []byte, mode os.FileMode, existed boo
 	return nil, 0o600, false, nil
 }
 
-func writeConfigFile(path string, contents []byte, mode os.FileMode, existed bool) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+func writeConfigFile(path string, contents []byte, mode os.FileMode, _ bool) error {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
-	if err := os.WriteFile(path, contents, mode); err != nil {
-		return fmt.Errorf("write config %s: %w", path, err)
+	temporary, err := os.CreateTemp(directory, ".config.toml-*")
+	if err != nil {
+		return fmt.Errorf("create temporary config: %w", err)
 	}
-	if existed {
-		if err := os.Chmod(path, mode); err != nil {
-			return fmt.Errorf("preserve config mode: %w", err)
-		}
+	temporaryPath := temporary.Name()
+	cleanup := func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}
+	if err := temporary.Chmod(mode); err != nil {
+		cleanup()
+		return fmt.Errorf("preserve config mode: %w", err)
+	}
+	if _, err := temporary.Write(contents); err != nil {
+		cleanup()
+		return fmt.Errorf("write temporary config: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		cleanup()
+		return fmt.Errorf("sync temporary config: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return fmt.Errorf("close temporary config: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		_ = os.Remove(temporaryPath)
+		return fmt.Errorf("replace config %s: %w", path, err)
+	}
+	dirFile, err := os.Open(directory)
+	if err != nil {
+		return fmt.Errorf("open config directory: %w", err)
+	}
+	if err := dirFile.Sync(); err != nil {
+		_ = dirFile.Close()
+		return fmt.Errorf("sync config directory: %w", err)
+	}
+	if err := dirFile.Close(); err != nil {
+		return fmt.Errorf("close config directory: %w", err)
 	}
 	return nil
 }
@@ -147,6 +180,7 @@ func appendProjectPath(contents []byte, parent string) ([]byte, error) {
 
 func findTopLevelPathsArray(contents []byte) (start, end int, found bool, err error) {
 	section := ""
+	var multilineQuote byte
 	for lineStart := 0; lineStart < len(contents); {
 		lineEnd := bytes.IndexByte(contents[lineStart:], '\n')
 		if lineEnd < 0 {
@@ -155,6 +189,16 @@ func findTopLevelPathsArray(contents []byte) (start, end int, found bool, err er
 			lineEnd += lineStart
 		}
 		line := contents[lineStart:lineEnd]
+		if multilineQuote != 0 {
+			if closesMultilineString(line, multilineQuote) {
+				multilineQuote = 0
+			}
+			if lineEnd == len(contents) {
+				break
+			}
+			lineStart = lineEnd + 1
+			continue
+		}
 		withoutComment := stripTOMLComment(line)
 		trimmed := strings.TrimSpace(string(withoutComment))
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
@@ -177,6 +221,9 @@ func findTopLevelPathsArray(contents []byte) (start, end int, found bool, err er
 				return start, end, true, nil
 			}
 		}
+		if quote := unclosedMultilineString(line); quote != 0 {
+			multilineQuote = quote
+		}
 		if lineEnd == len(contents) {
 			break
 		}
@@ -185,44 +232,100 @@ func findTopLevelPathsArray(contents []byte) (start, end int, found bool, err er
 	return 0, 0, false, nil
 }
 
+func unclosedMultilineString(line []byte) byte {
+	for i := 0; i < len(line); {
+		if next, ok := skipTOMLString(line, i); ok {
+			if i+2 < len(line) && (line[i] == '"' || line[i] == '\'') && line[i+1] == line[i] && line[i+2] == line[i] && !hasClosingTriple(line, i+3, line[i]) {
+				return line[i]
+			}
+			i = next
+			continue
+		}
+		if line[i] == '#' {
+			return 0
+		}
+		i++
+	}
+	return 0
+}
+
+func hasClosingTriple(line []byte, start int, quote byte) bool {
+	for i := start; i+2 < len(line); i++ {
+		if line[i] == quote && line[i+1] == quote && line[i+2] == quote {
+			return true
+		}
+	}
+	return false
+}
+
+func closesMultilineString(line []byte, quote byte) bool {
+	for i := 0; i+2 < len(line); i++ {
+		if line[i] == quote && line[i+1] == quote && line[i+2] == quote {
+			return true
+		}
+	}
+	return false
+}
+
 func stripTOMLComment(line []byte) []byte {
-	inString := false
-	escaped := false
-	for i, char := range line {
-		switch {
-		case inString && escaped:
-			escaped = false
-		case inString && char == '\\':
-			escaped = true
-		case char == '"':
-			inString = !inString
-		case char == '#' && !inString:
+	for i := 0; i < len(line); {
+		if next, ok := skipTOMLString(line, i); ok {
+			i = next
+			continue
+		}
+		if line[i] == '#' {
 			return line[:i]
 		}
+		i++
 	}
 	return line
 }
 
+func skipTOMLString(contents []byte, start int) (int, bool) {
+	if start >= len(contents) || (contents[start] != '"' && contents[start] != '\'') {
+		return start, false
+	}
+	quote := contents[start]
+	triple := start+2 < len(contents) && contents[start+1] == quote && contents[start+2] == quote
+	if triple {
+		for i := start + 3; i+2 < len(contents); i++ {
+			if quote == '"' && contents[i] == '\\' {
+				i++
+				continue
+			}
+			if contents[i] == quote && contents[i+1] == quote && contents[i+2] == quote {
+				return i + 3, true
+			}
+		}
+		return len(contents), true
+	}
+	for i := start + 1; i < len(contents); i++ {
+		if quote == '"' && contents[i] == '\\' {
+			i++
+			continue
+		}
+		if contents[i] == quote {
+			return i + 1, true
+		}
+	}
+	return len(contents), true
+}
+
 func matchingArrayEnd(contents []byte, start int) (int, bool) {
 	depth := 0
-	inString := false
-	escaped := false
 	for i := start; i < len(contents); i++ {
-		char := contents[i]
-		switch {
-		case inString && escaped:
-			escaped = false
-		case inString && char == '\\':
-			escaped = true
-		case char == '"':
-			inString = !inString
-		case !inString && char == '#':
+		if next, ok := skipTOMLString(contents, i); ok {
+			i = next - 1
+			continue
+		}
+		switch contents[i] {
+		case '#':
 			for i < len(contents) && contents[i] != '\n' {
 				i++
 			}
-		case !inString && char == '[':
+		case '[':
 			depth++
-		case !inString && char == ']':
+		case ']':
 			depth--
 			if depth == 0 {
 				return i, true
