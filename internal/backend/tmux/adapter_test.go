@@ -11,8 +11,8 @@ import (
 )
 
 func TestInitInstallsBindingsHooksAndWatcher(t *testing.T) {
-	placeLine := "bind-key -T root C-s display-popup -E -h 80% -w 80% -x C -y C \"" + pickerCommand("") + "\"\n"
-	agentLine := "bind-key -T prefix a display-popup -E -h 80% -w 80% -x C -y C \"" + agentPickerCommand("") + "\"\n"
+	placeLine := "bind-key -T root C-s display-popup -E -h 100% -w 100% -x C -y C \"" + pickerCommand("") + "\"\n"
+	agentLine := "bind-key -T prefix a display-popup -E -h 100% -w 100% -x C -y C \"" + agentPickerCommand("") + "\"\n"
 	runner := &fakeRunner{sequences: map[string][][]byte{
 		"list-keys -T root C-s": {nil, []byte(placeLine)},
 		"list-keys -T prefix a": {nil, []byte(agentLine)},
@@ -23,7 +23,7 @@ func TestInitInstallsBindingsHooksAndWatcher(t *testing.T) {
 	}
 	focusCommand := focusHookCommand(os.Args[0], "")
 	watchCommand := watcherCommand("")
-	if !hasCall(runner.calls, "bind-key", "-n", "C-s", "display-popup", "-E", "-w", "80%", "-h", "80%", "-x", "C", "-y", "C", pickerCommand("")) || !hasCall(runner.calls, "bind-key", "a", "display-popup", "-E", "-w", "80%", "-h", "80%", "-x", "C", "-y", "C", agentPickerCommand("")) {
+	if !hasCall(runner.calls, "bind-key", "-n", "C-s", "display-popup", "-E", "-w", "100%", "-h", "100%", "-x", "C", "-y", "C", pickerCommand("")) || !hasCall(runner.calls, "bind-key", "a", "display-popup", "-E", "-w", "100%", "-h", "100%", "-x", "C", "-y", "C", agentPickerCommand("")) {
 		t.Fatalf("calls = %#v, want configured bindings", runner.calls)
 	}
 	if !hasCall(runner.calls, "set-option", "-g", "@nexo-place-key", encodeBindingRecord("root", "C-s", placeLine)) || !hasCall(runner.calls, "set-option", "-g", "@nexo-agent-key", encodeBindingRecord("prefix", "a", agentLine)) {
@@ -106,7 +106,7 @@ func TestBindingRecordRoundTripsExactLine(t *testing.T) {
 }
 
 func TestInitWarnsAndContinuesForUnverifiedRecordedBinding(t *testing.T) {
-	placeLine := "bind-key -T root C-x display-popup -E -h 80% -w 80% -x C -y C \"" + pickerCommand("") + "\"\n"
+	placeLine := "bind-key -T root C-x display-popup -E -h 100% -w 100% -x C -y C \"" + pickerCommand("") + "\"\n"
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
 			"show-option -gqv @nexo-place-key": []byte("root:C-s\n"),
@@ -183,9 +183,9 @@ func TestInitPreservesIndexedHooks(t *testing.T) {
 }
 
 func TestInitRemovesRecordedBindingsWhenKeysChange(t *testing.T) {
-	placeLine := "bind-key -T root C-s display-popup -E -h 80% -w 80% -x C -y C \"" + pickerCommand("") + "\"\n"
-	agentLine := "bind-key -T prefix a display-popup -E -h 80% -w 80% -x C -y C \"" + agentPickerCommand("") + "\"\n"
-	newPlaceLine := "bind-key -T root C-x display-popup -E -h 80% -w 80% -x C -y C \"" + pickerCommand("") + "\"\n"
+	placeLine := "bind-key -T root C-s display-popup -E -h 100% -w 100% -x C -y C \"" + pickerCommand("") + "\"\n"
+	agentLine := "bind-key -T prefix a display-popup -E -h 100% -w 100% -x C -y C \"" + agentPickerCommand("") + "\"\n"
+	newPlaceLine := "bind-key -T root C-x display-popup -E -h 100% -w 100% -x C -y C \"" + pickerCommand("") + "\"\n"
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"show-option -gqv @nexo-place-key": []byte(encodeBindingRecord("root", "C-s", placeLine)),
 		"show-option -gqv @nexo-agent-key": []byte(encodeBindingRecord("prefix", "a", agentLine)),

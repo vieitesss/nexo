@@ -14,6 +14,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
+	"github.com/vieitesss/nexo/internal/shell"
 )
 
 // RefreshMsg replaces the navigator's current agent snapshot. Commands that
@@ -47,6 +48,9 @@ type Model struct {
 	selected        *capabilities.Agent
 	cancelled       bool
 	err             error
+	width           int
+	height          int
+	sized           bool
 	refreshInFlight *bool
 }
 
@@ -80,6 +84,15 @@ func (m Model) Rows() []Row { return append([]Row(nil), m.rows...) }
 
 // Agents returns the latest complete source snapshot.
 func (m Model) Agents() []capabilities.Agent { return append([]capabilities.Agent(nil), m.agents...) }
+
+// Cursor returns the visible row selected by the keyboard.
+func (m Model) Cursor() int { return m.cursor }
+
+// SetSize records the terminal surface supplied by Bubble Tea.
+func (m *Model) SetSize(width, height int) {
+	m.width, m.height = width, height
+	m.sized = true
+}
 
 // Selected returns the pane accepted by Enter.
 func (m Model) Selected() (capabilities.Agent, bool) {
@@ -150,6 +163,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		*m.refreshInFlight = true
 		return m, tea.Batch(m.refresh(), m.tick())
+	case tea.WindowSizeMsg:
+		m.SetSize(msg.Width, msg.Height)
+		return m, nil
 	case tea.KeyMsg:
 		switch {
 		case msg.Type == tea.KeyCtrlC, msg.Type == tea.KeyEsc:
@@ -206,6 +222,10 @@ func (m Model) tick() tea.Cmd {
 }
 
 func (m *Model) rebuild() {
+	previous := ""
+	if m.cursor >= 0 && m.cursor < len(m.rows) {
+		previous = agentIdentity(m.rows[m.cursor].Agent)
+	}
 	agents := append([]capabilities.Agent(nil), m.agents...)
 	sort.SliceStable(agents, func(i, j int) bool {
 		rankI, rankJ := attentionRank(agents[i]), attentionRank(agents[j])
@@ -228,20 +248,36 @@ func (m *Model) rebuild() {
 		}
 		m.rows = append(m.rows, Row{Agent: agent, Score: match.Score})
 	}
+	if previous != "" {
+		for index, row := range m.rows {
+			if agentIdentity(row.Agent) == previous {
+				m.cursor = index
+				return
+			}
+		}
+	}
 	m.clampCursor()
 }
 
+func agentIdentity(agent capabilities.Agent) string {
+	if agent.PaneID != "" {
+		return agent.PaneID
+	}
+	return agent.Target
+}
+
 func attentionRank(agent capabilities.Agent) int {
-	if agent.State == "stopped" {
+	switch strings.ToLower(strings.TrimSpace(agent.State)) {
+	case "stopped":
 		if !agent.Seen {
 			return 0
 		}
 		return 2
-	}
-	if agent.State == "working" {
+	case "working":
+		return 1
+	default:
 		return 1
 	}
-	return 1
 }
 
 func (m *Model) clampCursor() {
@@ -257,8 +293,51 @@ func (m *Model) clampCursor() {
 	}
 }
 
-// View renders the agent navigator using the place picker's theme vocabulary.
+// View renders a full terminal surface after the first WindowSizeMsg. Before
+// Bubble Tea supplies dimensions, the compact frame remains useful to callers
+// that inspect a model before it is started.
 func (m Model) View() string {
+	if !m.sized {
+		return m.legacyView()
+	}
+	if m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+	items := make([]shell.Item, 0, len(m.rows))
+	for index, row := range m.rows {
+		selected := index == m.cursor
+		items = append(items, shell.Item{
+			Primary:    m.primaryText(row.Agent),
+			Secondary:  m.secondaryText(row.Agent, index+1 < len(m.rows)),
+			Selectable: true,
+			Selected:   selected,
+		})
+	}
+	dialog := ""
+	if m.err != nil {
+		dialog = m.err.Error()
+	}
+	search := shell.PromptLine(m.width, "Search: ", string(m.query), m.style(m.theme.Highlight).Render("▌"))
+	return shell.Render(shell.Options{
+		Width:  m.width,
+		Height: m.height,
+		Search: search,
+		Items:  items,
+		Hints:  m.hints(),
+		Dialog: dialog,
+		Paint: func(value string, selected bool) string {
+			style := m.surfaceStyle(m.theme.Foreground)
+			if selected && m.theme.Color {
+				style = style.Background(lipgloss.Color(m.theme.SelectionBackground))
+			}
+			return style.Render(value)
+		},
+		PaintSearch: func(value string) string { return m.surfaceStyle(m.theme.Foreground).Render(value) },
+		PaintHint:   func(value string) string { return m.surfaceStyle(m.theme.Muted).Render(value) },
+	})
+}
+
+func (m Model) legacyView() string {
 	lines := []string{m.style(m.theme.Foreground).Render("> " + string(m.query))}
 	for index, row := range m.rows {
 		selected := index == m.cursor
@@ -273,15 +352,241 @@ func (m Model) View() string {
 	return strings.Join(lines, "\n")
 }
 
+func (m Model) primaryText(agent capabilities.Agent) string {
+	parts := []string{m.marker(agent), strings.TrimSpace(agent.Harness)}
+	if strings.TrimSpace(agent.Container) != "" {
+		parts = append(parts, "·", strings.TrimSpace(agent.Container))
+	}
+	return strings.Join(parts, " ")
+}
+
+func (m Model) secondaryText(agent capabilities.Agent, continuing ...bool) string {
+	continues := true
+	if len(continuing) > 0 {
+		continues = continuing[0]
+	}
+	indent := "  "
+	if continues {
+		indent += m.style(m.theme.Muted).Render("│ ")
+	} else {
+		indent += m.style(m.theme.Muted).Render("  ")
+	}
+	width := m.width - shell.StringWidth(indent)
+	if m.width <= 0 {
+		width = 1 << 20
+	}
+	if width < 0 {
+		width = 0
+	}
+	parts := make([]metadataPart, 0, 4)
+	if agent.Window != "" {
+		parts = append(parts, metadataPart{value: agent.Window, flexible: true})
+	}
+	if agent.Target != "" {
+		parts = append(parts, metadataPart{value: agent.Target, flexible: true})
+	}
+	if agent.Branch != "" {
+		parts = append(parts, metadataPart{value: "⎇ " + agent.Branch})
+	}
+	if strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && agent.StoppedSince != nil {
+		parts = append(parts, metadataPart{value: age(m.now(), *agent.StoppedSince)})
+	}
+	metadata := fitMetadata(parts, width)
+	if metadata == "" {
+		metadata = "no metadata"
+	}
+	return indent + m.style(m.theme.Muted).Render(metadata)
+}
+
+type metadataPart struct {
+	value    string
+	flexible bool
+}
+
+// fitMetadata budgets each navigator field independently. Window and target
+// may consume the flexible space, while branch and age are reserved first so
+// a long location cannot hide the identifying suffix.
+func fitMetadata(parts []metadataPart, width int) string {
+	if len(parts) == 0 || width <= 0 {
+		return ""
+	}
+	budgets := make([]int, len(parts))
+	for index, part := range parts {
+		budgets[index] = shell.StringWidth(part.value)
+	}
+	separators := (len(parts) - 1) * shell.StringWidth(" · ")
+	available := width - separators
+	if available <= 0 {
+		values := make([]string, 0, len(parts))
+		for _, part := range parts {
+			values = append(values, part.value)
+		}
+		return shell.Truncate(strings.Join(values, " · "), width, "")
+	}
+	used := metadataBudgetTotal(budgets)
+	if used > available {
+		flexible := make([]int, 0, len(parts))
+		protected := make([]int, 0, len(parts))
+		for index, part := range parts {
+			if part.flexible {
+				flexible = append(flexible, index)
+			} else {
+				protected = append(protected, index)
+			}
+		}
+		reserve := 0
+		for _, index := range protected {
+			reserve += budgets[index]
+		}
+		flexibleWidth := available - reserve
+		if flexibleWidth < 0 {
+			flexibleWidth = 0
+		}
+		allocateFlexibleBudgets(budgets, flexible, flexibleWidth)
+		used = metadataBudgetTotal(budgets)
+		if used > available {
+			reduceMetadataBudgets(budgets, used-available, protected)
+		}
+	}
+	fitted := make([]string, 0, len(parts))
+	for index, part := range parts {
+		if budgets[index] <= 0 {
+			continue
+		}
+		fitted = append(fitted, truncateMetadataField(part.value, budgets[index]))
+	}
+	result := strings.Join(fitted, " · ")
+	if shell.StringWidth(result) > width {
+		return shell.Truncate(result, width, "")
+	}
+	return result
+}
+
+func allocateFlexibleBudgets(budgets, flexible []int, available int) {
+	desired := append([]int(nil), budgets...)
+	for _, index := range flexible {
+		budgets[index] = 1
+	}
+	available -= len(flexible)
+	if available <= 0 {
+		return
+	}
+	// Fill short fields first, then share whatever remains between long
+	// fields. This keeps a short target intact beside a long window.
+	for _, index := range flexible {
+		need := desired[index]
+		if need-1 > available {
+			continue
+		}
+		budgets[index] += need - 1
+		available -= need - 1
+	}
+	for available > 0 {
+		index := -1
+		for _, candidate := range flexible {
+			if budgets[candidate] >= desired[candidate] {
+				continue
+			}
+			if index < 0 || budgets[candidate] < budgets[index] {
+				index = candidate
+			}
+		}
+		if index < 0 {
+			return
+		}
+		budgets[index]++
+		available--
+	}
+}
+
+func metadataBudgetTotal(budgets []int) int {
+	total := 0
+	for _, budget := range budgets {
+		total += budget
+	}
+	return total
+}
+
+func reduceMetadataBudgets(budgets []int, excess int, candidates []int) {
+	for excess > 0 {
+		index := -1
+		for _, candidate := range candidates {
+			if candidate >= len(budgets) || budgets[candidate] <= 1 {
+				continue
+			}
+			if index < 0 || budgets[candidate] > budgets[index] {
+				index = candidate
+			}
+		}
+		if index < 0 {
+			return
+		}
+		budgets[index]--
+		excess--
+	}
+}
+
+func truncateMetadataField(value string, width int) string {
+	if width <= 1 {
+		return shell.Truncate(value, width, "")
+	}
+	return shell.Truncate(value, width, "…")
+}
+
+func (m Model) hints() []shell.Hint {
+	hints := make([]shell.Hint, 0, 4)
+	if len(m.rows) > 0 {
+		hints = append(hints, m.hintKeys("↑↓", "move"), m.hint(acceptKey, "open"))
+	}
+	hints = append(hints, m.hintKey("esc", "cancel"))
+	return hints
+}
+
+func (m Model) hint(binding key.Binding, label string) shell.Hint {
+	return m.hintKey(firstKey(binding), label)
+}
+
+func (m Model) hintKey(keyValue, label string) shell.Hint {
+	return shell.Hint{Key: m.style(m.theme.Highlight).Bold(true).Render(displayKey(keyValue)), Label: label}
+}
+
+func (m Model) hintKeys(keyValue, label string) shell.Hint {
+	return shell.Hint{Key: m.style(m.theme.Highlight).Bold(true).Render(keyValue), Label: label}
+}
+
+func displayKey(value string) string {
+	switch value {
+	case "up":
+		return "↑"
+	case "down":
+		return "↓"
+	case "left":
+		return "←"
+	case "right":
+		return "→"
+	default:
+		return value
+	}
+}
+
+func firstKey(binding key.Binding) string {
+	keys := binding.Keys()
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
+}
+
 func (m Model) marker(agent capabilities.Agent) string {
 	marker := "●"
 	if !m.theme.Color {
 		return marker
 	}
 	color := "3"
-	if agent.State == "stopped" && !agent.Seen {
+	state := strings.ToLower(strings.TrimSpace(agent.State))
+	if state == "stopped" && !agent.Seen {
 		color = "1"
-	} else if agent.State == "stopped" && agent.Seen {
+	} else if state == "stopped" && agent.Seen {
 		color = "2"
 	}
 	return m.style(color).Render(marker)
@@ -291,6 +596,14 @@ func (m Model) style(color string) lipgloss.Style {
 	style := lipgloss.NewStyle()
 	if m.theme.Color && color != "" {
 		style = style.Foreground(lipgloss.Color(color))
+	}
+	return style
+}
+
+func (m Model) surfaceStyle(color string) lipgloss.Style {
+	style := m.style(color)
+	if m.theme.Color && m.theme.Background != "" {
+		style = style.Background(lipgloss.Color(m.theme.Background))
 	}
 	return style
 }
@@ -306,7 +619,7 @@ func rowText(agent capabilities.Agent, now time.Time) string {
 		parts = append(parts, "⎇ "+agent.Branch)
 	}
 	text := strings.Join(parts, " · ")
-	if agent.State == "stopped" && agent.StoppedSince != nil {
+	if strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && agent.StoppedSince != nil {
 		text += "  " + age(now, *agent.StoppedSince)
 	}
 	return text

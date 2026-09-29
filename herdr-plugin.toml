@@ -21,14 +21,14 @@ command = ["herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint"
 id = "place-picker"
 title = "nexo places"
 placement = "popup"
-width = "80%"
-height = "80%"
+width = "100%"
+height = "100%"
 command = ["nexo", "--backend=herdr"]
 
 [[panes]]
 id = "agent-navigator"
 title = "nexo agents"
 placement = "popup"
-width = "80%"
-height = "80%"
+width = "100%"
+height = "100%"
 command = ["nexo", "--backend=herdr", "agents", "pick"]

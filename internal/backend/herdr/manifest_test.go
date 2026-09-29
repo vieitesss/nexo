@@ -87,8 +87,8 @@ func TestHerdrPluginManifestDeclaresPopupActions(t *testing.T) {
 	}
 
 	wantPanes := []pluginPane{
-		{ID: "place-picker", Title: "nexo places", Placement: "popup", Width: "80%", Height: "80%", Command: []string{"nexo", "--backend=herdr"}},
-		{ID: "agent-navigator", Title: "nexo agents", Placement: "popup", Width: "80%", Height: "80%", Command: []string{"nexo", "--backend=herdr", "agents", "pick"}},
+		{ID: "place-picker", Title: "nexo places", Placement: "popup", Width: "100%", Height: "100%", Command: []string{"nexo", "--backend=herdr"}},
+		{ID: "agent-navigator", Title: "nexo agents", Placement: "popup", Width: "100%", Height: "100%", Command: []string{"nexo", "--backend=herdr", "agents", "pick"}},
 	}
 	if len(manifest.Panes) != len(wantPanes) {
 		t.Fatalf("panes = %#v, want %#v", manifest.Panes, wantPanes)

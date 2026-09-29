@@ -3,6 +3,7 @@ package picker
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/projects"
+	"github.com/vieitesss/nexo/internal/shell"
 )
 
 // PlaceKind identifies the kind of place represented by a picker item. New
@@ -95,6 +97,8 @@ type Place struct {
 	LinkedWorktree   bool       `json:"linked_worktree,omitempty"`
 	// GitContext is populated asynchronously for Git project candidates.
 	GitContext *GitContext `json:"-"`
+	// Agents is the latest asynchronous agent snapshot for a container.
+	Agents []capabilities.Agent `json:"-"`
 	// ParentPath is the primary checkout path for a linked worktree.
 	ParentPath  string       `json:"-"`
 	Decorations []Decoration `json:"decorations,omitempty"`
@@ -389,6 +393,7 @@ type Model struct {
 	cursor int
 	width  int
 	height int
+	sized  bool
 
 	// expanded is used for empty-query groups. collapsed is an explicit user
 	// collapse in a non-empty query, where matching groups otherwise unfold.
@@ -411,6 +416,8 @@ type Model struct {
 	agentCmd       tea.Cmd
 	remoteMachines []string
 	groupErrors    map[groupKey]string
+	gitErrors      map[string]string
+	now            func() time.Time
 }
 
 // NewModel constructs a picker model with all groups folded.
@@ -426,6 +433,8 @@ func NewModel(places []Place, theme Theme, loaders ...GitLoader) Model {
 		marked:      make(map[ContainerRef]bool),
 		groupErrors: make(map[groupKey]string),
 		gitTimeout:  DefaultGitTimeout,
+		gitErrors:   make(map[string]string),
+		now:         time.Now,
 	}
 	if len(loaders) > 0 && loaders[0] != nil {
 		m.gitLoader = loaders[0]
@@ -574,6 +583,15 @@ func (m Model) markedTargets() []ContainerRef {
 	return targets
 }
 
+// SetClock replaces the clock used to render stopped-agent ages.
+func (m *Model) SetClock(now func() time.Time) {
+	if now == nil {
+		m.now = time.Now
+		return
+	}
+	m.now = now
+}
+
 // SetQuery is primarily useful to model tests and embedding callers.
 func (m *Model) SetPreview(ref ContainerRef, preview string) {
 	for index := range m.places {
@@ -595,6 +613,7 @@ func (m *Model) SetQuery(query string) {
 // SetSize updates the terminal dimensions used by View.
 func (m *Model) SetSize(width, height int) {
 	m.width, m.height = width, height
+	m.sized = true
 }
 
 func (m *Model) applyRemoteBatch(batch RemoteBatch) {
@@ -915,34 +934,41 @@ var defaultKeyMap = KeyMap{
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case GitContextMsg:
-		if msg.Err == nil {
-			for index := range m.places {
-				if m.places[index].Path != msg.Path {
-					continue
-				}
-				value := msg.Context
-				m.places[index].GitContext = &value
-				m.places[index].ParentPath = value.PrimaryPath
-				if value.PrimaryPath != "" {
-					m.places[index].LinkedWorktree = true
-					for _, primary := range m.places {
-						if primary.Path == value.PrimaryPath {
-							// A linked worktree belongs beside its primary
-							// checkout even when discovery assigned a different
-							// group to the two paths.
-							m.places[index].Group = primary.Group
-							m.places[index].DisplayRemainder = projectRemainder(m.places[index].Path, primary.Group)
-							break
-						}
+		if msg.Err != nil {
+			if m.gitErrors == nil {
+				m.gitErrors = make(map[string]string)
+			}
+			m.gitErrors[msg.Path] = msg.Err.Error()
+			m.rebuild()
+			return m, nil
+		}
+		delete(m.gitErrors, msg.Path)
+		for index := range m.places {
+			if m.places[index].Path != msg.Path {
+				continue
+			}
+			value := msg.Context
+			m.places[index].GitContext = &value
+			m.places[index].ParentPath = value.PrimaryPath
+			if value.PrimaryPath != "" {
+				m.places[index].LinkedWorktree = true
+				for _, primary := range m.places {
+					if primary.Path == value.PrimaryPath {
+						// A linked worktree belongs beside its primary
+						// checkout even when discovery assigned a different
+						// group to the two paths.
+						m.places[index].Group = primary.Group
+						m.places[index].DisplayRemainder = projectRemainder(m.places[index].Path, primary.Group)
+						break
 					}
 				}
-				decoration := value.Decoration()
-				if decoration.Text != "" {
-					m.places[index].Decorations = append(m.places[index].Decorations, decoration)
-				}
 			}
-			m.rebuild()
+			decoration := value.Decoration()
+			if decoration.Text != "" {
+				m.places[index].Decorations = append(m.places[index].Decorations, decoration)
+			}
 		}
+		m.rebuild()
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.SetSize(msg.Width, msg.Height)
@@ -1137,9 +1163,20 @@ func (m Model) collapseCurrent() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// View renders the picker, with group headers and tree spines excluded from
-// ranking and highlighting.
+// View renders a full terminal surface after the first WindowSizeMsg. Before
+// Bubble Tea supplies dimensions, the compact legacy frame is used because
+// there is no rectangle to paint yet.
 func (m Model) View() string {
+	if !m.sized {
+		return m.legacyView()
+	}
+	if m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+	return m.fullView()
+}
+
+func (m Model) legacyView() string {
 	var lines []string
 	queryStyle := m.style(m.theme.Foreground)
 	if m.renameMode {
@@ -1207,6 +1244,346 @@ func (m Model) View() string {
 	return strings.Join(lines, "\n")
 }
 
+func (m Model) fullView() string {
+	items := make([]shell.Item, 0, len(m.rows))
+	for index, row := range m.rows {
+		selected := index == m.cursor
+		item := shell.Item{Selectable: row.Kind == PlaceRow, Selected: selected}
+		switch row.Kind {
+		case HeaderRow:
+			arrow := "▸"
+			if row.Expanded {
+				arrow = "▾"
+			}
+			label := filepath.Base(filepath.ToSlash(row.Group))
+			if label == "." || label == "/" || label == "" {
+				label = row.Group
+			}
+			primary := arrow + " " + label
+			if row.Error != "" {
+				primary += " — " + row.Error
+			} else if !row.Expanded {
+				primary += " (" + itoa(row.ChildCount) + ")"
+			}
+			item.Primary = m.style(m.theme.Muted).Render(primary)
+		case NewContainerRow:
+			item.Primary = "  " + m.style(m.theme.Muted).Render("└ ") + row.Place.DisplayRemainder
+		case PlaceRow:
+			following := index+1 < len(m.rows) && m.rows[index+1].Kind != HeaderRow && m.rows[index+1].groupKey == row.groupKey
+			spine := "├"
+			if !following {
+				spine = "└"
+			}
+			prefix := "  "
+			if row.Depth > 1 {
+				prefix = strings.Repeat("  ", row.Depth-1) + m.style(m.theme.Muted).Render("│ ")
+			}
+			primary := m.highlight(row.Remainder, row.Matches, selected)
+			primary = strings.ReplaceAll(primary, "/", m.style(m.theme.Muted).Render(" │ "))
+			if row.Place.Kind == ContainerKind {
+				mark := "☐"
+				if row.Marked {
+					mark = "☑"
+				}
+				primary = mark + " " + primary
+				hasDot := false
+				for _, decoration := range row.Place.Decorations {
+					if decoration.Text != "" {
+						primary += " " + m.decorationStyle(decoration).Render(decoration.Text)
+						if decoration.Text == "●" {
+							hasDot = true
+						}
+					}
+				}
+				if !hasDot {
+					if dot, ok := AgentDot(row.Place.Agents); ok {
+						primary += " " + m.decorationStyle(dot).Render(dot.Text)
+					}
+				}
+			} else {
+				primary = strings.TrimSpace(primary)
+			}
+			item.Primary = prefix + m.style(m.theme.Muted).Render(spine+" ") + primary
+			continuation := "  "
+			if following {
+				continuation = "│ "
+			}
+			secondaryPrefix := prefix + m.style(m.theme.Muted).Render(continuation)
+			if row.Place.Kind == ContainerKind {
+				secondaryPrefix += "  "
+			}
+			metadata := m.placeMetadata(row.Place, m.width-shell.StringWidth(secondaryPrefix))
+			if shell.StringWidth(metadata) > 0 {
+				item.Secondary = secondaryPrefix + metadata
+			}
+		}
+		if index+1 < len(m.rows) && m.rows[index+1].Kind == HeaderRow && m.rows[index+1].groupKey != row.groupKey {
+			item.Separator = true
+		}
+		items = append(items, item)
+	}
+
+	cursor := m.style(m.theme.Highlight).Render("▌")
+	search := shell.PromptLine(m.width, "Search: ", string(m.query), cursor)
+	if m.renameMode {
+		search = shell.PromptLine(m.width, "rename: ", string(m.renameInput), cursor)
+	}
+	dialog := ""
+	if m.confirmKill {
+		dialog = "kill selected containers? [y/N]"
+	}
+	return shell.Render(shell.Options{
+		Width:  m.width,
+		Height: m.height,
+		Search: search,
+		Items:  items,
+		Hints:  m.hints(),
+		Dialog: dialog,
+		Paint: func(value string, selected bool) string {
+			style := m.surfaceStyle(m.theme.Foreground)
+			if selected && m.theme.Color {
+				style = style.Background(lipgloss.Color(normalizeColor(m.theme.SelectionBackground)))
+			}
+			return style.Render(value)
+		},
+		PaintSearch: func(value string) string { return m.surfaceStyle(m.theme.Foreground).Render(value) },
+		PaintHint:   func(value string) string { return m.surfaceStyle(m.theme.Muted).Render(value) },
+	})
+}
+
+func (m Model) placeMetadata(place Place, width int) string {
+	if place.Kind == ProjectKind {
+		if place.GitContext != nil {
+			return m.gitContextLine(*place.GitContext, width)
+		}
+		if errText := m.gitErrors[place.Path]; errText != "" {
+			return m.style(m.theme.Muted).Render("git: error " + errText)
+		}
+		if place.Git {
+			return m.style(m.theme.Muted).Render("git: loading…")
+		}
+		return ""
+	}
+	if place.Kind != ContainerKind {
+		return ""
+	}
+	if len(place.Agents) > 0 {
+		parts := make([]string, 0, len(place.Agents))
+		for _, agent := range place.Agents {
+			dot := m.style(agentDotColor(agent)).Render("●")
+			value := strings.TrimSpace(agent.Harness) + " " + strings.TrimSpace(agent.State)
+			if strings.TrimSpace(agent.Harness) == "" {
+				value = strings.TrimSpace(agent.State)
+			}
+			if strings.EqualFold(agent.State, "stopped") && agent.StoppedSince != nil {
+				clock := m.now
+				if clock == nil {
+					clock = time.Now
+				}
+				value += " " + stoppedAge(clock(), *agent.StoppedSince)
+			}
+			parts = append(parts, dot+" "+m.style(m.theme.Muted).Render(value))
+		}
+		return strings.Join(parts, " · ")
+	}
+	if preview := previewLine(place.Preview); preview != "" {
+		return m.style(m.theme.Muted).Render(preview)
+	}
+	return m.style(m.theme.Muted).Render("no agents")
+}
+
+func (m Model) gitContextLine(context GitContext, width int) string {
+	identity := context.Identity
+	changes := ""
+	if context.Adds != 0 || context.Deletes != 0 {
+		if context.Adds != 0 {
+			changes += "+" + itoa(context.Adds)
+		}
+		if context.Deletes != 0 {
+			if changes != "" {
+				changes += " "
+			}
+			changes += "-" + itoa(context.Deletes)
+		}
+	} else if context.Dirty {
+		changes = "*"
+	}
+	divergence := ""
+	if context.Ahead > 0 {
+		divergence += "↑" + itoa(context.Ahead)
+	}
+	if context.Behind > 0 {
+		if divergence != "" {
+			divergence += " "
+		}
+		divergence += "↓" + itoa(context.Behind)
+	}
+	if identity == "" && changes == "" && divergence == "" {
+		return m.style(m.theme.Muted).Render("clean")
+	}
+	if width <= 0 {
+		return ""
+	}
+	if gitWidth(identity, changes, divergence) > width {
+		// Divergence is the least important field and is dropped first.
+		divergence = ""
+	}
+	if gitWidth(identity, changes, divergence) > width {
+		// Keep the change signal while discarding its counts.
+		if context.Adds != 0 || context.Deletes != 0 {
+			changes = ""
+			if context.Adds != 0 {
+				changes += "+"
+			}
+			if context.Deletes != 0 {
+				if changes != "" {
+					changes += " "
+				}
+				changes += "-"
+			}
+		}
+	}
+	if gitWidth(identity, changes, divergence) > width {
+		// Identity is retained longest; only now may it be truncated.
+		suffix := gitWidth("", changes, divergence)
+		if suffix > 0 {
+			suffix++ // separator between identity and the retained suffix
+		}
+		identity = shell.Truncate(identity, width-suffix, "…")
+	}
+	if gitWidth(identity, changes, divergence) > width {
+		// A one-cell surface cannot fit a separated suffix; identity wins.
+		changes = ""
+		divergence = ""
+		identity = shell.Truncate(identity, width, "…")
+	}
+	parts := make([]string, 0, 4)
+	if identity != "" {
+		parts = append(parts, m.style(m.theme.Muted).Render(identity))
+	}
+	if changes != "" {
+		for _, change := range strings.Fields(changes) {
+			if strings.HasPrefix(change, "+") {
+				parts = append(parts, m.style("green").Render(change))
+			} else if strings.HasPrefix(change, "-") {
+				parts = append(parts, m.style("red").Render(change))
+			} else {
+				parts = append(parts, m.style("yellow").Render(change))
+			}
+		}
+	}
+	if divergence != "" {
+		parts = append(parts, m.style(m.theme.Muted).Render(divergence))
+	}
+	return strings.Join(parts, " ")
+}
+
+func gitWidth(identity, changes, divergence string) int {
+	parts := make([]string, 0, 3)
+	for _, value := range []string{identity, changes, divergence} {
+		if value != "" {
+			parts = append(parts, value)
+		}
+	}
+	if len(parts) == 0 {
+		return 0
+	}
+	return shell.StringWidth(strings.Join(parts, " "))
+}
+
+func agentDotColor(agent capabilities.Agent) string {
+	if strings.EqualFold(strings.TrimSpace(agent.State), "stopped") {
+		if agent.Seen {
+			return "green"
+		}
+		return "red"
+	}
+	return "yellow"
+}
+
+func stoppedAge(now, since time.Time) string {
+	seconds := int(now.Sub(since) / time.Second)
+	if seconds < 0 {
+		seconds = 0
+	}
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	minutes := seconds / 60
+	if minutes < 60 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%dh", minutes/60)
+}
+
+func (m Model) hints() []shell.Hint {
+	if m.renameMode {
+		return []shell.Hint{m.hint(defaultKeyMap.Accept, "accept"), m.hint(defaultKeyMap.Clear, "cancel")}
+	}
+	if m.confirmKill {
+		return []shell.Hint{m.hintKey("y", "kill"), m.hintKey("n", "cancel")}
+	}
+	hints := make([]shell.Hint, 0, 10)
+	if len(m.rows) > 0 {
+		hints = append(hints, m.hintKeys("↑↓", "move"))
+		if m.cursor < len(m.rows) {
+			switch m.rows[m.cursor].Kind {
+			case HeaderRow:
+				hints = append(hints, m.hint(defaultKeyMap.Accept, "expand"), m.hintKeys("←→", "fold"))
+			case PlaceRow:
+				hints = append(hints, m.hint(defaultKeyMap.Accept, "open"), m.hint(defaultKeyMap.Collapse, "fold"))
+			default:
+				hints = append(hints, m.hint(defaultKeyMap.Collapse, "fold"))
+			}
+		}
+	}
+	hints = append(hints, m.hint(defaultKeyMap.Clear, "cancel"))
+	if len(m.query) == 0 && (len(m.markedTargets()) > 0 || m.currentContainer()) {
+		hints = append(hints, m.hint(defaultKeyMap.Kill, "kill"))
+	}
+	if len(m.query) == 0 && m.currentContainer() {
+		hints = append(hints, m.hint(defaultKeyMap.Rename, "rename"), m.hint(defaultKeyMap.MarkNext, "mark"))
+	}
+	return hints
+}
+
+func (m Model) hint(binding key.Binding, label string) shell.Hint {
+	return m.hintKey(firstKey(binding), label)
+}
+
+func (m Model) hintKey(keyValue, label string) shell.Hint {
+	return shell.Hint{Key: m.style(m.theme.Highlight).Bold(true).Render(displayKey(keyValue)), Label: label}
+}
+
+func (m Model) hintKeys(keyValue, label string) shell.Hint {
+	return shell.Hint{Key: m.style(m.theme.Highlight).Bold(true).Render(keyValue), Label: label}
+}
+
+func displayKey(value string) string {
+	switch value {
+	case "up":
+		return "↑"
+	case "down":
+		return "↓"
+	case "left":
+		return "←"
+	case "right":
+		return "→"
+	case "shift+tab":
+		return "⇧tab"
+	default:
+		return value
+	}
+}
+
+func firstKey(binding key.Binding) string {
+	keys := binding.Keys()
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
+}
+
 func previewLine(preview string) string {
 	for _, line := range strings.Split(preview, "\n") {
 		line = strings.TrimSpace(line)
@@ -1235,6 +1612,14 @@ func (m Model) style(color string) lipgloss.Style {
 	style := lipgloss.NewStyle()
 	if m.theme.Color && color != "" {
 		style = style.Foreground(lipgloss.Color(normalizeColor(color)))
+	}
+	return style
+}
+
+func (m Model) surfaceStyle(color string) lipgloss.Style {
+	style := m.style(color)
+	if m.theme.Color && m.theme.Background != "" {
+		style = style.Background(lipgloss.Color(normalizeColor(m.theme.Background)))
 	}
 	return style
 }

@@ -8,8 +8,8 @@ import (
 )
 
 func TestInitLeavesExistingFocusEventsEnabled(t *testing.T) {
-	placeLine := "bind-key -T root C-s display-popup -E -h 80% -w 80% -x C -y C \"" + pickerCommand("") + "\"\n"
-	agentLine := "bind-key -T prefix a display-popup -E -h 80% -w 80% -x C -y C \"" + agentPickerCommand("") + "\"\n"
+	placeLine := "bind-key -T root C-s display-popup -E -h 100% -w 100% -x C -y C \"" + pickerCommand("") + "\"\n"
+	agentLine := "bind-key -T prefix a display-popup -E -h 100% -w 100% -x C -y C \"" + agentPickerCommand("") + "\"\n"
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
 			"show-option -gqv focus-events": []byte("on\n"),
