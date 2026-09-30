@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -23,27 +24,26 @@ func (f *tuiFakeAdapter) ShowPopup(_ context.Context, command string) error {
 	return nil
 }
 
-func TestTUIRoutesExplicitTabs(t *testing.T) {
+func TestTUIRoutesExplicitTabsWithoutOpeningPopup(t *testing.T) {
 	command, ok := NewRegistry().Lookup("tui")
 	if !ok {
 		t.Fatal("tui command is not registered")
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	for _, tab := range []string{"agents", "containers", "projects"} {
 		t.Run(tab, func(t *testing.T) {
 			adapter := &tuiFakeAdapter{}
-			if err := command.Run(context.Background(), Invocation{
+			err := command.Run(ctx, Invocation{
 				Selection: backend.Selection{Kind: backend.Tmux},
 				Adapter:   adapter,
 				Args:      []string{tab},
-			}); err != nil {
-				t.Fatalf("Run() error = %v", err)
+			})
+			if err == nil {
+				t.Fatal("Run() error = nil, want canceled picker")
 			}
-			wantSuffix := " tui '" + tab + "'"
-			if tab == "agents" {
-				wantSuffix = " tui agents"
-			}
-			if !strings.HasSuffix(adapter.popup, wantSuffix) {
-				t.Fatalf("popup command = %q, want tui %s", adapter.popup, tab)
+			if adapter.popup != "" {
+				t.Fatalf("popup command = %q, want no popup request", adapter.popup)
 			}
 		})
 	}
@@ -51,30 +51,24 @@ func TestTUIRoutesExplicitTabs(t *testing.T) {
 
 func TestTUIDefaultsToAgentsForUnseenStopped(t *testing.T) {
 	adapter := &tuiFakeAdapter{agents: []capabilities.Agent{{State: "stopped"}}}
-	command, _ := NewRegistry().Lookup("tui")
-	if err := command.Run(context.Background(), Invocation{
-		Selection: backend.Selection{Kind: backend.Tmux},
-		Adapter:   adapter,
-	}); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if !strings.HasSuffix(adapter.popup, " tui agents") {
-		t.Fatalf("popup command = %q, want default agents tab", adapter.popup)
+	if got, want := defaultTab(context.Background(), adapter), "agents"; got != want {
+		t.Fatalf("default tab = %q, want %q", got, want)
 	}
 }
 
 func TestTUIDefaultsToContainersWithoutUnseenStopped(t *testing.T) {
 	adapter := &tuiFakeAdapter{agents: []capabilities.Agent{{State: "stopped", Seen: true}, {State: "working"}}}
-	command, _ := NewRegistry().Lookup("tui")
-	if err := command.Run(context.Background(), Invocation{
-		Selection: backend.Selection{Kind: backend.Tmux},
-		Adapter:   adapter,
-	}); err != nil {
-		t.Fatalf("Run() error = %v", err)
+	if got, want := defaultTab(context.Background(), adapter), "containers"; got != want {
+		t.Fatalf("default tab = %q, want %q", got, want)
 	}
-	if !strings.HasSuffix(adapter.popup, " tui 'containers'") {
-		t.Fatalf("popup command = %q, want default containers tab", adapter.popup)
+}
+
+func defaultTab(ctx context.Context, adapter capabilities.AgentSource) string {
+	tab, err := tuiTab(ctx, Invocation{Adapter: adapter})
+	if err != nil {
+		return "error: " + err.Error()
 	}
+	return tab
 }
 
 func TestTUIRejectsUnknownTab(t *testing.T) {
@@ -82,5 +76,9 @@ func TestTUIRejectsUnknownTab(t *testing.T) {
 	err := command.Run(context.Background(), Invocation{Args: []string{"unknown"}})
 	if err == nil || !strings.Contains(err.Error(), "unknown tui tab") {
 		t.Fatalf("Run() error = %v, want unknown-tab usage error", err)
+	}
+	var usageErr UsageError
+	if !errors.As(err, &usageErr) {
+		t.Fatalf("Run() error = %T, want UsageError", err)
 	}
 }

@@ -29,6 +29,25 @@ func TestParseRequiresCommand(t *testing.T) {
 	}
 }
 
+func TestRunWithTUIUsageErrorsExitTwo(t *testing.T) {
+	for _, args := range [][]string{
+		{"--backend=tmux", "tui", "unknown"},
+		{"--backend=tmux", "tui", "agents", "projects"},
+		{"--backend=tmux", "tui", "--", "agents", "projects"},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			var output, errors strings.Builder
+			status := RunWith(args, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+				t.Fatal("usage errors should not invoke an external program")
+				return nil, nil
+			}), backend.MapEnvironment{}, "")
+			if status != 2 {
+				t.Fatalf("status=%d output=%q errors=%q, want 2", status, output.String(), errors.String())
+			}
+		})
+	}
+}
+
 func TestRunWithBareCommandPrintsUsage(t *testing.T) {
 	var output, errors strings.Builder
 	status := RunWith(nil, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {

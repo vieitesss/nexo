@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -22,6 +23,7 @@ const (
 type InitInput struct {
 	Config     config.TmuxConfig
 	ConfigPath string
+	Stderr     io.Writer
 }
 
 // Init removes bindings from older versions when nexo can prove ownership,
@@ -31,8 +33,12 @@ func (b *Backend) Init(ctx context.Context, input InitInput) error {
 	if b == nil || b.Runner == nil {
 		return errors.New("tmux adapter requires a command runner")
 	}
+	stderr := input.Stderr
+	if stderr == nil {
+		stderr = os.Stderr
+	}
 	for _, option := range []string{placeBindingOption, agentBindingOption} {
-		if err := b.removeRecordedBinding(ctx, option); err != nil {
+		if err := b.removeRecordedBinding(ctx, option, stderr); err != nil {
 			return err
 		}
 	}
@@ -46,10 +52,28 @@ func (b *Backend) Init(ctx context.Context, input InitInput) error {
 	return nil
 }
 
-func (b *Backend) removeRecordedBinding(ctx context.Context, option string) error {
+func (b *Backend) removeRecordedBinding(ctx context.Context, option string, stderr io.Writer) error {
 	record, found, err := b.recordedBinding(ctx, option)
 	if err != nil {
 		return err
+	}
+	if found && !record.verified {
+		if stderr != nil {
+			location := "ownership record " + option
+			if record.table != "" || record.key != "" {
+				location = fmt.Sprintf("tmux key %s %s", record.table, record.key)
+			}
+			_, warningErr := fmt.Fprintf(stderr, "nexo no longer binds keys; check %s, nexo could not verify it\n", location)
+			unsetErr := b.unsetRecord(ctx, option)
+			if warningErr != nil {
+				if unsetErr != nil {
+					return errors.Join(warningErr, unsetErr)
+				}
+				return warningErr
+			}
+			return unsetErr
+		}
+		return b.unsetRecord(ctx, option)
 	}
 	if found && record.verified {
 		current, bound, err := b.currentBinding(ctx, record.table, record.key)
@@ -62,7 +86,7 @@ func (b *Backend) removeRecordedBinding(ctx context.Context, option string) erro
 			}
 		}
 	}
-	return b.recordBinding(ctx, option, "", "", "")
+	return b.unsetRecord(ctx, option)
 }
 
 func (b *Backend) currentBinding(ctx context.Context, table, key string) (string, bool, error) {
@@ -108,10 +132,26 @@ func (b *Backend) recordedBinding(ctx context.Context, option string) (bindingRe
 	record, ok, err := decodeBindingRecord(value)
 	if err != nil || !ok {
 		// Only a complete ownership record can authorize removing a binding.
-		return bindingRecord{}, false, nil
+		// The caller warns before discarding this unverifiable record.
+		return parseUnverifiableRecord(value), true, nil
 	}
 	record.verified = true
 	return record, true, nil
+}
+
+func parseUnverifiableRecord(value string) bindingRecord {
+	parts := strings.Split(value, ":")
+	if len(parts) >= 2 {
+		table, key := parts[0], parts[1]
+		if parts[0] == bindingRecordVersion && len(parts) >= 3 {
+			table, key = parts[1], parts[2]
+			if decoded, err := base64.RawStdEncoding.DecodeString(parts[2]); err == nil && len(decoded) > 0 {
+				key = string(decoded)
+			}
+		}
+		return bindingRecord{table: table, key: key}
+	}
+	return bindingRecord{}
 }
 
 func decodeBindingRecord(value string) (bindingRecord, bool, error) {
@@ -136,22 +176,9 @@ func decodeBindingRecord(value string) (bindingRecord, bool, error) {
 	return bindingRecord{table: parts[1], key: string(key), line: string(line), verified: true}, true, nil
 }
 
-func encodeBindingRecord(table, key, line string) string {
-	return strings.Join([]string{
-		bindingRecordVersion,
-		table,
-		base64.RawStdEncoding.EncodeToString([]byte(key)),
-		base64.RawStdEncoding.EncodeToString([]byte(line)),
-	}, ":")
-}
-
-func (b *Backend) recordBinding(ctx context.Context, option, table, key, line string) error {
-	value := ""
-	if key != "" {
-		value = encodeBindingRecord(table, key, line)
-	}
-	if _, err := b.run(ctx, "set-option", "-g", option, value); err != nil {
-		return fmt.Errorf("record tmux binding: %w", err)
+func (b *Backend) unsetRecord(ctx context.Context, option string) error {
+	if _, err := b.run(ctx, "set-option", "-gu", option); err != nil {
+		return fmt.Errorf("delete tmux ownership record: %w", err)
 	}
 	return nil
 }

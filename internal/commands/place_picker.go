@@ -18,20 +18,7 @@ import (
 	"github.com/vieitesss/nexo/internal/remote"
 )
 
-const PlacePickerCommandName = "__place-picker"
-const pickerInlineEnv = "NEXO_PLACE_PICKER_INLINE"
-
-type placePickerCommand struct {
-	tab string
-}
-
-func init() {
-	registerBuiltin(func() Command { return placePickerCommand{} })
-}
-
-// The internal command is appended by cli when no user subcommand is present;
-// it is intentionally omitted from help output.
-func (placePickerCommand) Name() string { return PlacePickerCommandName }
+type placePickerCommand struct{}
 
 func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error {
 	if err := invocation.Selection.Require(); err != nil {
@@ -71,12 +58,6 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 				return err
 			}
 		}
-	}
-
-	// Herdr 0.9 exposes popup.close but no request that opens a popup. The
-	// absence of Popup deliberately selects the inline Bubble Tea path there.
-	if popup, ok := invocation.Adapter.(capabilities.Popup); ok && os.Getenv(pickerInlineEnv) != "1" {
-		return popup.ShowPopup(ctx, pickerCommand(string(invocation.Selection.Kind), invocation.ConfigPath, invocationTab(invocation)))
 	}
 
 	theme := picker.ThemeFromTerminal(ctx, picker.ThemeQuery{Reader: os.Stdin, Writer: os.Stdout}, 100*time.Millisecond)
@@ -407,31 +388,4 @@ func previewCommand(ctx context.Context, reader capabilities.ScreenReader, conta
 		}
 		return picker.PreviewBatch{Previews: previews}
 	}
-}
-
-func pickerCommand(kind, configPath, tab string) string {
-	binary := shellQuote(os.Args[0])
-	command := fmt.Sprintf("NEXO_PLACE_PICKER_INLINE=1 %s --backend=%s", binary, shellQuote(kind))
-	if configPath != "" {
-		command += " --config-file=" + shellQuote(configPath)
-	}
-	command += " tui"
-	if tab != "" {
-		command += " " + shellQuote(tab)
-	}
-	return command
-}
-
-func invocationTab(invocation Invocation) string {
-	if len(invocation.Args) == 1 {
-		return invocation.Args[0]
-	}
-	return "containers"
-}
-
-func shellQuote(value string) string {
-	if value == "" {
-		return "''"
-	}
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }

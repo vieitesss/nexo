@@ -23,11 +23,6 @@ func TestRegistryLeavesFeatureNamesAvailable(t *testing.T) {
 	if _, ok := registry.Lookup("remote"); !ok {
 		t.Fatal("Lookup(\"remote\") did not find the remote listing command")
 	}
-	for _, name := range registry.Names() {
-		if name == PlacePickerCommandName {
-			t.Fatal("internal place picker command leaked into Registry.Names")
-		}
-	}
 }
 
 type testCommand struct{ name string }

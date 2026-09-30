@@ -2,22 +2,10 @@ package commands
 
 import (
 	"context"
-	"os"
 	"testing"
 
-	"github.com/vieitesss/nexo/internal/backend"
-	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
 )
-
-type fakePopup struct {
-	command string
-}
-
-func (f *fakePopup) ShowPopup(_ context.Context, command string) error {
-	f.command = command
-	return nil
-}
 
 type fakeContainerActionsAdapter struct {
 	opened  string
@@ -71,22 +59,5 @@ func TestRemotePickerOpensDisplayedContainerName(t *testing.T) {
 	place := picker.Place{Machine: "devbox", ContainerID: "$1", ContainerName: "api"}
 	if got, want := containerOpenID(place), "api"; got != want {
 		t.Fatalf("container open target = %q, want displayed name %q", got, want)
-	}
-}
-
-func TestPlacePickerPassesBackendAndExplicitConfigToPopupChild(t *testing.T) {
-	popup := &fakePopup{}
-	command := placePickerCommand{}
-	if err := command.Run(context.Background(), Invocation{
-		Selection:  backend.Selection{Kind: backend.Tmux},
-		Config:     config.Config{},
-		ConfigPath: "/tmp/custom config.toml",
-		Adapter:    popup,
-	}); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	want := "NEXO_PLACE_PICKER_INLINE=1 '" + os.Args[0] + "' --backend='tmux' --config-file='/tmp/custom config.toml' tui 'containers'"
-	if popup.command != want {
-		t.Fatalf("popup command = %q, want exact argv %q", popup.command, want)
 	}
 }

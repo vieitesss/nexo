@@ -174,6 +174,10 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		Args:       options.Args,
 	}); err != nil {
 		writeError(stderr, err)
+		var usageErr commands.UsageError
+		if errors.As(err, &usageErr) {
+			return 2
+		}
 		return 1
 	}
 	return 0

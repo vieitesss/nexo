@@ -27,22 +27,21 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 	if tab == "agents" {
 		return runAgentPicker(ctx, invocation)
 	}
-	picker := placePickerCommand{tab: tab}
-	return picker.Run(ctx, invocation)
+	return (placePickerCommand{}).Run(ctx, invocation)
 }
 
 // tuiTab is deliberately the one routing seam for the tabbed TUI. The tabbed
 // implementation can replace this function without changing command dispatch.
 func tuiTab(ctx context.Context, invocation Invocation) (string, error) {
 	if len(invocation.Args) > 1 {
-		return "", fmt.Errorf("usage: nexo tui [agents|containers|projects]")
+		return "", UsageError{Err: fmt.Errorf("usage: nexo tui [agents|containers|projects]")}
 	}
 	if len(invocation.Args) == 1 {
 		switch invocation.Args[0] {
 		case "agents", "containers", "projects":
 			return invocation.Args[0], nil
 		default:
-			return "", fmt.Errorf("unknown tui tab %q", invocation.Args[0])
+			return "", UsageError{Err: fmt.Errorf("unknown tui tab %q", invocation.Args[0])}
 		}
 	}
 	source, ok := invocation.Adapter.(capabilities.AgentSource)
