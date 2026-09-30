@@ -15,6 +15,7 @@ type Container struct {
 	ActivePaneID string     `json:"active_pane_id,omitempty"`
 	Preview      string     `json:"preview,omitempty"`
 	Activity     *time.Time `json:"activity,omitempty"`
+	Proxy        bool       `json:"proxy,omitempty"`
 }
 
 // ContainerLister lists containers owned by the selected backend.

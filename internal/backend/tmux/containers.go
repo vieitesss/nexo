@@ -40,7 +40,8 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 		if len(fields) < 2 || fields[0] == "" || fields[1] == "" {
 			continue
 		}
-		if len(fields) >= 4 && strings.TrimSpace(fields[3]) != "" {
+		proxy := len(fields) >= 4 && strings.TrimSpace(fields[3]) != ""
+		if proxy {
 			continue
 		}
 		var activity *time.Time
@@ -60,6 +61,7 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 			Machine:      machine,
 			ActivePaneID: paneID,
 			Activity:     activity,
+			Proxy:        proxy,
 		})
 	}
 	return containers, nil

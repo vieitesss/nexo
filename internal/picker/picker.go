@@ -81,6 +81,7 @@ type Place struct {
 	ContainerName    string     `json:"container_name,omitempty"`
 	Preview          string     `json:"preview,omitempty"`
 	Activity         *time.Time `json:"activity,omitempty"`
+	Proxy            bool       `json:"proxy,omitempty"`
 	Payload          any        `json:"-"`
 	OpenAction       OpenAction `json:"-"`
 	Git              bool       `json:"git,omitempty"`
@@ -142,6 +143,7 @@ func ContainerPlaces(containers []capabilities.Container) []Place {
 			ContainerName:    container.Name,
 			Preview:          container.Preview,
 			Activity:         container.Activity,
+			Proxy:            container.Proxy,
 			Payload:          container,
 		})
 	}
