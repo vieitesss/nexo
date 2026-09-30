@@ -10,3 +10,7 @@ lint:
 
 build:
     go build ./cmd/nexo
+
+install: build
+    rm -rf ~/.local/bin/nexo | true
+    cp nexo ~/.local/bin/nexo
