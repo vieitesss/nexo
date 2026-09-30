@@ -137,6 +137,25 @@ func TestAgentBatchCompatibility(t *testing.T) {
 	}
 }
 
+func TestRemoteAgentFocusReferenceKeepsMachineAndBackend(t *testing.T) {
+	model := NewModel(context.Background(), Deps{Agents: []capabilities.Agent{{PaneID: "%7", Target: "local:1", Harness: "pi", State: "working"}}}, AgentsTab)
+	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Backend: "herdr", Agents: []capabilities.Agent{{PaneID: "%7", Target: "opaque", ContainerID: "remote", Container: "remote", Harness: "claude", State: "working"}}})
+	ids := model.Rows()
+	for _, id := range ids {
+		if strings.HasPrefix(id, "agent:dev:") {
+			model.cursor = id
+		}
+	}
+	if !strings.HasPrefix(model.cursor, "agent:dev:") {
+		t.Fatalf("remote agent rows = %v", ids)
+	}
+	accepted, _ := model.accept()
+	model = accepted.(Model)
+	if model.selectedAgentRef.Machine != "dev" || model.selectedAgentRef.Backend != "herdr" || model.selectedAgentRef.Agent.PaneID != "%7" {
+		t.Fatalf("agent ref = %#v", model.selectedAgentRef)
+	}
+}
+
 func TestRemoteAgentIdentityIncludesMachine(t *testing.T) {
 	model := NewModel(context.Background(), Deps{Agents: []capabilities.Agent{{PaneID: "%1", Target: "local:1", Harness: "pi", State: "working"}}}, AgentsTab)
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%1", Target: "raw-target", Harness: "claude", State: "working"}}})
@@ -186,27 +205,11 @@ func TestLongSearchAndRenameKeepCursorVisible(t *testing.T) {
 	}
 }
 
-func TestContainerTextIsIndentedUnderMachine(t *testing.T) {
-	model := NewModel(context.Background(), richDeps(), ContainersTab)
-	model.SetSize(100, 10)
-	for _, line := range strings.Split(model.View(), "\n") {
-		plain := shell.Plain(line)
-		if strings.Contains(plain, "one") && !strings.Contains(plain, "matches") {
-			if !strings.HasPrefix(plain, "▌   ") {
-				t.Fatalf("container gutter is not indented: %q", plain)
-			}
-			return
-		}
-	}
-	t.Fatal("container row was not rendered")
-}
-
-func TestPreviewNormalizesEmptyMachine(t *testing.T) {
-	model := NewModel(context.Background(), Deps{Containers: []capabilities.Container{{ID: "one", Name: "one"}}}, ContainersTab)
+func TestPreviewNeverAppearsInContainersTab(t *testing.T) {
+	model := NewModel(context.Background(), Deps{Containers: []capabilities.Container{{ID: "one", Name: "one", Preview: "preview loaded"}}}, ContainersTab)
 	model.SetSize(80, 8)
-	model = updateModel(t, model, picker.PreviewBatch{Previews: map[picker.ContainerRef]string{{Machine: picker.LocalMachine(), ID: "one"}: "preview loaded"}})
-	if !strings.Contains(shell.Plain(model.View()), "preview loaded") {
-		t.Fatalf("preview was not applied: %q", model.View())
+	if strings.Contains(shell.Plain(model.View()), "preview loaded") {
+		t.Fatalf("preview leaked into container row: %q", model.View())
 	}
 }
 

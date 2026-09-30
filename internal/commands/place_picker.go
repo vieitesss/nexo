@@ -192,7 +192,7 @@ func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
 					return openRemoteContainerWithResolver(openCtx, invocation, machine, containerOpenID(place), kind)
 				}
 			}
-			return picker.RemoteBatch{Machine: result.Machine, Places: places, Agents: result.Agents, Error: result.Error}
+			return picker.RemoteBatch{Machine: result.Machine, Backend: string(result.Kind), Places: places, Agents: result.Agents, Error: result.Error}
 		})
 	}
 	return commands

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 )
@@ -23,7 +25,7 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 	if b == nil || b.Runner == nil {
 		return nil, errors.New("tmux container lister requires a command runner")
 	}
-	output, err := b.run(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}")
+	output, err := b.run(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_activity}\t#{@nexo-proxy}")
 	if err != nil {
 		if isNoServer(err) {
 			return []capabilities.Container{}, nil
@@ -34,9 +36,19 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	containers := make([]capabilities.Container, 0, len(lines))
 	for _, line := range lines {
-		fields := strings.SplitN(strings.TrimSpace(line), "\t", 2)
-		if len(fields) != 2 || fields[0] == "" || fields[1] == "" {
+		fields := strings.Split(strings.TrimSpace(line), "\t")
+		if len(fields) < 2 || fields[0] == "" || fields[1] == "" {
 			continue
+		}
+		if len(fields) >= 4 && strings.TrimSpace(fields[3]) != "" {
+			continue
+		}
+		var activity *time.Time
+		if len(fields) >= 3 {
+			if seconds, parseErr := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 64); parseErr == nil && seconds > 0 {
+				value := time.Unix(seconds, 0)
+				activity = &value
+			}
 		}
 		paneID, paneErr := b.activePane(ctx, fields[0])
 		if paneErr != nil {
@@ -47,6 +59,7 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 			Name:         fields[1],
 			Machine:      machine,
 			ActivePaneID: paneID,
+			Activity:     activity,
 		})
 	}
 	return containers, nil

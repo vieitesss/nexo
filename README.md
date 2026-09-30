@@ -221,7 +221,7 @@ nexo --help
 | `nexo open PATH` | Open a discovered project candidate; Herdr also accepts `--workspace-id ID`. |
 | `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, or `close [MACHINE/CONTAINER]`. |
 | `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch` or `--add-parent`. |
-| `nexo tmux init` | Install tmux focus hooks and the agent watcher, and migrate old nexo-owned bindings (tmux backend only). |
+| `nexo tmux init` | Install tmux focus hooks and the agent watcher (tmux backend only). |
 
 Examples:
 
@@ -260,14 +260,16 @@ statuses, and safe verification.
 
 | Key | Place picker | Agent navigator |
 | --- | --- | --- |
-| `↑` / `↓`, `Ctrl-K` / `Ctrl-J` | Move | Move |
-| `Enter` | Expand a group or open a place | Focus the selected agent pane |
-| `→` / `Space` | Expand a group | — |
-| `←` | Fold a group | — |
-| `Esc` / `Ctrl-C` | Cancel | Cancel |
-| Type, `Backspace` / `Delete` | Fuzzy search, erase search | Fuzzy search, erase search |
-| `Tab` / `Shift-Tab` | Mark next / previous container | — |
-| `r` | Rename the current container when the search is empty | — |
+| `Tab` / `Shift-Tab` | Switch tabs | Switch tabs |
+| `F1` / `F2` / `F3` | Jump to Agents / Containers / Projects | Jump to Agents / Containers / Projects |
+| `↑` / `↓`, `Ctrl-N` / `Ctrl-P` | Move | Move |
+| `Enter` | Open the selected item | Focus the selected agent |
+| `←` / `→` | Fold project groups and linked worktrees | — |
+| `Ctrl-T` | Mark the selected container | — |
+| `Ctrl-X` | Kill marked or selected containers after confirmation | — |
+| `Ctrl-R` | Rename the selected container | — |
+| `Esc` / `Ctrl-C` | Clear search, then close / close | Clear search, then close / close |
+| Printable keys, `Backspace` / `Delete` | Fuzzy search, erase search | Fuzzy search, erase search |
 | `x` (or `d`), when the search is empty | Confirm batch close with `y`; cancel with `n` or `Esc` | — |
 | `q` | Quit when the search is empty | — |
 

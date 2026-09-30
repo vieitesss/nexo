@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/projects"
@@ -20,8 +21,6 @@ const (
 	ProjectKind PlaceKind = "project"
 	// ContainerKind is an open local (or future remote) container.
 	ContainerKind PlaceKind = "container"
-	// NewContainerKind is the per-machine create affordance.
-	NewContainerKind PlaceKind = "new-container"
 )
 
 // Decoration is an optional piece of metadata supplied by a future place
@@ -35,9 +34,7 @@ type Decoration struct {
 type DecorationStyle string
 
 const (
-	DecorationMuted  DecorationStyle = "muted"
-	DecorationNormal DecorationStyle = "normal"
-	DecorationAccent DecorationStyle = "accent"
+	DecorationMuted DecorationStyle = "muted"
 )
 
 // OpenAction is an optional action owned by a place source. Project places
@@ -58,6 +55,7 @@ type PreviewBatch struct {
 // machine visible without turning a partial picker result into a failure.
 type RemoteBatch struct {
 	Machine string
+	Backend string
 	Places  []Place
 	Agents  []capabilities.Agent
 	Error   string
@@ -82,6 +80,7 @@ type Place struct {
 	ContainerID      string     `json:"container_id,omitempty"`
 	ContainerName    string     `json:"container_name,omitempty"`
 	Preview          string     `json:"preview,omitempty"`
+	Activity         *time.Time `json:"activity,omitempty"`
 	Payload          any        `json:"-"`
 	OpenAction       OpenAction `json:"-"`
 	Git              bool       `json:"git,omitempty"`
@@ -123,15 +122,6 @@ func LocalMachine() string {
 	return name
 }
 
-// MachinePlace adds the create affordance for a machine, including one with
-// no currently open containers.
-func MachinePlace(machine string) Place {
-	if strings.TrimSpace(machine) == "" {
-		machine = LocalMachine()
-	}
-	return Place{Kind: NewContainerKind, Group: machine, Machine: machine, SearchText: "+ new container", DisplayRemainder: "+ new container…"}
-}
-
 // ContainerPlaces converts backend containers to machine-grouped picker
 // places. The machine field is deliberately separate from the group so remote
 // sources can add more machines without changing the row model.
@@ -151,28 +141,9 @@ func ContainerPlaces(containers []capabilities.Container) []Place {
 			ContainerID:      container.ID,
 			ContainerName:    container.Name,
 			Preview:          container.Preview,
+			Activity:         container.Activity,
 			Payload:          container,
 		})
-	}
-	return places
-}
-
-// MachinePlaces returns one create affordance per machine represented by the
-// containers, always including the local machine for creating a new local
-// container.
-func MachinePlaces(containers []capabilities.Container) []Place {
-	local := LocalMachine()
-	machines := map[string]bool{local: true}
-	places := []Place{MachinePlace(local)}
-	for _, container := range containers {
-		machine := container.Machine
-		if machine == "" {
-			machine = local
-		}
-		if !machines[machine] {
-			machines[machine] = true
-			places = append(places, MachinePlace(machine))
-		}
 	}
 	return places
 }
@@ -233,7 +204,7 @@ type GroupKey struct {
 
 // PlaceGroupKey returns the grouping identity used by scripted listings.
 func PlaceGroupKey(place Place) GroupKey {
-	if place.Kind == ContainerKind || place.Kind == NewContainerKind {
+	if place.Kind == ContainerKind {
 		machine := place.Machine
 		if machine == "" {
 			machine = place.Group

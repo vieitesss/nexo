@@ -14,10 +14,12 @@ nexo does not install multiplexer key bindings. Users bind the command in their
 mux configuration, including popup geometry and border choices. Backend
 adapters provide popup entry points and native status integration only.
 
-The Herdr adapter provides one action and popup pane for the default TUI and
-one for each explicit tab. The tmux adapter retains hooks and the agent
-watcher, and removes bindings previously recorded by nexo only when their
-current command is byte-identical to the ownership record.
+The Herdr adapter provides one action and pane for the default TUI and one for
+each explicit tab. The tmux adapter retains hooks and the agent watcher.
+
+The tabbed TUI binds: Tab/Shift-Tab and F1-F3 for tabs, arrows/Ctrl-N/Ctrl-P
+for movement, Enter to open, Ctrl-T to mark, Ctrl-X to kill, Ctrl-R to rename,
+and Esc/Ctrl-C to clear or close. Every printable key is search input.
 
 ## Supersedes
 

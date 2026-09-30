@@ -33,10 +33,17 @@ const (
 	ProjectsTab   Tab = "projects"
 )
 
+type AgentRef struct {
+	Agent   capabilities.Agent
+	Machine string
+	Backend string
+}
+
 // Deps is the deliberately small seam between the TUI and command wiring.
 // Places and agents are snapshots; optional commands keep slow discovery out
 // of Update and let a caller retain its backend-specific command runner.
 type Deps struct {
+	Backend    string
 	Projects   []picker.Place
 	Containers []capabilities.Container
 	Agents     []capabilities.Agent
@@ -50,13 +57,14 @@ type Deps struct {
 
 	OpenProject     func(context.Context, picker.Place) error
 	OpenContainer   func(context.Context, picker.Place) error
-	FocusAgent      func(context.Context, capabilities.Agent) error
+	FocusAgent      func(context.Context, AgentRef) error
 	KillContainers  func(context.Context, []picker.ContainerRef) error
 	RenameContainer func(context.Context, picker.ContainerRef, string) error
 
-	Input  io.Reader
-	Output io.Writer
-	Now    func() time.Time
+	Input      io.Reader
+	Output     io.Writer
+	Now        func() time.Time
+	AgentError error
 }
 
 // Run starts the full-screen TUI and executes the accepted action through the
@@ -89,6 +97,13 @@ func Run(ctx context.Context, deps Deps, tab Tab) error {
 	return final.execute(ctx)
 }
 
+func gitConcurrency(loader picker.GitLoader) int {
+	if configured, ok := loader.(interface{ GitConcurrency() int }); ok && configured.GitConcurrency() > 0 {
+		return configured.GitConcurrency()
+	}
+	return 4
+}
+
 func validTab(tab Tab) bool {
 	return tab == AgentsTab || tab == ContainersTab || tab == ProjectsTab
 }
@@ -112,6 +127,7 @@ const (
 	groupRow
 	itemRow
 	newContainerRow
+	separatorRow
 )
 
 type row struct {
@@ -129,10 +145,12 @@ type row struct {
 	place        picker.Place
 	agent        capabilities.Agent
 	agentMachine string
+	agentBackend string
 	expanded     bool
 	foldable     bool
 	remoteErr    string
 	loading      bool
+	activity     *time.Time
 }
 
 type agentsMsg struct {
@@ -143,6 +161,7 @@ type agentsMsg struct {
 type agentRecord struct {
 	agent   capabilities.Agent
 	machine string
+	backend string
 }
 
 type refreshTickMsg struct{}
@@ -175,20 +194,22 @@ type Model struct {
 	gitErrors       map[string]string
 	refreshInFlight *bool
 	refreshErr      error
+	gitSlots        chan struct{}
 
-	confirmKill     bool
-	killReady       bool
-	killTargets     []picker.ContainerRef
-	renameMode      bool
-	renameInput     []rune
-	renameReady     bool
-	renameTarget    picker.ContainerRef
-	renameTargetSet bool
-	selectedPlace   *picker.Place
-	selectedAgent   *capabilities.Agent
-	cancelled       bool
-	toast           string
-	now             func() time.Time
+	confirmKill      bool
+	killReady        bool
+	killTargets      []picker.ContainerRef
+	renameMode       bool
+	renameInput      []rune
+	renameReady      bool
+	renameTarget     picker.ContainerRef
+	renameTargetSet  bool
+	selectedPlace    *picker.Place
+	selectedAgent    *capabilities.Agent
+	selectedAgentRef AgentRef
+	cancelled        bool
+	toast            string
+	now              func() time.Time
 }
 
 // NewModel creates a model with the requested opening tab. It does not do I/O.
@@ -212,8 +233,8 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	m := Model{
 		ctx: ctx, deps: deps, tab: tab, agents: newAgentRecords(deps.Agents, ""),
 		folded: make(map[string]bool), expanded: make(map[string]bool), marked: make(map[picker.ContainerRef]bool),
-		groupErrors: make(map[string]string), gitErrors: make(map[string]string), now: now,
-		remoteMachines: append([]string(nil), deps.RemoteMachines...), remoteLoaded: make(map[string]bool), refreshInFlight: new(bool),
+		groupErrors: make(map[string]string), gitErrors: make(map[string]string), now: now, refreshErr: deps.AgentError,
+		remoteMachines: append([]string(nil), deps.RemoteMachines...), remoteLoaded: make(map[string]bool), refreshInFlight: new(bool), gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
 	}
 	for _, machine := range deps.RemoteMachines {
 		m.remoteLoaded[machine] = false
@@ -238,12 +259,16 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, m.deps.PreviewCommand)
 	}
 	if m.deps.GitLoader != nil {
+		seenGit := map[string]bool{}
 		for _, place := range m.projectPlaces() {
-			if !place.Git || place.Path == "" {
+			if !place.Git || place.Path == "" || seenGit[place.Path] {
 				continue
 			}
+			seenGit[place.Path] = true
 			place := place
 			cmds = append(cmds, func() tea.Msg {
+				m.gitSlots <- struct{}{}
+				defer func() { <-m.gitSlots }()
 				value, err := m.deps.GitLoader.Load(m.ctx, place.Path)
 				return picker.GitContextMsg{Path: place.Path, Context: value, Err: err}
 			})
@@ -369,11 +394,11 @@ func (m Model) execute(ctx context.Context) error {
 			return m.deps.OpenContainer(ctx, place)
 		}
 	}
-	if agent, ok := m.SelectedAgent(); ok {
+	if _, ok := m.SelectedAgent(); ok {
 		if m.deps.FocusAgent == nil {
 			return errors.New("agent focusing is not supported")
 		}
-		return m.deps.FocusAgent(ctx, agent)
+		return m.deps.FocusAgent(ctx, m.selectedAgentRef)
 	}
 	return nil
 }
@@ -578,7 +603,7 @@ func (m Model) agentRows() []row {
 			continue
 		}
 		agent := record.agent
-		rows = append(rows, row{id: agentIdentity(record), kind: itemRow, itemKind: "agent", label: agent.Harness, group: agent.Container, cursorable: true, matched: true, score: match.Score, agent: agent, agentMachine: record.machine})
+		rows = append(rows, row{id: agentIdentity(record), kind: itemRow, itemKind: "agent", label: agent.Harness, group: agent.Container, cursorable: true, matched: true, score: match.Score, agent: agent, agentMachine: record.machine, agentBackend: record.backend})
 	}
 	return rows
 }
@@ -620,7 +645,8 @@ func (m Model) machineNames() []string {
 
 func (m Model) containerRows() []row {
 	rows := []row{}
-	for _, machine := range m.machineNames() {
+	machines := m.machineNames()
+	for machineIndex, machine := range machines {
 		children := []row{}
 		for _, place := range m.containerPlaces() {
 			if place.Machine != machine {
@@ -630,24 +656,63 @@ func (m Model) containerRows() []row {
 			if !ok {
 				continue
 			}
-			children = append(children, row{id: containerIdentity(place), kind: itemRow, itemKind: "container", label: place.ContainerName, machine: machine, group: machine, depth: 2, cursorable: true, matched: true, score: match.Score, place: place})
+			children = append(children, row{id: containerIdentity(place), kind: itemRow, itemKind: "container", label: place.ContainerName, machine: machine, group: machine, depth: 2, cursorable: true, matched: true, score: match.Score, place: place, activity: place.Activity})
 		}
-		sort.SliceStable(children, func(i, j int) bool { return children[i].score > children[j].score })
-		// A machine query keeps its header visible even if no child matches.
-		_, machineMatch := picker.Rank(string(m.query), machine)
+		sort.SliceStable(children, func(i, j int) bool { return m.containerBefore(children[i], children[j]) })
+		_, machineMatch := picker.Rank(string(m.query), sanitize(machine))
 		remoteErr := m.groupErrors[machine]
 		isRemote := contains(m.remoteMachines, machine)
 		if len(children) == 0 && !machineMatch && remoteErr == "" && !isRemote && string(m.query) != "" {
 			continue
 		}
-		rows = append(rows, row{id: "machine:" + machine, kind: machineRow, label: machine, group: machine, machine: machine, count: len(children), cursorable: true, remoteErr: remoteErr, loading: isRemote && !m.remoteLoaded[machine]})
+		rows = append(rows, row{id: "machine:" + machine, kind: machineRow, label: shortenMachine(machine), group: machine, machine: machine, count: len(children), cursorable: true, remoteErr: remoteErr, loading: isRemote && !m.remoteLoaded[machine]})
 		rows = append(rows, children...)
-		// The affordance stays one line and cannot be opened or marked.
-		if string(m.query) == "" || machineMatch {
-			rows = append(rows, row{id: "new:" + machine, kind: newContainerRow, label: "+ new container…", group: machine, machine: machine, depth: 1})
+		if machineIndex < len(machines)-1 {
+			rows = append(rows, row{kind: separatorRow})
 		}
 	}
+	if string(m.query) != "" {
+		rows = append(rows, row{id: "new:local", kind: newContainerRow, label: "+ new container…", depth: 1})
+	}
 	return rows
+}
+
+func (m Model) containerBefore(left, right row) bool {
+	la, ra := m.containerAgents(left.place), m.containerAgents(right.place)
+	lu, ru := oldestUnseen(la), oldestUnseen(ra)
+	if !lu.IsZero() || !ru.IsZero() {
+		if lu.IsZero() {
+			return false
+		}
+		if ru.IsZero() {
+			return true
+		}
+		return lu.Before(ru)
+	}
+	if left.activity == nil || right.activity == nil {
+		if left.activity == nil && right.activity == nil {
+			return left.label < right.label
+		}
+		return right.activity != nil
+	}
+	return left.activity.After(*right.activity)
+}
+func (m Model) containerAgents(place picker.Place) []capabilities.Agent { return m.agentsFor(place) }
+func oldestUnseen(agents []capabilities.Agent) time.Time {
+	var oldest time.Time
+	for _, agent := range agents {
+		if strings.EqualFold(sanitize(agent.State), "stopped") && !agent.Seen && agent.StoppedSince != nil && (oldest.IsZero() || agent.StoppedSince.Before(oldest)) {
+			oldest = *agent.StoppedSince
+		}
+	}
+	return oldest
+}
+func shortenMachine(machine string) string {
+	machine = sanitize(machine)
+	if index := strings.IndexByte(machine, '.'); index >= 0 {
+		machine = machine[:index]
+	}
+	return strings.TrimSuffix(machine, ".local")
 }
 
 func containerIdentity(place picker.Place) string {
@@ -986,7 +1051,7 @@ func (m *Model) applyRemote(msg picker.RemoteBatch) {
 		}
 	}
 	for _, agent := range msg.Agents {
-		updatedAgents = append(updatedAgents, agentRecord{agent: agent, machine: msg.Machine})
+		updatedAgents = append(updatedAgents, agentRecord{agent: agent, machine: msg.Machine, backend: msg.Backend})
 	}
 	m.remoteAgents = updatedAgents
 	m.rebuild(false)
@@ -1227,6 +1292,7 @@ func (m Model) accept() (tea.Model, tea.Cmd) {
 	if current.itemKind == "agent" {
 		value := current.agent
 		m.selectedAgent = &value
+		m.selectedAgentRef = AgentRef{Agent: value, Machine: current.agentMachine, Backend: current.agentBackend}
 	} else {
 		value := current.place
 		m.selectedPlace = &value
@@ -1364,9 +1430,14 @@ func (m Model) rowText(row row) (string, string) {
 		return marker + strings.Repeat("  ", row.depth) + bold().Render(arrow+"  "+sanitize(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
 	case newContainerRow:
 		return "  " + strings.Repeat("  ", row.depth) + muted().Render(sanitize(row.label)), ""
+	case separatorRow:
+		return "", ""
 	case itemRow:
 		if row.itemKind == "agent" {
 			return m.agentText(row, marker, secondaryMarker)
+		}
+		if row.itemKind == "container" {
+			return m.containerText(row, marker)
 		}
 		return m.placeText(row, marker, secondaryMarker)
 	default:
@@ -1405,6 +1476,59 @@ func displayContainer(a capabilities.Agent, machine string) string {
 	}
 	return a.Container
 }
+func (m Model) containerText(row row, marker string) (string, string) {
+	name := sanitize(row.place.ContainerName)
+	agents := m.containerAgents(row.place)
+	full := make([]string, 0, len(agents))
+	dots := ""
+	for _, agent := range agents {
+		state := strings.ToLower(strings.TrimSpace(sanitize(agent.State)))
+		age := ""
+		if state == "stopped" && agent.StoppedSince != nil {
+			age = " " + stoppedAge(m.now(), *agent.StoppedSince)
+		}
+		full = append(full, stateColor(agent).Render("●")+" "+muted().Render(sanitize(agent.Harness)+" "+state+age))
+		dots += stateColor(agent).Render("●")
+	}
+	activity := ""
+	if row.activity != nil {
+		activity = activityAge(m.now(), *row.activity)
+	}
+	text := name
+	lineWidth := max(1, m.width-shell.StringWidth(marker))
+	join := func(pills string, age string) string {
+		value := text
+		if pills != "" {
+			value += "  " + pills
+		}
+		if age != "" {
+			value += strings.Repeat(" ", max(2, lineWidth-shell.StringWidth(value)-shell.StringWidth(age))) + muted().Render(age)
+		}
+		return value
+	}
+	pills := strings.Join(full, "  ")
+	line := join(pills, activity)
+	if shell.StringWidth(line)+shell.StringWidth(marker) > m.width {
+		line = join(dots, activity)
+	}
+	if shell.StringWidth(line)+shell.StringWidth(marker) > m.width {
+		line = join("", activity)
+	}
+	if shell.StringWidth(line)+shell.StringWidth(marker) > m.width {
+		line = join("", "")
+	}
+	available := max(1, m.width-shell.StringWidth(marker))
+	if shell.StringWidth(line) > available {
+		line = shell.Truncate(line, available, "…")
+	}
+	if row.id == m.cursor {
+		line = bold().Render(line)
+	}
+	return marker + line, ""
+}
+
+func activityAge(now, activity time.Time) string { return stoppedAge(now, activity) }
+
 func (m Model) placeText(row row, marker, secondaryMarker string) (string, string) {
 	place := row.place
 	name := highlightText(projectLabel(place), string(m.query))

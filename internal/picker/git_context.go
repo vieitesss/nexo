@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -25,27 +24,6 @@ type GitContext struct {
 	Behind      int
 	CommonDir   string
 	PrimaryPath string
-}
-
-// Decoration returns the compact text used beside a place. Empty values are
-// deliberately omitted so an unknown or clean value does not add noise.
-func (g GitContext) Decoration() Decoration {
-	parts := make([]string, 0, 4)
-	if g.Identity != "" {
-		parts = append(parts, g.Identity)
-	}
-	if g.Adds != 0 || g.Deletes != 0 {
-		parts = append(parts, fmt.Sprintf("+%d -%d", g.Adds, g.Deletes))
-	} else if g.Dirty {
-		parts = append(parts, "*")
-	}
-	if g.Behind > 0 {
-		parts = append(parts, fmt.Sprintf("↓%d", g.Behind))
-	}
-	if g.Ahead > 0 {
-		parts = append(parts, fmt.Sprintf("↑%d", g.Ahead))
-	}
-	return Decoration{Text: strings.Join(parts, " "), Style: DecorationMuted}
 }
 
 // GitLoader loads one repository's context. Implementations must not block

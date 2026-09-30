@@ -28,25 +28,43 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 	if configurable, ok := invocation.Adapter.(interface{ ConfigureAgents(config.AgentsConfig) }); ok {
 		configurable.ConfigureAgents(invocation.Config.Agents)
 	}
-	tab, err := tuiTab(ctx, invocation)
+	var initial []capabilities.Agent
+	var initialErr error
+	var tab string
+	var err error
+	if len(invocation.Args) == 0 {
+		if source, ok := invocation.Adapter.(capabilities.AgentSource); ok {
+			initial, initialErr = source.ListAgents(ctx)
+			if initialErr != nil {
+				initial = []capabilities.Agent{}
+				tab = string(tui.ContainersTab)
+			} else {
+				tab = string(tui.DefaultTab(initial))
+			}
+		} else {
+			tab = string(tui.ContainersTab)
+		}
+	} else {
+		tab, err = tuiTab(ctx, invocation)
+	}
 	if err != nil {
 		return err
 	}
-	deps, err := tuiDependencies(ctx, invocation, tab)
+	deps, err := tuiDependencies(ctx, invocation, tab, initial, initialErr)
 	if err != nil {
 		return err
 	}
 	return runTabbedTUI(ctx, deps, tui.Tab(tab))
 }
 
-func tuiDependencies(ctx context.Context, invocation Invocation, tab string) (tui.Deps, error) {
+func tuiDependencies(ctx context.Context, invocation Invocation, tab string, initial []capabilities.Agent, initialErr error) (tui.Deps, error) {
 	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
 	for _, warning := range discovery.Warnings {
 		if invocation.Stderr != nil {
 			_, _ = fmt.Fprintf(invocation.Stderr, "nexo: warning: %s\n", warning)
 		}
 	}
-	deps := tui.Deps{Projects: picker.ProjectPlaces(discovery.Candidates), Input: invocation.Stdin, Output: invocation.Stdout}
+	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Projects: picker.ProjectPlaces(discovery.Candidates), Input: invocation.Stdin, Output: invocation.Stdout}
 	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
 		containers, err := lister.ListContainers(ctx)
 		if err != nil {
@@ -59,11 +77,15 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string) (tu
 	}
 	if source, ok := invocation.Adapter.(capabilities.AgentSource); ok {
 		deps.AgentSource = source
-		agents, err := source.ListAgents(ctx)
-		if err != nil && tab == "agents" {
-			return tui.Deps{}, fmt.Errorf("list agents: %w", err)
+		deps.Agents = initial
+		if initial == nil {
+			agents, listErr := source.ListAgents(ctx)
+			if listErr != nil {
+				deps.AgentError = listErr
+			} else {
+				deps.Agents = agents
+			}
 		}
-		deps.Agents = agents
 		cfg := invocation.Config.Agents.WithDefaults()
 		deps.AgentRefreshInterval = time.Duration(cfg.PollInterval) * time.Second
 	}
@@ -129,12 +151,23 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string) (tu
 		}
 		return nil
 	}
-	deps.FocusAgent = func(focusCtx context.Context, agent capabilities.Agent) error {
+	deps.FocusAgent = func(focusCtx context.Context, ref tui.AgentRef) error {
+		if ref.Machine != "" && ref.Machine != picker.LocalMachine() {
+			actions, resolveErr := resolver.ResolveContainerActions(focusCtx, ref.Machine)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			id := ref.Agent.ContainerID
+			if id == "" {
+				id = ref.Agent.Container
+			}
+			return actions.OpenContainer(focusCtx, id)
+		}
 		focuser, ok := invocation.Adapter.(capabilities.PaneFocuser)
 		if !ok {
 			return errors.New("selected backend does not support focusing panes")
 		}
-		return focuser.FocusPane(focusCtx, agent.PaneID)
+		return focuser.FocusPane(focusCtx, ref.Agent.PaneID)
 	}
 	return deps, nil
 }
