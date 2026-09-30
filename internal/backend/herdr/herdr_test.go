@@ -66,6 +66,20 @@ func TestListContainersUsesWorkspaceAndFocusedPane(t *testing.T) {
 	}
 }
 
+func TestListContainersOmitsMarkedProxyWorkspaces(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list":               []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"normal","label":"renamed"},{"workspace_id":"proxy","label":"also-renamed","tokens":{"nexo-proxy":"dev/api"}}]}}`),
+		"pane list --workspace normal": []byte(`{"result":{"type":"pane_list","panes":[]}}`),
+	}}
+	containers, err := New(runner).ListContainers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(containers) != 1 || containers[0].ID != "normal" || containers[0].Proxy {
+		t.Fatalf("containers = %#v, want only unmarked workspace", containers)
+	}
+}
+
 func TestContainerActionsUseNativeHerdrCommands(t *testing.T) {
 	runner := &fakeRunner{}
 	backend := New(runner)
