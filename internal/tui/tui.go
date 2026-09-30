@@ -428,18 +428,14 @@ func (m *Model) SetSize(width, height int) {
 // SetToast displays a status message in place of the normal footer hints.
 func (m *Model) SetToast(text string) { m.toast = text }
 
-// SetQuery is useful to embedding callers and model tests. A changed query
-// always selects the first matching item, never a group or machine header.
+// SetQuery is useful to embedding callers and model tests. Entering a query
+// selects its best match; refining one keeps the current identity when it
+// still matches. Query changes do not alter the saved fold state.
 func (m *Model) SetQuery(query string) {
+	wasEmpty := len(m.query) == 0
 	m.query = []rune(query)
-	m.resetSearchFolds()
+	m.forceFirst = wasEmpty && len(m.query) > 0
 	m.rebuild(false)
-}
-
-func (m *Model) resetSearchFolds() {
-	m.folded = make(map[string]bool)
-	m.expanded = make(map[string]bool)
-	m.forceFirst = true
 }
 
 func (m *Model) rebuild(force bool) {
@@ -871,8 +867,11 @@ func (m Model) projectRows() []row {
 			}
 		}
 		for _, root := range roots {
-			rows = append(rows, projectRow(root, group, 0, "", true))
-			rows = append(rows, m.projectChildRows(root, groupPlaces, group, "")...)
+			project := m.projectRow(root, group, 0, "", true, groupPlaces)
+			rows = append(rows, project)
+			if project.expanded {
+				rows = append(rows, m.projectChildRows(root, groupPlaces, group)...)
+			}
 		}
 	}
 	return rows
@@ -913,12 +912,17 @@ func projectMatchBefore(left, right row) bool {
 	return left.label < right.label
 }
 
-func projectRow(place picker.Place, group string, depth int, treePrefix string, cursorable bool) row {
+func (m Model) projectRow(place picker.Place, group string, depth int, treePrefix string, cursorable bool, all []picker.Place) row {
 	match, _ := picker.Rank("", projectLabel(place))
-	return row{id: projectIdentity(place), kind: itemRow, itemKind: "project", label: projectLabel(place), group: group, depth: depth, treePrefix: treePrefix, cursorable: cursorable, matched: true, score: match.Score, place: place}
+	children := m.children(place, all)
+	expanded := len(children) == 0 || !m.folded[projectIdentity(place)]
+	if m.expanded[projectIdentity(place)] {
+		expanded = true
+	}
+	return row{id: projectIdentity(place), kind: itemRow, itemKind: "project", label: projectLabel(place), group: group, depth: depth, count: len(children), cursorable: cursorable, matched: true, score: match.Score, place: place, expanded: expanded, foldable: len(children) > 0, treePrefix: treePrefix}
 }
 
-func (m Model) projectChildRows(parent picker.Place, all []picker.Place, group, parentPrefix string) []row {
+func (m Model) projectChildRows(parent picker.Place, all []picker.Place, group string) []row {
 	children := m.children(parent, all)
 	rows := make([]row, 0, len(children))
 	for index, child := range children {
@@ -926,8 +930,11 @@ func (m Model) projectChildRows(parent picker.Place, all []picker.Place, group, 
 		if index == len(children)-1 {
 			prefix = "└ "
 		}
-		rows = append(rows, projectRow(child, group, 1, prefix, true))
-		rows = append(rows, m.projectChildRows(child, all, group, prefix)...)
+		project := m.projectRow(child, group, 1, prefix, true, all)
+		rows = append(rows, project)
+		if project.expanded {
+			rows = append(rows, m.projectChildRows(child, all, group)...)
+		}
 	}
 	return rows
 }
@@ -1226,9 +1233,7 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case tea.KeyEsc:
 		if len(m.query) > 0 {
-			m.query = nil
-			m.resetSearchFolds()
-			m.rebuild(false)
+			m.SetQuery("")
 			return m, nil
 		}
 		m.cancelled = true
@@ -1271,9 +1276,7 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyBackspace, tea.KeyDelete:
 		if len(m.query) > 0 {
-			m.query = m.query[:len(m.query)-1]
-			m.resetSearchFolds()
-			m.rebuild(false)
+			m.SetQuery(string(m.query[:len(m.query)-1]))
 		}
 		return m, nil
 	case tea.KeyUp:
@@ -1304,15 +1307,12 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.accept()
 	case tea.KeyRunes:
 		if len(msg.Runes) > 0 {
-			m.query = append(m.query, msg.Runes...)
-			m.resetSearchFolds()
-			m.rebuild(false)
+			query := append(append([]rune(nil), m.query...), msg.Runes...)
+			m.SetQuery(string(query))
 		}
 		return m, nil
 	case tea.KeySpace:
-		m.query = append(m.query, ' ')
-		m.resetSearchFolds()
-		m.rebuild(false)
+		m.SetQuery(string(append(append([]rune(nil), m.query...), ' ')))
 		return m, nil
 	}
 	if msg.String() == "shift+tab" {
@@ -1533,7 +1533,6 @@ func (m Model) rowText(row row) (string, string) {
 	// Secondary agent details may occupy a second line, but the selection
 	// accent belongs to the row's first line only. This keeps its height
 	// constant while moving across every tab.
-	secondaryMarker := "  "
 	switch row.kind {
 	case machineRow:
 		value := strings.Repeat("  ", row.depth) + bold().Render(highlightText(sanitize(row.label), string(m.query))) + muted().Render(fmt.Sprintf("  %d", row.count))
@@ -1555,18 +1554,18 @@ func (m Model) rowText(row row) (string, string) {
 		return "", ""
 	case itemRow:
 		if row.itemKind == "agent" {
-			return m.agentText(row, marker, secondaryMarker)
+			return m.agentText(row, marker)
 		}
 		if row.itemKind == "container" {
 			return m.containerText(row, marker)
 		}
-		return m.placeText(row, marker, secondaryMarker)
+		return m.placeText(row, marker)
 	default:
 		return "", ""
 	}
 }
 
-func (m Model) agentText(row row, marker, secondaryMarker string) (string, string) {
+func (m Model) agentText(row row, marker string) (string, string) {
 	a := row.agent
 	container := displayContainer(a, row.agentMachine)
 	primary := bold().Render(highlightText(sanitize(a.Harness), string(m.query))) + muted().Render("  "+highlightText(sanitize(container), string(m.query)))
@@ -1592,11 +1591,11 @@ func (m Model) agentText(row row, marker, secondaryMarker string) (string, strin
 	if !strings.Contains(targetText, "\x1b[") {
 		target = muted().Render(targetText)
 	}
-	gap := m.width - shell.StringWidth(secondaryMarker) - shell.StringWidth(left) - shell.StringWidth(target)
+	gap := m.width - shell.StringWidth("  ") - shell.StringWidth(left) - shell.StringWidth(target)
 	if gap < 2 {
 		gap = 2
 	}
-	secondary := secondaryMarker + left + strings.Repeat(" ", gap) + target
+	secondary := "  " + left + strings.Repeat(" ", gap) + target
 	return marker + primary, secondary
 }
 func displayContainer(a capabilities.Agent, machine string) string {
@@ -1704,7 +1703,7 @@ func (m Model) projectLayout() projectColumns {
 		if candidate.kind != itemRow || candidate.itemKind != "project" {
 			continue
 		}
-		if width := shell.StringWidth(candidate.treePrefix + projectLabel(candidate.place)); width > maxName {
+		if width := projectNameWidth(candidate); width > maxName {
 			maxName = width
 		}
 		if width := shell.StringWidth(projectBranch(candidate.place)); width > maxBranch {
@@ -1727,6 +1726,17 @@ func (m Model) projectLayout() projectColumns {
 	// The summary is only as wide as its widest value; no value means the
 	// column takes no cells at all.
 	layout.summary = maxSummary
+
+	// Do not cap a row that already fits naturally. The proportional cap is
+	// only a pressure rule for terminals that cannot show every column.
+	natural := maxName + maxBranch + maxSummary
+	if layout.search && maxPath > 0 {
+		natural += maxPath + 2
+	}
+	if natural <= available {
+		layout.name, layout.branch, layout.path = maxName, maxBranch, maxPath
+		return layout
+	}
 
 	// The name leads. It claims the longest visible name up to its share of
 	// the row, but never drops below its floor.
@@ -1761,6 +1771,14 @@ func (m Model) projectLayout() projectColumns {
 	return layout
 }
 
+func projectNameWidth(candidate row) int {
+	width := shell.StringWidth(candidate.treePrefix + projectLabel(candidate.place))
+	if candidate.foldable && !candidate.expanded {
+		width += shell.StringWidth(fmt.Sprintf("  %d", candidate.count))
+	}
+	return width
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -1768,29 +1786,44 @@ func min(a, b int) int {
 	return b
 }
 
-func (m Model) placeText(row row, marker, secondaryMarker string) (string, string) {
+func (m Model) placeText(row row, marker string) (string, string) {
 	if row.place.Kind != picker.ProjectKind {
 		return marker + highlightText(projectLabel(row.place), string(m.query)), ""
 	}
 	layout := m.projectLayout()
 	name := row.treePrefix + projectLabel(row.place)
-	name = shell.Truncate(name, layout.name, "…")
+	count := ""
+	if row.foldable && !row.expanded {
+		count = fmt.Sprintf("  %d", row.count)
+	}
+	name = shell.Truncate(name, max(0, layout.name-shell.StringWidth(count)), "…")
 	nameText := highlightText(name, string(m.query))
 	if row.treePrefix != "" {
 		// Tree gutters are structural, not part of fuzzy matching.
 		nameText = muted().Render(row.treePrefix) + highlightText(strings.TrimPrefix(name, row.treePrefix), string(m.query))
 	}
+	if count != "" {
+		nameText += muted().Render(count)
+	}
 	if row.id == m.cursor {
 		nameText = bold().Render(nameText)
 	}
 	nameCell := fit(nameText, layout.name)
-	branch := fit(muted().Render(projectBranch(row.place)), layout.branch)
+	branchText := highlightText(projectBranch(row.place), string(m.query))
+	if !strings.Contains(branchText, "\x1b[") {
+		branchText = muted().Render(branchText)
+	}
+	branch := fit(branchText, layout.branch)
 	summary := fit(m.projectSummaryStyled(row.place), layout.summary)
 	line := nameCell + "  " + branch + "  " + summary
 	if layout.search && layout.path > 0 {
 		path := abbreviateHome(row.group)
 		pathCell := shell.Truncate(path, layout.path, "…")
-		pathCell = strings.Repeat(" ", max(0, layout.path-shell.StringWidth(pathCell))) + muted().Render(pathCell)
+		pathText := highlightText(pathCell, string(m.query))
+		if !strings.Contains(pathText, "\x1b[") {
+			pathText = muted().Render(pathText)
+		}
+		pathCell = strings.Repeat(" ", max(0, layout.path-shell.StringWidth(pathCell))) + pathText
 		line += "  " + pathCell
 	}
 	return marker + line, ""

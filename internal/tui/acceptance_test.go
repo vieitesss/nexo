@@ -135,6 +135,15 @@ func TestOnlyProjectsFold(t *testing.T) {
 	if got := len(projects.Rows()); got != 4 {
 		t.Fatalf("group did not unfold with all worktrees: %v", projects.Rows())
 	}
+	projects = updateModel(t, projects, keyMsg(tea.KeyDown)) // checkout
+	projects = updateModel(t, projects, keyMsg(tea.KeyLeft))
+	if got := projects.Rows(); len(got) != 3 || got[1] != "project:/work/nexo" || got[2] != "project:/work/other" {
+		t.Fatalf("linked worktree did not fold under checkout: %v", got)
+	}
+	projects = updateModel(t, projects, keyMsg(tea.KeyRight))
+	if got := len(projects.Rows()); got != 4 {
+		t.Fatalf("checkout did not unfold with its worktree: %v", projects.Rows())
+	}
 	containers := NewModel(context.Background(), richDeps(), ContainersTab)
 	containers = updateModel(t, containers, keyMsg(tea.KeyUp))
 	before := strings.Join(containers.Rows(), "\x00")
@@ -278,7 +287,7 @@ func TestFooterOnlyAdvertisesCurrentActions(t *testing.T) {
 	model = updateModel(t, model, keyMsg(tea.KeyRight))
 	model = updateModel(t, model, keyMsg(tea.KeyDown))
 	projectFooter := shell.Plain(model.footer())
-	if !strings.Contains(projectFooter, "Enter") || strings.Contains(projectFooter, "fold") {
+	if !strings.Contains(projectFooter, "Enter") || !strings.Contains(projectFooter, "fold") {
 		t.Fatalf("project footer has wrong actions: %q", projectFooter)
 	}
 	model = NewModel(context.Background(), richDeps(), ContainersTab)

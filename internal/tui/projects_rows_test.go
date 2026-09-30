@@ -6,6 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
@@ -124,6 +128,79 @@ func TestProjectsFlatRankingTieBreaksShorterThenRootThenName(t *testing.T) {
 	model.SetQuery("be")
 	if got, want := model.Rows(), []string{"project:/home/tester/w/beta", "project:/home/tester/w/bexa"}; !slices.Equal(got, want) {
 		t.Fatalf("name tie-break = %v, want %v", got, want)
+	}
+}
+
+func TestProjectsQueryKeepsSelectionWhileRefining(t *testing.T) {
+	places := []picker.Place{
+		{Kind: picker.ProjectKind, Path: "/work/alpha", Group: "/work", DisplayRemainder: "alpha"},
+		{Kind: picker.ProjectKind, Path: "/work/alphabet", Group: "/work", DisplayRemainder: "alphabet"},
+		{Kind: picker.ProjectKind, Path: "/work/about", Group: "/work", DisplayRemainder: "about"},
+	}
+	model := NewModel(context.Background(), Deps{Projects: places}, ProjectsTab)
+	model.SetQuery("a")
+	if model.Cursor() != "project:/work/about" {
+		t.Fatalf("empty-to-query cursor = %q, want best match", model.Cursor())
+	}
+	model.cursor = "project:/work/alphabet"
+	model.SetQuery("al")
+	if model.Cursor() != "project:/work/alphabet" {
+		t.Fatalf("refined query lost matching selection: %q", model.Cursor())
+	}
+	model.cursor = "project:/work/alpha"
+	model.SetQuery("ab")
+	if model.Cursor() != "project:/work/about" {
+		t.Fatalf("refined query did not choose best replacement: %q", model.Cursor())
+	}
+}
+
+func TestProjectsQueryPreservesFoldState(t *testing.T) {
+	places := []picker.Place{
+		{Kind: picker.ProjectKind, Path: "/work/nexo", Group: "/work", DisplayRemainder: "nexo"},
+		{Kind: picker.ProjectKind, Path: "/work/nexo-wt", Group: "/work", DisplayRemainder: "nexo-wt", ParentPath: "/work/nexo"},
+	}
+	model := NewModel(context.Background(), Deps{Projects: places}, ProjectsTab)
+	model = updateModel(t, model, keyMsg(tea.KeyLeft))
+	model.SetQuery("nexo")
+	model.SetQuery("")
+	if got := model.Rows(); !slices.Equal(got, []string{"group:/work", "project:/work/nexo"}) {
+		t.Fatalf("query change reset project fold: %v", got)
+	}
+}
+
+func TestProjectsFlatNaturalNameWidthWhenRowFits(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	name := strings.Repeat("n", 40)
+	model := NewModel(context.Background(), Deps{Projects: []picker.Place{
+		{Kind: picker.ProjectKind, Path: "/work/" + name, Group: "/work", DisplayRemainder: name, Git: true, GitContext: &picker.GitContext{Identity: "main"}},
+	}}, ProjectsTab)
+	model.SetQuery("n")
+	model.SetSize(80, 10)
+	plain := shell.Plain(model.View())
+	if !strings.Contains(plain, name) || !strings.Contains(plain, "main") {
+		t.Fatalf("fitting row was truncated: %q", plain)
+	}
+}
+
+func TestProjectBranchAndFolderMatchesAreHighlighted(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI)
+	branch := NewModel(context.Background(), Deps{Projects: []picker.Place{{
+		Kind: picker.ProjectKind, Path: "/work/unrelated", Group: "/work/folder", DisplayRemainder: "unrelated", Git: true,
+		GitContext: &picker.GitContext{Identity: "unique-branch"},
+	}}}, ProjectsTab)
+	branch.SetQuery("unique")
+	branch.SetSize(120, 8)
+	if !strings.Contains(branch.View(), "\x1b[1;33mu") {
+		t.Fatalf("branch match was not highlighted: %q", branch.View())
+	}
+
+	folder := NewModel(context.Background(), Deps{Projects: []picker.Place{{
+		Kind: picker.ProjectKind, Path: "/work/unrelated", Group: "/home/tester/folder", DisplayRemainder: "unrelated", SearchText: "/folder", Git: true,
+	}}}, ProjectsTab)
+	folder.SetQuery("folder")
+	folder.SetSize(120, 8)
+	if !strings.Contains(folder.View(), "\x1b[1;33mf") {
+		t.Fatalf("folder match was not highlighted: %q", folder.View())
 	}
 }
 

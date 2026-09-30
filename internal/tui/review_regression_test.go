@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -59,6 +60,12 @@ func TestSearchIsFlatAndIgnoresGroupFolding(t *testing.T) {
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
 	if got := model.Rows(); len(got) != 1 {
 		t.Fatalf("empty-query group fold rows = %v", got)
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRight})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown}) // checkout
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
+	if got := model.Rows(); len(got) != 3 || got[1] != "project:/work/nexo" || got[2] != "project:/work/other" {
+		t.Fatalf("empty-query checkout fold rows = %v", got)
 	}
 }
 
@@ -265,6 +272,46 @@ func TestAgentRefreshProtectsInFlightAndDisplaysError(t *testing.T) {
 	model.SetSize(100, 8)
 	if !strings.Contains(shell.Plain(model.footer()), "agent refresh: source failed") {
 		t.Fatal("refresh error was not rendered")
+	}
+}
+
+func TestAgentRankingAndAttentionOrder(t *testing.T) {
+	agents := []capabilities.Agent{
+		{PaneID: "unseen", Harness: "slow", Container: "one", Target: "one:1", State: "stopped", Seen: false},
+		{PaneID: "a-working", Harness: "slow", Container: "one", Target: "one:2", State: "working"},
+		{PaneID: "seen", Harness: "slow", Container: "one", Target: "one:3", State: "stopped", Seen: true},
+		{PaneID: "a-target", Harness: "slow", Container: "one", Target: "priority-target", State: "working"},
+		{PaneID: "z-harness", Harness: "priority", Container: "one", Target: "one:4", State: "working"},
+	}
+	model := NewModel(context.Background(), Deps{Agents: agents}, AgentsTab)
+	if got, want := model.Rows()[:3], []string{"agent:" + picker.LocalMachine() + ":unseen", "agent:" + picker.LocalMachine() + ":a-target", "agent:" + picker.LocalMachine() + ":a-working"}; !slices.Equal(got, want) {
+		t.Fatalf("empty-query attention order = %v, want prefix %v", got, want)
+	}
+	model.SetQuery("priority")
+	if got, want := model.Rows(), []string{"agent:" + picker.LocalMachine() + ":z-harness", "agent:" + picker.LocalMachine() + ":a-target"}; !slices.Equal(got, want) {
+		t.Fatalf("query-ranked agents = %v, want %v", got, want)
+	}
+}
+
+func TestContainerRankingKeepsMarks(t *testing.T) {
+	containers := []capabilities.Container{
+		{ID: "devbox", Name: "shell", Machine: "devbox"},
+		{ID: "node", Name: "device", Machine: "node"},
+		{ID: "alpha", Name: "mydev", Machine: "alpha"},
+	}
+	model := NewModel(context.Background(), Deps{Containers: containers}, ContainersTab)
+	model.SetQuery("dev")
+	want := []string{"machine:devbox", "container:devbox:devbox", "", "machine:node", "container:node:node", "", "machine:alpha", "container:alpha:alpha", "", "new:local"}
+	if got := model.Rows(); !slices.Equal(got, want) {
+		t.Fatalf("query-ranked containers = %v, want %v", got, want)
+	}
+	model = updateModel(t, model, keyMsg(tea.KeyCtrlT))
+	if got := model.Marked(); !slices.Equal(got, []string{"devbox"}) {
+		t.Fatalf("marked ranked container = %v", got)
+	}
+	model.SetQuery("dev")
+	if got := model.Marked(); !slices.Equal(got, []string{"devbox"}) {
+		t.Fatalf("mark lost during query rebuild = %v", got)
 	}
 }
 
