@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
@@ -54,11 +52,6 @@ func (g GitContext) Decoration() Decoration {
 // the picker model; the model calls them from Bubble Tea commands.
 type GitLoader interface {
 	Load(context.Context, string) (GitContext, error)
-}
-
-type gitLoaderSettings interface {
-	GitConcurrency() int
-	GitTimeout() time.Duration
 }
 
 const (
@@ -252,57 +245,9 @@ func samePath(left, right string) bool {
 	return filepath.Clean(left) == filepath.Clean(right)
 }
 
-type gitLoadPool struct {
-	slots chan struct{}
-}
-
-func newGitLoadPool(concurrency int) *gitLoadPool {
-	if concurrency <= 0 {
-		concurrency = DefaultGitConcurrency
-	}
-	return &gitLoadPool{slots: make(chan struct{}, concurrency)}
-}
-
-func (p *gitLoadPool) acquire() {
-	p.slots <- struct{}{}
-}
-
-func (p *gitLoadPool) release() {
-	<-p.slots
-}
-
 // GitContextMsg is emitted by an asynchronous repository load.
 type GitContextMsg struct {
 	Path    string
 	Context GitContext
 	Err     error
-}
-
-func newGitContextCommands(loader GitLoader, pool *gitLoadPool, timeout time.Duration, places []Place) tea.Cmd {
-	paths := make([]string, 0, len(places))
-	seen := make(map[string]bool)
-	for _, place := range places {
-		if !place.Git || place.Path == "" || seen[place.Path] {
-			continue
-		}
-		seen[place.Path] = true
-		paths = append(paths, place.Path)
-	}
-	commands := make([]tea.Cmd, 0, len(paths))
-	for _, path := range paths {
-		path := path
-		commands = append(commands, func() tea.Msg {
-			pool.acquire()
-			defer pool.release()
-			ctx := context.Background()
-			cancel := func() {}
-			if timeout > 0 {
-				ctx, cancel = context.WithTimeout(ctx, timeout)
-			}
-			defer cancel()
-			value, err := loader.Load(ctx, path)
-			return GitContextMsg{Path: path, Context: value, Err: err}
-		})
-	}
-	return tea.Batch(commands...)
 }

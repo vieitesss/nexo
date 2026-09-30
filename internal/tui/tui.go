@@ -20,7 +20,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
-	"github.com/vieitesss/nexo/internal/navigator"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
 )
@@ -584,9 +583,9 @@ func (m Model) agentRows() []row {
 	return rows
 }
 
-func attentionRank(agent capabilities.Agent) int { return navigator.AttentionRank(agent) }
+func attentionRank(agent capabilities.Agent) int { return picker.AttentionRank(agent) }
 func agentIdentity(record agentRecord) string {
-	identity := navigator.AgentIdentity(record.agent)
+	identity := picker.AgentIdentity(record.agent)
 	return "agent:" + record.machine + ":" + identity
 }
 
@@ -1580,7 +1579,7 @@ func previewLine(value string) string {
 	}
 	return ""
 }
-func stoppedAge(now, since time.Time) string { return navigator.StoppedAge(now, since) }
+func stoppedAge(now, since time.Time) string { return picker.StoppedAge(now, since) }
 func stateColor(agent capabilities.Agent) lipgloss.Style {
 	switch {
 	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && !agent.Seen:
