@@ -199,21 +199,14 @@ func TestLoadRejectsRemoteLocalHostnameAlias(t *testing.T) {
 	}
 }
 
-func TestLoadParsesTmuxSettingsAndDefaults(t *testing.T) {
+func TestLoadRejectsTmuxSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[tmux]\nplace-key = \"none\"\npopup-width = \"70%\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	got, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if got.Tmux != (TmuxConfig{}) {
-		t.Fatalf("Tmux = %#v, want empty active tmux config", got.Tmux)
-	}
-	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "ignored") {
-		t.Fatalf("Warnings = %#v, want one legacy tmux warning", got.Warnings)
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown key") || !strings.Contains(err.Error(), "tmux") {
+		t.Fatalf("Load() error = %v, want strict unknown tmux key", err)
 	}
 }
 

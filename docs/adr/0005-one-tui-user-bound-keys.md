@@ -28,7 +28,7 @@ fuzzy ranking remain the TUI implementation choices from ADR 0004.
 ## Consequences
 
 - Users can choose keys and popup geometry without nexo configuration.
-- Existing configuration files continue to load, with a migration warning for
-  removed tmux key and popup options.
+- Key and popup options are configured by the user in the multiplexer, not in
+  nexo's configuration.
 - `nexo agents` remains the scriptable listing and watcher command; its picker
   entry point is replaced by the TUI's Agents tab.

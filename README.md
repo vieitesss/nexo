@@ -301,8 +301,6 @@ transport = "ssh"
 reconnect-initial = "1s"
 reconnect-max = "30s"
 
-[tmux]
-# Legacy key and popup options are ignored. Bind keys in tmux.conf instead.
 ```
 
 <details>
@@ -324,7 +322,6 @@ reconnect-max = "30s"
 | `remote.transport` | `ssh` | Proxy attachment transport: `ssh`, `mosh`, or `et`. Listing always uses SSH. |
 | `remote.reconnect-initial` | `1s` | Initial retry delay for SSH proxy attachments; must be positive and no greater than `reconnect-max`. |
 | `remote.reconnect-max` | `30s` | Maximum retry delay for SSH proxy attachments; must be positive. |
-| `[tmux]` legacy key and popup options | ignored | Bind TUI keys in `tmux.conf`; nexo warns once when these old options are present. |
 
 </details>
 
