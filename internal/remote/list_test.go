@@ -12,10 +12,10 @@ import (
 )
 
 func TestShellCommandQuotesEachArgument(t *testing.T) {
-	got := shellCommand("tmux", "list-sessions", "a'b")
+	got := ShellCommand("tmux", "list-sessions", "a'b")
 	want := `'tmux' 'list-sessions' 'a'"'"'b'`
 	if got != want {
-		t.Fatalf("shellCommand() = %q, want %q", got, want)
+		t.Fatalf("ShellCommand() = %q, want %q", got, want)
 	}
 }
 

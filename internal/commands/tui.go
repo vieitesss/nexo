@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
@@ -163,9 +164,25 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 			if container == "" {
 				return errors.New("remote agent has no container name")
 			}
-			if err := openRemoteContainerWithResolver(focusCtx, invocation, ref.Machine, container, kind); err != nil {
+			switch kind {
+			case remote.KindTmux:
+				if invocation.Selection.Kind != backend.Tmux {
+					return fmt.Errorf("unsupported: %s runs tmux; use tmux to focus it", ref.Machine)
+				}
+			case remote.KindHerdr:
+				if invocation.Selection.Kind != backend.Herdr {
+					return fmt.Errorf("unsupported: %s runs Herdr; use Herdr to focus it", ref.Machine)
+				}
+			default:
+				return fmt.Errorf("remote machine %q has an unknown multiplexer kind", ref.Machine)
+			}
+			// Pane IDs belong to the remote multiplexer. Focus them over SSH
+			// before opening the proxy/sidebar entry; never pass them to the
+			// local adapter, whose namespace may contain the same ID.
+			if err := remote.FocusRemotePane(focusCtx, invocation.Runner, invocation.Config.Remote.SSHConfig, ref.Machine, kind, ref.Agent.PaneID); err != nil {
 				return err
 			}
+			return openRemoteContainerWithResolver(focusCtx, invocation, ref.Machine, container, kind)
 		}
 		focuser, ok := invocation.Adapter.(capabilities.PaneFocuser)
 		if !ok {
