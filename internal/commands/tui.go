@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
+	"github.com/vieitesss/nexo/internal/remote"
 	"github.com/vieitesss/nexo/internal/tui"
 )
 
@@ -30,10 +32,12 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 	}
 	var initial []capabilities.Agent
 	var initialErr error
+	var initialRead bool
 	var tab string
 	var err error
 	if len(invocation.Args) == 0 {
 		if source, ok := invocation.Adapter.(capabilities.AgentSource); ok {
+			initialRead = true
 			initial, initialErr = source.ListAgents(ctx)
 			if initialErr != nil {
 				initial = []capabilities.Agent{}
@@ -50,14 +54,14 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	deps, err := tuiDependencies(ctx, invocation, tab, initial, initialErr)
+	deps, err := tuiDependencies(ctx, invocation, tab, initial, initialErr, initialRead)
 	if err != nil {
 		return err
 	}
 	return runTabbedTUI(ctx, deps, tui.Tab(tab))
 }
 
-func tuiDependencies(ctx context.Context, invocation Invocation, tab string, initial []capabilities.Agent, initialErr error) (tui.Deps, error) {
+func tuiDependencies(ctx context.Context, invocation Invocation, tab string, initial []capabilities.Agent, initialErr error, initialRead ...bool) (tui.Deps, error) {
 	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
 	for _, warning := range discovery.Warnings {
 		if invocation.Stderr != nil {
@@ -71,14 +75,12 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 			return tui.Deps{}, fmt.Errorf("list containers: %w", err)
 		}
 		deps.Containers = containers
-		if reader, ok := invocation.Adapter.(capabilities.ScreenReader); ok {
-			deps.PreviewCommand = previewCommand(ctx, reader, containers)
-		}
 	}
 	if source, ok := invocation.Adapter.(capabilities.AgentSource); ok {
 		deps.AgentSource = source
 		deps.Agents = initial
-		if initial == nil {
+		readInitial := len(initialRead) > 0 && initialRead[0]
+		if !readInitial {
 			agents, listErr := source.ListAgents(ctx)
 			if listErr != nil {
 				deps.AgentError = listErr
@@ -153,15 +155,17 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 	}
 	deps.FocusAgent = func(focusCtx context.Context, ref tui.AgentRef) error {
 		if ref.Machine != "" && ref.Machine != picker.LocalMachine() {
-			actions, resolveErr := resolver.ResolveContainerActions(focusCtx, ref.Machine)
-			if resolveErr != nil {
-				return resolveErr
+			kind := remote.Kind(ref.Backend)
+			container := strings.TrimSpace(ref.Agent.Container)
+			if container == "" {
+				container = strings.TrimSpace(ref.Agent.ContainerID)
 			}
-			id := ref.Agent.ContainerID
-			if id == "" {
-				id = ref.Agent.Container
+			if container == "" {
+				return errors.New("remote agent has no container name")
 			}
-			return actions.OpenContainer(focusCtx, id)
+			if err := openRemoteContainerWithResolver(focusCtx, invocation, ref.Machine, container, kind); err != nil {
+				return err
+			}
 		}
 		focuser, ok := invocation.Adapter.(capabilities.PaneFocuser)
 		if !ok {

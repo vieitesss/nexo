@@ -16,6 +16,15 @@ type tuiFakeAdapter struct {
 	popup  string
 }
 
+type countingAgentAdapter struct {
+	calls int
+}
+
+func (a *countingAgentAdapter) ListAgents(context.Context) ([]capabilities.Agent, error) {
+	a.calls++
+	return nil, nil
+}
+
 func (f *tuiFakeAdapter) ListAgents(context.Context) ([]capabilities.Agent, error) {
 	return f.agents, nil
 }
@@ -92,6 +101,22 @@ func TestTUIRunsTabbedModelOnRequestedTabWithoutPopup(t *testing.T) {
 	}
 	if got := strings.Join(got, ","); got != "agents,containers,projects" {
 		t.Fatalf("tabs = %q", got)
+	}
+}
+
+func TestTUIDependenciesPreserveAnInitialEmptySnapshot(t *testing.T) {
+	adapter := &countingAgentAdapter{}
+	if _, err := tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter}, "agents", nil, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.calls != 0 {
+		t.Fatalf("initial empty snapshot triggered %d duplicate reads", adapter.calls)
+	}
+	if _, err := tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter}, "agents", nil, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.calls != 1 {
+		t.Fatalf("unread snapshot calls = %d, want 1", adapter.calls)
 	}
 }
 

@@ -373,6 +373,20 @@ func remoteContainerName(invocation Invocation) (string, error) {
 }
 
 func openRemoteContainerWithResolver(ctx context.Context, invocation Invocation, machine, container string, kind remote.Kind) error {
+	if kind != remote.KindTmux && kind != remote.KindHerdr {
+		return fmt.Errorf("remote machine %q has an unknown multiplexer kind", machine)
+	}
+	if kind == remote.KindHerdr {
+		if invocation.Selection.Kind != backend.Herdr {
+			return fmt.Errorf("unsupported: %s runs Herdr; use Herdr to open it", machine)
+		}
+		// Herdr workspaces are opened through its native machine path. The
+		// local action resolver is tmux-oriented and must not proxy them.
+		return openRemoteContainer(ctx, invocation, machine, container, kind)
+	}
+	if invocation.Selection.Kind != backend.Tmux {
+		return fmt.Errorf("unsupported: %s runs tmux; use tmux to open it", machine)
+	}
 	if invocation.ContainerResolver != nil {
 		actions, err := invocation.ContainerResolver.ResolveContainerActions(ctx, machine)
 		if err != nil {

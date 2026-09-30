@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -196,56 +194,4 @@ func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
 		})
 	}
 	return commands
-}
-
-func previewCommand(ctx context.Context, reader capabilities.ScreenReader, containers []capabilities.Container) func() tea.Msg {
-	return func() tea.Msg {
-		type job struct {
-			ref  picker.ContainerRef
-			pane string
-		}
-		jobs := make(chan job)
-		previews := make(map[picker.ContainerRef]string)
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-		workers := 4
-		if len(containers) < workers {
-			workers = len(containers)
-		}
-		if workers == 0 {
-			return nil
-		}
-		worker := func() {
-			defer wg.Done()
-			for item := range jobs {
-				readCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-				preview, err := reader.ReadScreen(readCtx, item.pane)
-				cancel()
-				if err == nil {
-					mu.Lock()
-					previews[item.ref] = preview
-					mu.Unlock()
-				}
-			}
-		}
-		wg.Add(workers)
-		for index := 0; index < workers; index++ {
-			go worker()
-		}
-		for _, container := range containers {
-			if container.ActivePaneID != "" {
-				machine := container.Machine
-				if machine == "" {
-					machine = picker.LocalMachine()
-				}
-				jobs <- job{ref: picker.ContainerRef{Machine: machine, ID: container.ID}, pane: container.ActivePaneID}
-			}
-		}
-		close(jobs)
-		wg.Wait()
-		if len(previews) == 0 {
-			return nil
-		}
-		return picker.PreviewBatch{Previews: previews}
-	}
 }
