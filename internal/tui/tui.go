@@ -524,6 +524,9 @@ func (m Model) containerPlaces() []picker.Place {
 }
 
 func (m Model) agentsFor(place picker.Place) []capabilities.Agent {
+	if place.Kind == "" {
+		place.Kind = picker.ContainerKind
+	}
 	all := make([]capabilities.Agent, 0)
 	for _, record := range m.allAgents() {
 		if record.machine != place.Machine {
