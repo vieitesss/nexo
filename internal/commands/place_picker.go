@@ -21,7 +21,9 @@ import (
 const PlacePickerCommandName = "__place-picker"
 const pickerInlineEnv = "NEXO_PLACE_PICKER_INLINE"
 
-type placePickerCommand struct{}
+type placePickerCommand struct {
+	tab string
+}
 
 func init() {
 	registerBuiltin(func() Command { return placePickerCommand{} })
@@ -74,7 +76,7 @@ func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error 
 	// Herdr 0.9 exposes popup.close but no request that opens a popup. The
 	// absence of Popup deliberately selects the inline Bubble Tea path there.
 	if popup, ok := invocation.Adapter.(capabilities.Popup); ok && os.Getenv(pickerInlineEnv) != "1" {
-		return popup.ShowPopup(ctx, pickerCommand(string(invocation.Selection.Kind), invocation.ConfigPath))
+		return popup.ShowPopup(ctx, pickerCommand(string(invocation.Selection.Kind), invocation.ConfigPath, invocationTab(invocation)))
 	}
 
 	theme := picker.ThemeFromTerminal(ctx, picker.ThemeQuery{Reader: os.Stdin, Writer: os.Stdout}, 100*time.Millisecond)
@@ -407,13 +409,24 @@ func previewCommand(ctx context.Context, reader capabilities.ScreenReader, conta
 	}
 }
 
-func pickerCommand(kind, configPath string) string {
+func pickerCommand(kind, configPath, tab string) string {
 	binary := shellQuote(os.Args[0])
 	command := fmt.Sprintf("NEXO_PLACE_PICKER_INLINE=1 %s --backend=%s", binary, shellQuote(kind))
 	if configPath != "" {
 		command += " --config-file=" + shellQuote(configPath)
 	}
+	command += " tui"
+	if tab != "" {
+		command += " " + shellQuote(tab)
+	}
 	return command
+}
+
+func invocationTab(invocation Invocation) string {
+	if len(invocation.Args) == 1 {
+		return invocation.Args[0]
+	}
+	return "containers"
 }
 
 func shellQuote(value string) string {
@@ -421,42 +434,4 @@ func shellQuote(value string) string {
 		return "''"
 	}
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
-}
-
-// PlacePickerArgs reports whether args contain only global flags and, when
-// they do, appends the internal picker command for normal dispatch.
-func PlacePickerArgs(args []string) ([]string, bool) { return pickerArgs(args) }
-
-// pickerArgs reports whether args contain only global flags. It appends the
-// internal picker command so the normal Invocation path remains unchanged.
-func pickerArgs(args []string) ([]string, bool) {
-	out := append([]string(nil), args...)
-	for index := 0; index < len(args); index++ {
-		arg := args[index]
-		if arg == "--" {
-			return nil, false
-		}
-		if strings.HasPrefix(arg, "--backend=") || strings.HasPrefix(arg, "--config-file=") {
-			continue
-		}
-		if arg == "--help" || arg == "-h" || arg == "--version" {
-			return nil, false
-		}
-		if arg == "--json" {
-			continue
-		}
-		if arg == "--backend" || arg == "--config-file" || arg == "-c" {
-			index++
-			if index >= len(args) {
-				return nil, false
-			}
-			continue
-		}
-		if !strings.HasPrefix(arg, "-") {
-			return nil, false
-		}
-		return nil, false
-	}
-	out = append(out, PlacePickerCommandName)
-	return out, true
 }

@@ -61,5 +61,5 @@ func agentPickerCommand(kind, configPath string) string {
 	if configPath != "" {
 		command += " --config-file=" + shellQuote(configPath)
 	}
-	return command + " agents pick"
+	return command + " tui agents"
 }

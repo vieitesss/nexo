@@ -63,18 +63,10 @@ func TestHerdrPluginManifestDeclaresPopupActions(t *testing.T) {
 	}
 
 	wantActions := []pluginAction{
-		{
-			ID:       "place-picker",
-			Title:    "Open nexo place picker",
-			Contexts: []string{"workspace", "tab", "pane"},
-			Command:  []string{"herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "place-picker"},
-		},
-		{
-			ID:       "agent-navigator",
-			Title:    "Open nexo agent navigator",
-			Contexts: []string{"workspace", "tab", "pane"},
-			Command:  []string{"herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "agent-navigator"},
-		},
+		{ID: "tui", Title: "Open nexo TUI", Contexts: []string{"workspace", "tab", "pane"}, Command: []string{"herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "tui"}},
+		{ID: "tui-agents", Title: "Open nexo agents", Contexts: []string{"workspace", "tab", "pane"}, Command: []string{"herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "tui-agents"}},
+		{ID: "tui-containers", Title: "Open nexo containers", Contexts: []string{"workspace", "tab", "pane"}, Command: []string{"herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "tui-containers"}},
+		{ID: "tui-projects", Title: "Open nexo projects", Contexts: []string{"workspace", "tab", "pane"}, Command: []string{"herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "tui-projects"}},
 	}
 	if len(manifest.Actions) != len(wantActions) {
 		t.Fatalf("actions = %#v, want %#v", manifest.Actions, wantActions)
@@ -87,8 +79,10 @@ func TestHerdrPluginManifestDeclaresPopupActions(t *testing.T) {
 	}
 
 	wantPanes := []pluginPane{
-		{ID: "place-picker", Title: "nexo places", Placement: "popup", Width: "100%", Height: "100%", Command: []string{"nexo", "--backend=herdr"}},
-		{ID: "agent-navigator", Title: "nexo agents", Placement: "popup", Width: "100%", Height: "100%", Command: []string{"nexo", "--backend=herdr", "agents", "pick"}},
+		{ID: "tui", Title: "nexo TUI", Placement: "popup", Width: "100%", Height: "100%", Command: []string{"nexo", "--backend=herdr", "tui"}},
+		{ID: "tui-agents", Title: "nexo agents", Placement: "popup", Width: "100%", Height: "100%", Command: []string{"nexo", "--backend=herdr", "tui", "agents"}},
+		{ID: "tui-containers", Title: "nexo containers", Placement: "popup", Width: "100%", Height: "100%", Command: []string{"nexo", "--backend=herdr", "tui", "containers"}},
+		{ID: "tui-projects", Title: "nexo projects", Placement: "popup", Width: "100%", Height: "100%", Command: []string{"nexo", "--backend=herdr", "tui", "projects"}},
 	}
 	if len(manifest.Panes) != len(wantPanes) {
 		t.Fatalf("panes = %#v, want %#v", manifest.Panes, wantPanes)
@@ -108,8 +102,8 @@ func TestHerdrPluginManifestDeclaresPopupActions(t *testing.T) {
 func TestHerdrDocsProvidePluginActionKeys(t *testing.T) {
 	docs := string(readRepoFile(t, filepath.Join("docs", "herdr.md")))
 	for _, snippet := range []string{
-		"key = \"ctrl+s\"\ntype = \"plugin_action\"\ncommand = \"nexo.place-picker\"",
-		"key = \"prefix+a\"\ntype = \"plugin_action\"\ncommand = \"nexo.agent-navigator\"",
+		"key = \"ctrl+s\"\ntype = \"plugin_action\"\ncommand = \"nexo.tui\"",
+		"key = \"prefix+a\"\ntype = \"plugin_action\"\ncommand = \"nexo.tui-agents\"",
 		"herdr plugin install vieitesss/nexo",
 		"herdr plugin link ~/personal/nexo",
 		"existing `nexo` executable",

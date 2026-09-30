@@ -85,7 +85,7 @@ func TestPlacePickerPassesBackendAndExplicitConfigToPopupChild(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	want := "NEXO_PLACE_PICKER_INLINE=1 '" + os.Args[0] + "' --backend='tmux' --config-file='/tmp/custom config.toml'"
+	want := "NEXO_PLACE_PICKER_INLINE=1 '" + os.Args[0] + "' --backend='tmux' --config-file='/tmp/custom config.toml' tui 'containers'"
 	if popup.command != want {
 		t.Fatalf("popup command = %q, want exact argv %q", popup.command, want)
 	}

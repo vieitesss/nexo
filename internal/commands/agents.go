@@ -31,8 +31,6 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 	}
 	if len(invocation.Args) > 0 {
 		switch invocation.Args[0] {
-		case "pick":
-			return runAgentPicker(ctx, invocation)
 		case "watch":
 			if configurable, ok := invocation.Adapter.(interface {
 				ConfigureAgentCommand(string, string)

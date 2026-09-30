@@ -22,7 +22,9 @@ import (
 // Backend is empty when no backend default was configured. "auto" is accepted
 // explicitly and means that the environment should be detected.
 type Config struct {
-	Backend        string `toml:"backend"`
+	Backend string `toml:"backend"`
+	// Warnings contains migration notices for options accepted for compatibility.
+	Warnings       []string `toml:"-"`
 	ProjectsConfig `toml:",inline"`
 	Agents         AgentsConfig `toml:"agents"`
 	Remote         RemoteConfig `toml:"remote"`
@@ -78,8 +80,8 @@ func parse(contents []byte, path string) (Config, error) {
 	var raw struct {
 		Backend string `toml:"backend"`
 		ProjectsConfig
-		Agents AgentsConfig `toml:"agents"`
-		Tmux   TmuxConfig   `toml:"tmux"`
+		Agents AgentsConfig     `toml:"agents"`
+		Tmux   legacyTmuxConfig `toml:"tmux"`
 		Remote struct {
 			Machines         []string `toml:"machines"`
 			SSHConfig        string   `toml:"ssh-config"`
@@ -95,12 +97,15 @@ func parse(contents []byte, path string) (Config, error) {
 		Backend:        raw.Backend,
 		ProjectsConfig: raw.ProjectsConfig,
 		Agents:         raw.Agents,
-		Tmux:           raw.Tmux,
+		Tmux:           raw.Tmux.config(),
 		Remote: RemoteConfig{
 			Machines:  raw.Remote.Machines,
 			SSHConfig: raw.Remote.SSHConfig,
 			Transport: raw.Remote.Transport,
 		},
+	}
+	if raw.Tmux.present() {
+		cfg.Warnings = append(cfg.Warnings, "tmux key and popup options are ignored; bind keys in tmux.conf")
 	}
 	if raw.Remote.ReconnectInitial != nil {
 		duration, err := time.ParseDuration(*raw.Remote.ReconnectInitial)
@@ -129,7 +134,6 @@ func parse(contents []byte, path string) (Config, error) {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, remoteValidationKey(err))
 	}
 	cfg.Agents = cfg.Agents.WithDefaults()
-	cfg.Tmux = cfg.Tmux.WithDefaults()
 	return cfg, nil
 }
 

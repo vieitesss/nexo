@@ -112,8 +112,9 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		writeError(stderr, errors.New("command registry is nil"))
 		return 2
 	}
-	if pickerArgs, ok := commands.PlacePickerArgs(args); ok {
-		args = pickerArgs
+	if len(args) == 0 {
+		printHelp(stdout, registry)
+		return 0
 	}
 	options, err := Parse(args)
 	if err != nil {
@@ -139,6 +140,9 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 	if err != nil {
 		writeError(stderr, err)
 		return 2
+	}
+	for _, warning := range cfg.Warnings {
+		writeError(stderr, errors.New("warning: "+warning))
 	}
 	selection, err := backend.Resolve(context.Background(), backend.ResolveInput{
 		Flag:   options.Backend,

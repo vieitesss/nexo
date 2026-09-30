@@ -29,7 +29,7 @@ Type "alp"
 Sleep 2s
 Escape
 Sleep 1s
-Type "NEXO_AGENT_NAVIGATOR_INLINE=1 $NEXO_DEMO_TMP/nexo --backend=tmux -c $NEXO_DEMO_TMP/config.toml agents pick" Enter
+Type "NEXO_AGENT_NAVIGATOR_INLINE=1 $NEXO_DEMO_TMP/nexo --backend=tmux -c $NEXO_DEMO_TMP/config.toml tui agents" Enter
 Sleep 3s
 Type "pi"
 Sleep 2s

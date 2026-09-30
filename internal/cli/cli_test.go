@@ -29,6 +29,17 @@ func TestParseRequiresCommand(t *testing.T) {
 	}
 }
 
+func TestRunWithBareCommandPrintsUsage(t *testing.T) {
+	var output, errors strings.Builder
+	status := RunWith(nil, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("bare nexo should not invoke an external program")
+		return nil, nil
+	}), backend.MapEnvironment{}, "")
+	if status != 0 || !strings.Contains(output.String(), "Usage: nexo") || errors.Len() != 0 {
+		t.Fatalf("status=%d output=%q errors=%q", status, output.String(), errors.String())
+	}
+}
+
 func TestRunWithVersionDoesNotRequireCommandOrBackend(t *testing.T) {
 	var output, errors strings.Builder
 	status := RunWith([]string{"--version"}, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
@@ -43,6 +54,27 @@ func TestRunWithVersionDoesNotRequireCommandOrBackend(t *testing.T) {
 	}
 	if errors.Len() != 0 {
 		t.Fatalf("errors = %q", errors.String())
+	}
+}
+
+func TestRunWithLegacyTmuxOptionsWarnsOnce(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte(`[tmux]
+place-key = "C-s"
+popup-width = "80%"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output, errors strings.Builder
+	status := RunWith([]string{"-c", configPath, "backend"}, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("backend command should not invoke an external program")
+		return nil, nil
+	}), backend.MapEnvironment{}, "")
+	if status != 0 {
+		t.Fatalf("status=%d output=%q errors=%q", status, output.String(), errors.String())
+	}
+	if count := strings.Count(errors.String(), "tmux key and popup options are ignored"); count != 1 {
+		t.Fatalf("warning count=%d errors=%q, want one", count, errors.String())
 	}
 }
 
