@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -12,148 +11,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
-	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
-	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/remote"
 )
-
-type placePickerCommand struct{}
-
-func (placePickerCommand) Run(ctx context.Context, invocation Invocation) error {
-	if err := invocation.Selection.Require(); err != nil {
-		return err
-	}
-
-	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
-	places := picker.ProjectPlaces(discovery.Candidates)
-	var previewCmd func() tea.Msg
-	var agentCmd tea.Cmd
-	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
-		containers, err := lister.ListContainers(ctx)
-		if err != nil {
-			return fmt.Errorf("list containers: %w", err)
-		}
-		places = append(places, picker.ContainerPlaces(containers)...)
-		places = append(places, picker.MachinePlaces(containers)...)
-		if reader, ok := invocation.Adapter.(capabilities.ScreenReader); ok {
-			previewCmd = previewCommand(ctx, reader, containers)
-		}
-	}
-	if configurable, ok := invocation.Adapter.(interface{ ConfigureAgents(config.AgentsConfig) }); ok {
-		configurable.ConfigureAgents(invocation.Config.Agents)
-	}
-	if source, ok := invocation.Adapter.(capabilities.AgentSource); ok {
-		agentCmd = func() tea.Msg {
-			agents, err := source.ListAgents(ctx)
-			if err != nil {
-				return picker.AgentBatch{Error: err.Error()}
-			}
-			return picker.AgentBatch{Agents: agents}
-		}
-	}
-	for _, warning := range discovery.Warnings {
-		if invocation.Stderr != nil {
-			if _, err := fmt.Fprintf(invocation.Stderr, "nexo: warning: %s\n", warning); err != nil {
-				return err
-			}
-		}
-	}
-
-	theme := picker.ThemeFromTerminal(ctx, picker.ThemeQuery{Reader: os.Stdin, Writer: os.Stdout}, 100*time.Millisecond)
-	model := picker.NewModel(places, theme, picker.NewGitContextLoader(invocation.Runner))
-	if agentCmd != nil {
-		model = model.WithAgentCommand(agentCmd)
-	}
-	if previewCmd != nil {
-		model = model.WithPreviewCommand(previewCmd)
-	}
-	if remoteCmds := remotePlaceCommands(ctx, invocation); len(remoteCmds) > 0 {
-		model = model.WithRemoteCommands(remoteCmds)
-	}
-	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
-	result, err := program.Run()
-	if err != nil {
-		return fmt.Errorf("run place picker: %w", err)
-	}
-	final, ok := result.(picker.Model)
-	if !ok {
-		return errors.New("place picker returned an invalid model")
-	}
-	if final.Cancelled() {
-		return nil
-	}
-	resolver := containerActionResolver(invocation)
-	if target, name, ok := final.RenameTargetRequest(); ok {
-		actions, err := resolver.ResolveContainerActions(ctx, target.Machine)
-		if err != nil {
-			return err
-		}
-		return actions.RenameContainer(ctx, target.ID, name)
-	}
-	if targets, ok := final.KillTargetsRequest(); ok {
-		// A selection can span machines. Resolve each machine once and keep the
-		// picker order within that machine so native batch close operations still
-		// receive one confirmation for the complete selection.
-		groups := make([]containerTargetGroup, 0)
-		for _, target := range targets {
-			groupIndex := -1
-			for index := range groups {
-				if groups[index].machine == target.Machine {
-					groupIndex = index
-					break
-				}
-			}
-			if groupIndex < 0 {
-				groups = append(groups, containerTargetGroup{machine: target.Machine})
-				groupIndex = len(groups) - 1
-			}
-			groups[groupIndex].ids = append(groups[groupIndex].ids, target.ID)
-		}
-		for _, group := range groups {
-			actions, err := resolver.ResolveContainerActions(ctx, group.machine)
-			if err != nil {
-				return err
-			}
-			if killer, supported := actions.(capabilities.ContainerBatchKiller); supported {
-				// The batch capability receives the whole per-machine selection
-				// exactly once; the backend may issue one native close per ID.
-				if err := killer.KillContainers(ctx, group.ids); err != nil {
-					return err
-				}
-				continue
-			}
-			for _, id := range group.ids {
-				if err := actions.KillContainer(ctx, id); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	place, ok := final.Selected()
-	if !ok {
-		return nil
-	}
-	if place.OpenAction != nil {
-		return place.OpenAction(ctx, place)
-	}
-	if place.Kind != picker.ProjectKind && place.Kind != picker.ContainerKind {
-		return fmt.Errorf("place kind %q is not openable yet", place.Kind)
-	}
-	if place.Kind == picker.ContainerKind {
-		actions, err := resolver.ResolveContainerActions(ctx, place.Machine)
-		if err != nil {
-			return err
-		}
-		return actions.OpenContainer(ctx, containerOpenID(place))
-	}
-	opener, ok := invocation.Adapter.(capabilities.ProjectOpener)
-	if !ok {
-		return fmt.Errorf("backend %q does not support opening projects", invocation.Selection.Kind)
-	}
-	return opener.OpenProject(ctx, place.Path, capabilities.OpenOptions{})
-}
 
 func containerOpenID(place picker.Place) string {
 	if !isLocalContainer(place.Machine) && strings.TrimSpace(place.ContainerName) != "" {
@@ -253,7 +113,7 @@ func (a unsupportedRemoteContainerActions) KillContainer(context.Context, string
 
 // ResolveContainerActions wraps the selected backend as the local machine's
 // source. A future remote resolver can be supplied on Invocation without
-// changing the picker command's action routing.
+// changing TUI action routing.
 func (r localContainerResolver) ResolveContainerActions(_ context.Context, machine string) (capabilities.ContainerActions, error) {
 	if !isLocalContainer(machine) {
 		return nil, fmt.Errorf("container machine %q is not supported", machine)

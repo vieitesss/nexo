@@ -1,8 +1,8 @@
 # Herdr adapter
 
 The repository ships `herdr-plugin.toml`, a thin Herdr adapter with four
-entries for nexo's TUI. Each entry opens a 100% x 100% native popup. Until the
-tabbed TUI lands, tab arguments route to the existing pickers:
+entries for nexo's TUI. Each entry opens a 100% x 100% native popup in the
+current Herdr pane:
 
 - `nexo.tui` opens the default tab (Agents when an agent needs you,
   Containers otherwise).

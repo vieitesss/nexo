@@ -1540,8 +1540,13 @@ func fit(value string, width int) string {
 	if width <= 0 {
 		return ""
 	}
+	value = stripBackgroundResets(value)
 	value = shell.Truncate(value, width, "")
 	return value + strings.Repeat(" ", max(0, width-shell.StringWidth(value)))
+}
+
+func stripBackgroundResets(value string) string {
+	return strings.ReplaceAll(value, "\x1b[49m", "")
 }
 func max(a, b int) int {
 	if a > b {

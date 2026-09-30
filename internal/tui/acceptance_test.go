@@ -51,7 +51,7 @@ func noBackgroundSGR(t *testing.T, frame string) {
 			if _, err := fmt.Sscanf(parameter, "%d", &value); err != nil {
 				continue
 			}
-			if value == 7 || value == 48 || (value >= 40 && value <= 47) || (value >= 100 && value <= 107) {
+			if value == 7 || value == 48 || value == 49 || (value >= 40 && value <= 47) || (value >= 100 && value <= 107) {
 				t.Fatalf("frame contains background SGR %q in %q", match[0], frame)
 			}
 		}
