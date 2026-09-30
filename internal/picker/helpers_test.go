@@ -34,4 +34,10 @@ func TestAgentDotsAndHelpers(t *testing.T) {
 	if StoppedAge(time.Now(), since) != "3m" {
 		t.Fatal("stopped age formatting changed")
 	}
+	if StoppedAge(time.Unix(0, 0), time.Unix(-24*60*60, 0)) != "1d" {
+		t.Fatal("24-hour age should use days")
+	}
+	if StoppedAge(time.Unix(0, 0), time.Unix(-23*60*60, 0)) != "23h" {
+		t.Fatal("sub-day age should use hours")
+	}
 }

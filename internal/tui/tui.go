@@ -51,7 +51,6 @@ type Deps struct {
 	AgentSource          capabilities.AgentSource
 	AgentRefreshInterval time.Duration
 	GitLoader            picker.GitLoader
-	PreviewCommand       tea.Cmd
 	RemoteCommands       []tea.Cmd
 	RemoteMachines       []string
 
@@ -87,6 +86,7 @@ func Run(ctx context.Context, deps Deps, tab Tab) error {
 	}
 	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(input), tea.WithOutput(output), tea.WithAltScreen())
 	result, err := program.Run()
+	model.cancelBackgroundLoads()
 	if err != nil {
 		return fmt.Errorf("run tui: %w", err)
 	}
@@ -196,6 +196,7 @@ type Model struct {
 	refreshInFlight *bool
 	refreshErr      error
 	gitSlots        chan struct{}
+	cancelLoads     context.CancelFunc
 
 	confirmKill      bool
 	killReady        bool
@@ -218,6 +219,7 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	loadCtx, cancelLoads := context.WithCancel(ctx)
 	if !validTab(tab) {
 		tab = defaultTab(deps.Agents)
 	}
@@ -232,7 +234,7 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 		now = time.Now
 	}
 	m := Model{
-		ctx: ctx, deps: deps, tab: tab, agents: newAgentRecords(deps.Agents, ""),
+		ctx: loadCtx, cancelLoads: cancelLoads, deps: deps, tab: tab, agents: newAgentRecords(deps.Agents, ""),
 		folded: make(map[string]bool), expanded: make(map[string]bool), marked: make(map[picker.ContainerRef]bool),
 		groupErrors: make(map[string]string), gitErrors: make(map[string]string), now: now, refreshErr: deps.AgentError,
 		remoteMachines: append([]string(nil), deps.RemoteMachines...), remoteLoaded: make(map[string]bool), refreshInFlight: new(bool), gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
@@ -256,9 +258,6 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, m.refreshAgents(), m.tick())
 	}
 	cmds = append(cmds, m.deps.RemoteCommands...)
-	if m.deps.PreviewCommand != nil {
-		cmds = append(cmds, m.deps.PreviewCommand)
-	}
 	if m.deps.GitLoader != nil {
 		seenGit := map[string]bool{}
 		for _, place := range m.projectPlaces() {
@@ -268,7 +267,15 @@ func (m Model) Init() tea.Cmd {
 			seenGit[place.Path] = true
 			place := place
 			cmds = append(cmds, func() tea.Msg {
-				m.gitSlots <- struct{}{}
+				select {
+				case m.gitSlots <- struct{}{}:
+					if m.ctx.Err() != nil {
+						<-m.gitSlots
+						return nil
+					}
+				case <-m.ctx.Done():
+					return nil
+				}
 				defer func() { <-m.gitSlots }()
 				value, err := m.deps.GitLoader.Load(m.ctx, place.Path)
 				return picker.GitContextMsg{Path: place.Path, Context: value, Err: err}
@@ -279,6 +286,13 @@ func (m Model) Init() tea.Cmd {
 		return nil
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m *Model) cancelBackgroundLoads() {
+	if m.cancelLoads != nil {
+		m.cancelLoads()
+		m.cancelLoads = nil
+	}
 }
 
 func (m Model) refreshAgents() tea.Cmd {
@@ -494,7 +508,7 @@ func (m Model) matchAgent(record agentRecord) (picker.Match, bool) {
 }
 
 func (m Model) matchContainer(place picker.Place) (picker.Match, bool) {
-	text := strings.Join([]string{sanitize(place.ContainerName), sanitize(place.Machine), sanitize(place.Preview)}, " ")
+	text := strings.Join([]string{sanitize(place.ContainerName), sanitize(place.Machine)}, " ")
 	return picker.Rank(string(m.query), text)
 }
 
@@ -704,34 +718,30 @@ func (m Model) containerRows() []row {
 }
 
 func (m Model) containerBefore(left, right row) bool {
-	la, ra := m.containerAgents(left.place), m.containerAgents(right.place)
-	lu, ru := oldestUnseen(la), oldestUnseen(ra)
-	if !lu.IsZero() || !ru.IsZero() {
-		if lu.IsZero() {
-			return false
-		}
-		if ru.IsZero() {
-			return true
-		}
-		return lu.Before(ru)
+	leftUrgent := hasUnseenStopped(m.containerAgents(left.place))
+	rightUrgent := hasUnseenStopped(m.containerAgents(right.place))
+	if leftUrgent != rightUrgent {
+		return leftUrgent
 	}
 	if left.activity == nil || right.activity == nil {
 		if left.activity == nil && right.activity == nil {
 			return left.label < right.label
 		}
-		return right.activity != nil
+		return left.activity != nil
 	}
-	return left.activity.After(*right.activity)
+	if !left.activity.Equal(*right.activity) {
+		return left.activity.After(*right.activity)
+	}
+	return left.label < right.label
 }
 func (m Model) containerAgents(place picker.Place) []capabilities.Agent { return m.agentsFor(place) }
-func oldestUnseen(agents []capabilities.Agent) time.Time {
-	var oldest time.Time
+func hasUnseenStopped(agents []capabilities.Agent) bool {
 	for _, agent := range agents {
-		if strings.EqualFold(sanitize(agent.State), "stopped") && !agent.Seen && agent.StoppedSince != nil && (oldest.IsZero() || agent.StoppedSince.Before(oldest)) {
-			oldest = *agent.StoppedSince
+		if strings.EqualFold(sanitize(agent.State), "stopped") && !agent.Seen {
+			return true
 		}
 	}
-	return oldest
+	return false
 }
 func shortenMachine(machine string) string {
 	machine = sanitize(machine)
@@ -948,9 +958,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case picker.GitContextMsg:
 		m.applyGit(msg)
 		return m, nil
-	case picker.PreviewBatch:
-		m.applyPreviews(msg)
-		return m, nil
 	case picker.RemoteBatch:
 		m.applyRemote(msg)
 		return m, nil
@@ -1028,21 +1035,6 @@ func (m *Model) revealProjectAncestors(path string) {
 	}
 }
 
-func (m *Model) applyPreviews(msg picker.PreviewBatch) {
-	for i := range m.deps.Containers {
-		ref := picker.ContainerRef{Machine: normalizedMachine(m.deps.Containers[i].Machine), ID: m.deps.Containers[i].ID}
-		if value, ok := msg.Previews[ref]; ok {
-			m.deps.Containers[i].Preview = value
-		}
-	}
-	for i := range m.remotePlaces {
-		ref := picker.ContainerRef{Machine: normalizedMachine(m.remotePlaces[i].Machine), ID: m.remotePlaces[i].ContainerID}
-		if value, ok := msg.Previews[ref]; ok {
-			m.remotePlaces[i].Preview = value
-		}
-	}
-	m.rebuild(false)
-}
 func (m *Model) applyRemote(msg picker.RemoteBatch) {
 	if msg.Machine == "" {
 		return
@@ -1089,6 +1081,7 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.renameMode = false
 		m.killTargets = nil
 		m.renameTargetSet = false
+		m.cancelBackgroundLoads()
 		return m, tea.Quit
 	}
 	if m.confirmKill {
@@ -1096,6 +1089,7 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y":
 			m.confirmKill = false
 			m.killReady = true
+			m.cancelBackgroundLoads()
 			return m, tea.Quit
 		case "n", "esc":
 			m.confirmKill = false
@@ -1114,6 +1108,7 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if strings.TrimSpace(string(m.renameInput)) != "" {
 				m.renameMode = false
 				m.renameReady = true
+				m.cancelBackgroundLoads()
 				return m, tea.Quit
 			}
 		case tea.KeyBackspace, tea.KeyDelete:
@@ -1130,6 +1125,7 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		m.cancelled = true
+		m.cancelBackgroundLoads()
 		return m, tea.Quit
 	case tea.KeyEsc:
 		if len(m.query) > 0 {
@@ -1139,6 +1135,7 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.cancelled = true
+		m.cancelBackgroundLoads()
 		return m, tea.Quit
 	case tea.KeyTab:
 		m.switchTab(1)
@@ -1323,6 +1320,7 @@ func (m Model) accept() (tea.Model, tea.Cmd) {
 		value := current.place
 		m.selectedPlace = &value
 	}
+	m.cancelBackgroundLoads()
 	return m, tea.Quit
 }
 
@@ -1486,9 +1484,17 @@ func (m Model) agentText(row row, marker, secondaryMarker string) (string, strin
 	stateStyle := stateColor(a)
 	left := stateStyle.Render(stateText)
 	if a.Branch != "" {
-		left += "   " + muted().Render("⎇ "+highlightText(sanitize(a.Branch), string(m.query)))
+		branch := highlightText("⎇ "+sanitize(a.Branch), string(m.query))
+		if !strings.Contains(branch, "\x1b[") {
+			branch = muted().Render(branch)
+		}
+		left += "   " + branch
 	}
-	target := muted().Render(highlightText(sanitize(a.Target), string(m.query)))
+	targetText := highlightText(sanitize(a.Target), string(m.query))
+	target := targetText
+	if !strings.Contains(targetText, "\x1b[") {
+		target = muted().Render(targetText)
+	}
 	gap := m.width - shell.StringWidth(secondaryMarker) - shell.StringWidth(left) - shell.StringWidth(target)
 	if gap < 2 {
 		gap = 2
@@ -1508,6 +1514,14 @@ func (m Model) containerText(row row, marker string) (string, string) {
 		name = shell.Truncate(name, row.nameWidth, "…")
 		name += strings.Repeat(" ", max(0, row.nameWidth-shell.StringWidth(name)))
 	}
+	name = highlightText(name, string(m.query))
+	nameGutter := "  "
+	marked := m.marked[picker.ContainerRef{Machine: row.place.Machine, ID: row.place.ContainerID}]
+	if marked {
+		nameGutter = magenta().Render("◆ ")
+		name = magenta().Render(name)
+	}
+	name = nameGutter + name
 	agents := m.containerAgents(row.place)
 	full := make([]string, 0, len(agents))
 	dots := ""
@@ -1572,32 +1586,10 @@ func (m Model) placeText(row row, marker, secondaryMarker string) (string, strin
 		primary = bold().Render(primary)
 	}
 	secondary := ""
-	switch place.Kind {
-	case picker.ContainerKind:
-		secondary = secondaryMarker + m.containerSecondary(place)
-	case picker.ProjectKind:
+	if place.Kind == picker.ProjectKind {
 		secondary = secondaryMarker + m.gitSecondary(place)
 	}
 	return marker + primary, secondary
-}
-func (m Model) containerSecondary(place picker.Place) string {
-	agents := m.agentsFor(place)
-	if len(agents) == 0 {
-		if preview := previewLine(place.Preview); preview != "" {
-			return muted().Render(highlightText(preview, string(m.query)))
-		}
-		return muted().Faint(true).Render("no agents")
-	}
-	parts := []string{}
-	for _, agent := range agents {
-		state := strings.ToLower(strings.TrimSpace(sanitize(agent.State)))
-		text := sanitize(strings.TrimSpace(agent.Harness)) + " " + sanitize(state)
-		if state == "stopped" && agent.StoppedSince != nil {
-			text += " " + stoppedAge(m.now(), *agent.StoppedSince)
-		}
-		parts = append(parts, stateColor(agent).Render("●")+" "+muted().Render(text))
-	}
-	return strings.Join(parts, "  ")
 }
 func (m Model) gitSecondary(place picker.Place) string {
 	if errText := sanitize(m.gitErrors[place.Path]); errText != "" {
@@ -1671,17 +1663,39 @@ func (m Model) footer() string {
 	if m.currentContainer() {
 		left = append(left, hint("Ctrl-R", "rename"), hint("Ctrl-T", "mark"))
 	}
-	leftText := strings.Join(left, "  ")
 	right := ""
 	if count := len(m.markedTargets()); count > 0 {
 		right = magenta().Render(fmt.Sprintf("%d marked", count))
 	}
+	available := m.width
 	if right != "" {
-		maxLeft := m.width - shell.StringWidth(right) - 1
-		leftText = shell.Truncate(leftText, maxLeft, "…")
+		available -= shell.StringWidth(right) + 1
+	}
+	leftText := wholeHints(left, available)
+	if right != "" {
 		return fit(leftText+strings.Repeat(" ", max(1, m.width-shell.StringWidth(leftText)-shell.StringWidth(right)))+right, m.width)
 	}
 	return fit(leftText, m.width)
+}
+func wholeHints(hints []string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(hints))
+	used := 0
+	for _, value := range hints {
+		separator := 0
+		if len(parts) > 0 {
+			separator = 2
+		}
+		partWidth := shell.StringWidth(value)
+		if used+separator+partWidth > width {
+			break
+		}
+		parts = append(parts, value)
+		used += separator + partWidth
+	}
+	return strings.Join(parts, "  ")
 }
 func hint(keyValue, label string) string {
 	return accent().Bold(true).Render(keyValue) + " " + muted().Faint(true).Render(label)
@@ -1723,16 +1737,7 @@ func contains(values []string, value string) bool {
 	}
 	return false
 }
-func itoa(value int) string { return fmt.Sprintf("%d", value) }
-func previewLine(value string) string {
-	for _, line := range strings.Split(value, "\n") {
-		line = strings.TrimSpace(sanitize(line))
-		if line != "" {
-			return line
-		}
-	}
-	return ""
-}
+func itoa(value int) string                  { return fmt.Sprintf("%d", value) }
 func stoppedAge(now, since time.Time) string { return picker.StoppedAge(now, since) }
 func stateColor(agent capabilities.Agent) lipgloss.Style {
 	switch {

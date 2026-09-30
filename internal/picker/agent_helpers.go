@@ -44,5 +44,9 @@ func StoppedAge(now, since time.Time) string {
 	if minutes < 60 {
 		return fmt.Sprintf("%dm", minutes)
 	}
-	return fmt.Sprintf("%dh", minutes/60)
+	hours := minutes / 60
+	if hours < 24 {
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dd", hours/24)
 }

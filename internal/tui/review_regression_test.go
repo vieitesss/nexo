@@ -97,13 +97,22 @@ func TestGitDiscoveryRevealsSelectedWorktreeAndRendersStates(t *testing.T) {
 	}
 }
 
+func TestRemoteSnapshotsReplaceOpaqueAgentRecords(t *testing.T) {
+	model := NewModel(context.Background(), Deps{}, AgentsTab)
+	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%7", Target: "opaque-a", State: "working"}}})
+	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%7", Target: "opaque-b", State: "stopped"}}})
+	if len(model.remoteAgents) != 1 || model.remoteAgents[0].agent.Target != "opaque-b" || model.remoteAgents[0].agent.State != "stopped" {
+		t.Fatalf("remote snapshot retained stale record: %#v", model.remoteAgents)
+	}
+}
+
 func TestRemoteLoadCompletionAndMachineScopedAgents(t *testing.T) {
 	model := NewModel(context.Background(), Deps{
 		Containers:     []capabilities.Container{{ID: "1", Name: "local"}, {ID: "1", Name: "remote", Machine: "dev"}},
 		Agents:         []capabilities.Agent{{PaneID: "local-pane", ContainerID: "1", Container: "local", Harness: "pi", State: "working"}},
 		RemoteMachines: []string{"dev"},
 	}, ContainersTab)
-	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%1", ContainerID: "1", Container: "remote", Harness: "claude", State: "working"}}})
+	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%1", Target: "old-target", ContainerID: "1", Container: "remote", Harness: "claude", State: "working"}}})
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%1", ContainerID: "1", Container: "remote", Harness: "claude", State: "stopped"}}})
 	if len(model.remoteAgents) != 1 || model.remoteAgents[0].agent.State != "stopped" {
 		t.Fatalf("nonempty remote snapshot was not replaced: %#v", model.remoteAgents)
@@ -231,7 +240,7 @@ func (source *blockingAgentSource) ListAgents(context.Context) ([]capabilities.A
 
 func TestAgentRefreshProtectsInFlightAndDisplaysError(t *testing.T) {
 	source := &blockingAgentSource{started: make(chan struct{}, 1), release: make(chan struct{})}
-	model := NewModel(context.Background(), Deps{AgentSource: source, AgentRefreshInterval: time.Hour}, AgentsTab)
+	model := NewModel(context.Background(), Deps{AgentSource: source, AgentRefreshInterval: time.Nanosecond}, AgentsTab)
 	model.Init()
 	if model.refreshInFlight == nil || !*model.refreshInFlight {
 		t.Fatal("initial refresh was not marked in flight")
@@ -244,6 +253,9 @@ func TestAgentRefreshProtectsInFlightAndDisplaysError(t *testing.T) {
 	model = updated.(Model)
 	if cmd == nil || source.calls.Load() != 1 {
 		t.Fatalf("in-flight tick launched another source call: calls=%d", source.calls.Load())
+	}
+	if _, ok := cmd().(refreshTickMsg); !ok {
+		t.Fatalf("in-flight tick command = %T, want only the next tick", cmd())
 	}
 	close(source.release)
 	<-done
@@ -264,7 +276,7 @@ func TestPlaceRankingAndVisibleAgentHighlights(t *testing.T) {
 	model.SetQuery("branch")
 	model.SetSize(100, 8)
 	lipgloss.SetColorProfile(termenv.ANSI)
-	if !strings.Contains(model.View(), "branch") || !strings.Contains(model.View(), "\x1b[33") {
+	if !strings.Contains(model.View(), "branch") || !strings.Contains(model.View(), "\x1b[1;33mb") {
 		t.Fatalf("branch match not highlighted: %q", model.View())
 	}
 	projects := NewModel(context.Background(), Deps{Projects: []picker.Place{
