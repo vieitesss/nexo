@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -67,22 +68,128 @@ func TestProjectsQueryIsFlatRankedAndStartsAtBestName(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
 	model.SetQuery("gitops")
+	// Prefix matches tie on score. The shorter name wins, so gitops-k8s
+	// leads gitops-fsforge-improvements; the branch-only match stays last.
+	want := []string{
+		"project:/home/tester/work/prefapp/gitops-k8s",
+		"project:/home/tester/work/prefapp/gitops-readme-diagram",
+		"project:/home/tester/work/prefapp/gitops-fsforge-improvements",
+		"project:/home/tester/work/prefapp/gitops-publication-si-01-03-jh69pd38vg",
+		"project:/home/tester/work/other/unrelated",
+	}
 	rows := model.Rows()
-	if len(rows) != 5 {
-		t.Fatalf("query rows = %v, want matching names and branch/path result", rows)
+	if !slices.Equal(rows, want) {
+		t.Fatalf("ranked rows = %v, want %v", rows, want)
 	}
 	for _, id := range rows {
 		if strings.HasPrefix(id, "group:") {
 			t.Fatalf("flat query retained group header: %v", rows)
 		}
 	}
-	if model.Cursor() != rows[0] || rows[0] != "project:/home/tester/work/prefapp/gitops-fsforge-improvements" {
-		t.Fatalf("cursor/ordering = %q/%v, want best name first with name tie-break", model.Cursor(), rows)
+	if model.Cursor() != rows[0] {
+		t.Fatalf("cursor = %q, want first ranked row %q", model.Cursor(), rows[0])
 	}
 	model.SetSize(80, 16)
 	plain := shell.Plain(model.View())
 	if !strings.Contains(plain, "~/work/prefapp") || strings.Contains(plain, "⌄  ") {
 		t.Fatalf("flat query did not move folder to final column: %q", plain)
+	}
+}
+
+func TestProjectsFlatRankingTieBreaksShorterThenRootThenName(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	places := []picker.Place{
+		{Kind: picker.ProjectKind, Path: "/home/tester/w/parent", Group: "/home/tester/w", DisplayRemainder: "other", Git: true, GitContext: &picker.GitContext{Identity: "other"}},
+		{Kind: picker.ProjectKind, Path: "/home/tester/w/parent-wt", Group: "/home/tester/w", DisplayRemainder: "alpha", ParentPath: "/home/tester/w/parent", Git: true, GitContext: &picker.GitContext{Identity: "alpha-wt"}},
+		{Kind: picker.ProjectKind, Path: "/home/tester/w/rootx", Group: "/home/tester/w", DisplayRemainder: "alpha", Git: true, GitContext: &picker.GitContext{Identity: "alpha"}},
+		{Kind: picker.ProjectKind, Path: "/home/tester/w/tool", Group: "/home/tester/w", DisplayRemainder: "tool", Git: true, GitContext: &picker.GitContext{Identity: "main"}},
+		{Kind: picker.ProjectKind, Path: "/home/tester/w/tool-long", Group: "/home/tester/w", DisplayRemainder: "tool-long", Git: true, GitContext: &picker.GitContext{Identity: "tool-long"}},
+		{Kind: picker.ProjectKind, Path: "/home/tester/w/beta", Group: "/home/tester/w", DisplayRemainder: "beta", Git: true, GitContext: &picker.GitContext{Identity: "beta"}},
+		{Kind: picker.ProjectKind, Path: "/home/tester/w/bexa", Group: "/home/tester/w", DisplayRemainder: "bexa", Git: true, GitContext: &picker.GitContext{Identity: "bexa"}},
+	}
+	model := NewModel(context.Background(), Deps{Projects: places}, ProjectsTab)
+
+	model.SetQuery("tool")
+	if got, want := model.Rows(), []string{"project:/home/tester/w/tool", "project:/home/tester/w/tool-long"}; !slices.Equal(got, want) {
+		t.Fatalf("shorter-name tie-break = %v, want %v", got, want)
+	}
+
+	model.SetQuery("alpha")
+	if got, want := model.Rows(), []string{"project:/home/tester/w/rootx", "project:/home/tester/w/parent-wt"}; !slices.Equal(got, want) {
+		t.Fatalf("root-before-worktree tie-break = %v, want %v", got, want)
+	}
+
+	model.SetQuery("be")
+	if got, want := model.Rows(), []string{"project:/home/tester/w/beta", "project:/home/tester/w/bexa"}; !slices.Equal(got, want) {
+		t.Fatalf("name tie-break = %v, want %v", got, want)
+	}
+}
+
+func TestProjectsFlatRowFitsWithoutTruncation(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
+	model.SetQuery("gitops")
+	// 106 is the natural width of the widest flat row in this fixture.
+	model.SetSize(106, 24)
+	plain := shell.Plain(model.View())
+	if !strings.Contains(plain, "gitops-publication-si-01-03-jh69pd38vg") {
+		t.Fatalf("name truncated although the row fits: %q", plain)
+	}
+	if !strings.Contains(plain, "fix/publication-si-01-03-jh69pd38vg") {
+		t.Fatalf("branch truncated although the row fits: %q", plain)
+	}
+}
+
+func TestProjectsFlatLeftoverGoesToBranch(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
+	model.SetQuery("gitops")
+	model.SetSize(80, 24)
+	layout := model.projectLayout()
+	if minName := 16; layout.name < minName {
+		t.Fatalf("name width %d fell below the floor %d", layout.name, minName)
+	}
+	if layout.branch <= layout.name {
+		t.Fatalf("branch width %d did not take the leftover over name %d", layout.branch, layout.name)
+	}
+	if !layout.search || layout.path == 0 {
+		t.Fatalf("folder column should survive at 80 columns: %+v", layout)
+	}
+	plain := shell.Plain(model.View())
+	if !strings.Contains(plain, "fix/publication-si-01") {
+		t.Fatalf("branch did not use its leftover cells: %q", plain)
+	}
+}
+
+func TestProjectsFlatDropsFolderBeforeCuttingBranch(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
+	model.SetQuery("gitops")
+	model.SetSize(60, 16)
+	layout := model.projectLayout()
+	if layout.path != 0 {
+		t.Fatalf("folder column kept at 60 columns: %+v", layout)
+	}
+	if minBranch := 12; layout.branch < minBranch {
+		t.Fatalf("branch width %d fell below the floor %d", layout.branch, minBranch)
+	}
+	plain := shell.Plain(model.View())
+	if strings.Contains(plain, "~/work/prefapp") {
+		t.Fatalf("dropped folder column still rendered: %q", plain)
+	}
+}
+
+func TestProjectsGroupedColumnsUseTheFullWidthAt60(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
+	model.SetSize(60, 16)
+	layout := model.projectLayout()
+	if minBranch := 12; layout.branch < minBranch {
+		t.Fatalf("grouped branch width %d fell below the floor %d", layout.branch, minBranch)
+	}
+	used := layout.name + layout.branch + layout.summary + 2 + 2*2
+	if used != 60 {
+		t.Fatalf("grouped row uses %d of 60 cells: %+v", used, layout)
 	}
 }
 

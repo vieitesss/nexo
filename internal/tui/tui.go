@@ -890,13 +890,27 @@ func (m Model) flatProjectRows(places []picker.Place) []row {
 			group: place.Group, depth: 0, cursorable: true, matched: true, score: match.Score, place: place,
 		})
 	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		if rows[i].score != rows[j].score {
-			return rows[i].score > rows[j].score
-		}
-		return rows[i].label < rows[j].label
-	})
+	sort.SliceStable(rows, func(i, j int) bool { return projectMatchBefore(rows[i], rows[j]) })
 	return rows
+}
+
+// projectMatchBefore orders ranked search results. Scores already encode
+// field precedence (name, then branch, then path). Equal scores fall back to
+// a stable reading order: the shorter name first, a checkout before its
+// worktrees, then the name itself.
+func projectMatchBefore(left, right row) bool {
+	if left.score != right.score {
+		return left.score > right.score
+	}
+	leftName, rightName := []rune(left.label), []rune(right.label)
+	if len(leftName) != len(rightName) {
+		return len(leftName) < len(rightName)
+	}
+	leftRoot, rightRoot := left.place.ParentPath == "", right.place.ParentPath == ""
+	if leftRoot != rightRoot {
+		return leftRoot
+	}
+	return left.label < right.label
 }
 
 func projectRow(place picker.Place, group string, depth int, treePrefix string, cursorable bool) row {
@@ -1662,51 +1676,73 @@ type projectColumns struct {
 	search                      bool
 }
 
+const (
+	// projectMinName is the floor the name column may shrink to before a row
+	// stops being readable.
+	projectMinName = 16
+	// projectComfortBranch is the width the branch wants before the folder
+	// column is worth keeping. Dropping the folder buys the branch this space.
+	projectComfortBranch = 16
+)
+
+// projectLayout sizes the project columns from the content of the visible
+// rows. Every column gets only what it needs; the leftover goes to the
+// branch first, then the name. The summary column tracks its widest value
+// (and disappears when there is none), and the folder column is the first to
+// be dropped when the branch cannot stay readable.
 func (m Model) projectLayout() projectColumns {
 	layout := projectColumns{search: string(m.query) != ""}
-	maxName, maxBranch, maxSummary, maxPath := 1, 1, 1, 0
+	maxName, maxBranch, maxSummary, maxPath := 0, 0, 0, 0
 	for _, candidate := range m.rows {
 		if candidate.kind != itemRow || candidate.itemKind != "project" {
 			continue
 		}
-		name := shell.StringWidth(candidate.treePrefix + projectLabel(candidate.place))
-		if name > maxName {
-			maxName = name
+		if width := shell.StringWidth(candidate.treePrefix + projectLabel(candidate.place)); width > maxName {
+			maxName = width
 		}
-		if branch := shell.StringWidth(projectBranch(candidate.place)); branch > maxBranch {
-			maxBranch = branch
+		if width := shell.StringWidth(projectBranch(candidate.place)); width > maxBranch {
+			maxBranch = width
 		}
-		if summary := shell.StringWidth(m.projectSummary(candidate.place)); summary > maxSummary {
-			maxSummary = summary
+		if width := shell.StringWidth(m.projectSummary(candidate.place)); width > maxSummary {
+			maxSummary = width
 		}
-		if path := shell.StringWidth(abbreviateHome(candidate.group)); path > maxPath {
-			maxPath = path
+		if layout.search {
+			if width := shell.StringWidth(abbreviateHome(candidate.group)); width > maxPath {
+				maxPath = width
+			}
 		}
 	}
-	// Two-character gutters and two spaces between each column are reserved.
-	available := m.width - 2 - 2 - 6
-	if available < 12 {
-		available = 12
-	}
-	nameCap := available * 45 / 100
-	if nameCap < 8 {
-		nameCap = 8
-	}
-	layout.name = min(maxName, nameCap)
+
+	// The marker and the two-space gutters between columns are fixed costs;
+	// only the columns themselves compete for the remaining cells.
+	overhead := 2 + 2 + 2
 	if layout.search {
-		layout.path = min(maxPath, max(12, available/5))
+		overhead += 2
 	}
-	layout.summary = min(maxSummary, max(6, available/6+2))
-	layout.branch = maxBranch
-	remaining := available - layout.name - layout.summary - layout.path
-	if remaining < 6 {
-		layout.name = max(6, layout.name+remaining-6)
-		remaining = available - layout.name - layout.summary - layout.path
+	available := max(0, m.width-overhead)
+
+	// The summary is only as wide as its widest value; no value means the
+	// column takes no cells at all.
+	layout.summary = maxSummary
+
+	nameFloor := min(projectMinName, maxName)
+	if layout.search && available-maxSummary-maxPath >= nameFloor+projectComfortBranch {
+		layout.path = maxPath
 	}
-	if remaining < 1 {
-		remaining = 1
+
+	budget := max(0, available-layout.summary-layout.path)
+	if budget >= maxBranch+nameFloor {
+		// The branch is fully served first, then the name takes the rest.
+		layout.branch = maxBranch
+		layout.name = budget - maxBranch
+	} else {
+		layout.name = nameFloor
+		layout.branch = budget - nameFloor
 	}
-	layout.branch = max(1, remaining)
+	layout.name = min(layout.name, maxName)
+	layout.branch = min(layout.branch, maxBranch)
+	layout.name = max(layout.name, 0)
+	layout.branch = max(layout.branch, 0)
 	return layout
 }
 
@@ -1736,7 +1772,7 @@ func (m Model) placeText(row row, marker, secondaryMarker string) (string, strin
 	branch := fit(muted().Render(projectBranch(row.place)), layout.branch)
 	summary := fit(m.projectSummaryStyled(row.place), layout.summary)
 	line := nameCell + "  " + branch + "  " + summary
-	if layout.search {
+	if layout.search && layout.path > 0 {
 		path := abbreviateHome(row.group)
 		pathCell := shell.Truncate(path, layout.path, "…")
 		pathCell = strings.Repeat(" ", max(0, layout.path-shell.StringWidth(pathCell))) + muted().Render(pathCell)
