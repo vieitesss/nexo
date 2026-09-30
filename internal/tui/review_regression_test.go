@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -43,31 +44,39 @@ func TestSearchRevealsPreviouslyFoldedProjects(t *testing.T) {
 	}
 }
 
-func TestSearchFoldingHonorsExplicitGroupAndLinkedRootFolds(t *testing.T) {
+func TestSearchIsFlatAndIgnoresGroupFolding(t *testing.T) {
 	model := NewModel(context.Background(), richDeps(), ProjectsTab)
 	model.SetQuery("nexo-wt")
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp}) // group
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
-	if len(model.Rows()) != 1 {
-		t.Fatalf("group left did not fold search rows: %v", model.Rows())
+	if got := model.Rows(); len(got) != 1 || got[0] != "project:/work/nexo-wt" {
+		t.Fatalf("query rows = %v, want the matching worktree only", got)
 	}
-	model.SetQuery("nexo-wt")
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp}) // linked root's parent
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
-	if strings.Contains(strings.Join(model.Rows(), "\x00"), "nexo-wt") {
-		t.Fatalf("linked root left did not fold: %v", model.Rows())
+	if got := model.Rows(); len(got) != 1 || got[0] != "project:/work/nexo-wt" {
+		t.Fatalf("fold key changed flat search rows: %v", got)
+	}
+	model.SetQuery("")
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp}) // group header
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
+	if got := model.Rows(); len(got) != 1 {
+		t.Fatalf("empty-query group fold rows = %v", got)
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRight})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown}) // checkout
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
+	if got := model.Rows(); len(got) != 3 || got[1] != "project:/work/nexo" || got[2] != "project:/work/other" {
+		t.Fatalf("empty-query checkout fold rows = %v", got)
 	}
 }
 
-func TestUnrelatedGitLoadDoesNotUnfoldInitialGroups(t *testing.T) {
+func TestGitLoadPreservesExpandedGroupState(t *testing.T) {
 	model := NewModel(context.Background(), richDeps(), ProjectsTab)
-	if got := model.Rows(); len(got) != 1 {
-		t.Fatalf("initial rows = %v", got)
+	if got := model.Rows(); len(got) != 4 {
+		t.Fatalf("initial rows = %v, want expanded group", got)
 	}
 	model = updateModel(t, model, picker.GitContextMsg{Path: "/work/nexo", Context: picker.GitContext{Identity: "main"}})
-	if got := model.Rows(); len(got) != 1 {
-		t.Fatalf("unrelated Git load unfolded group: %v", got)
+	if got := model.Rows(); len(got) != 4 {
+		t.Fatalf("Git load changed expanded group: %v", got)
 	}
 }
 
@@ -263,6 +272,46 @@ func TestAgentRefreshProtectsInFlightAndDisplaysError(t *testing.T) {
 	model.SetSize(100, 8)
 	if !strings.Contains(shell.Plain(model.footer()), "agent refresh: source failed") {
 		t.Fatal("refresh error was not rendered")
+	}
+}
+
+func TestAgentRankingAndAttentionOrder(t *testing.T) {
+	agents := []capabilities.Agent{
+		{PaneID: "unseen", Harness: "slow", Container: "one", Target: "one:1", State: "stopped", Seen: false},
+		{PaneID: "a-working", Harness: "slow", Container: "one", Target: "one:2", State: "working"},
+		{PaneID: "seen", Harness: "slow", Container: "one", Target: "one:3", State: "stopped", Seen: true},
+		{PaneID: "a-target", Harness: "slow", Container: "one", Target: "priority-target", State: "working"},
+		{PaneID: "z-harness", Harness: "priority", Container: "one", Target: "one:4", State: "working"},
+	}
+	model := NewModel(context.Background(), Deps{Agents: agents}, AgentsTab)
+	if got, want := model.Rows()[:3], []string{"agent:" + picker.LocalMachine() + ":unseen", "agent:" + picker.LocalMachine() + ":a-target", "agent:" + picker.LocalMachine() + ":a-working"}; !slices.Equal(got, want) {
+		t.Fatalf("empty-query attention order = %v, want prefix %v", got, want)
+	}
+	model.SetQuery("priority")
+	if got, want := model.Rows(), []string{"agent:" + picker.LocalMachine() + ":z-harness", "agent:" + picker.LocalMachine() + ":a-target"}; !slices.Equal(got, want) {
+		t.Fatalf("query-ranked agents = %v, want %v", got, want)
+	}
+}
+
+func TestContainerRankingKeepsMarks(t *testing.T) {
+	containers := []capabilities.Container{
+		{ID: "devbox", Name: "shell", Machine: "devbox"},
+		{ID: "node", Name: "device", Machine: "node"},
+		{ID: "alpha", Name: "mydev", Machine: "alpha"},
+	}
+	model := NewModel(context.Background(), Deps{Containers: containers}, ContainersTab)
+	model.SetQuery("dev")
+	want := []string{"machine:devbox", "container:devbox:devbox", "", "machine:node", "container:node:node", "", "machine:alpha", "container:alpha:alpha", "", "new:local"}
+	if got := model.Rows(); !slices.Equal(got, want) {
+		t.Fatalf("query-ranked containers = %v, want %v", got, want)
+	}
+	model = updateModel(t, model, keyMsg(tea.KeyCtrlT))
+	if got := model.Marked(); !slices.Equal(got, []string{"devbox"}) {
+		t.Fatalf("marked ranked container = %v", got)
+	}
+	model.SetQuery("dev")
+	if got := model.Marked(); !slices.Equal(got, []string{"devbox"}) {
+		t.Fatalf("mark lost during query rebuild = %v", got)
 	}
 }
 
