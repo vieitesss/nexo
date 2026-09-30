@@ -89,7 +89,9 @@ func TestProjectsQueryIsFlatRankedAndStartsAtBestName(t *testing.T) {
 	if model.Cursor() != rows[0] {
 		t.Fatalf("cursor = %q, want first ranked row %q", model.Cursor(), rows[0])
 	}
-	model.SetSize(80, 16)
+	// The folder column is flat mode only and at 80 columns keeping it would
+	// starve the branch, so assert its placement at a width where it survives.
+	model.SetSize(120, 16)
 	plain := shell.Plain(model.View())
 	if !strings.Contains(plain, "~/work/prefapp") || strings.Contains(plain, "⌄  ") {
 		t.Fatalf("flat query did not move folder to final column: %q", plain)
@@ -140,7 +142,7 @@ func TestProjectsFlatRowFitsWithoutTruncation(t *testing.T) {
 	}
 }
 
-func TestProjectsFlatLeftoverGoesToBranch(t *testing.T) {
+func TestProjectsFlatNameLeadsBranchAt80(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
 	model.SetQuery("gitops")
@@ -149,15 +151,39 @@ func TestProjectsFlatLeftoverGoesToBranch(t *testing.T) {
 	if minName := 16; layout.name < minName {
 		t.Fatalf("name width %d fell below the floor %d", layout.name, minName)
 	}
-	if layout.branch <= layout.name {
-		t.Fatalf("branch width %d did not take the leftover over name %d", layout.branch, layout.name)
+	if layout.name <= layout.branch {
+		t.Fatalf("name width %d did not lead branch width %d: %+v", layout.name, layout.branch, layout)
 	}
-	if !layout.search || layout.path == 0 {
-		t.Fatalf("folder column should survive at 80 columns: %+v", layout)
+	if cap := int(0.45 * float64(80)); layout.name != cap {
+		t.Fatalf("name width %d != cap %d: %+v", layout.name, cap, layout)
 	}
-	plain := shell.Plain(model.View())
-	if !strings.Contains(plain, "fix/publication-si-01") {
-		t.Fatalf("branch did not use its leftover cells: %q", plain)
+}
+
+// TestProjectsFlatKeepsNamesUpTo30At80 pins the priority change: at a narrow
+// terminal every visible name that fits the name cap must render in full,
+// even when that means the branch and folder lose cells instead.
+func TestProjectsFlatKeepsNamesUpTo30At80(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
+	model.SetQuery("gitops")
+	model.SetSize(80, 24)
+	layout := model.projectLayout()
+	shown := 0
+	for _, row := range model.rows {
+		if row.kind != itemRow || row.itemKind != "project" {
+			continue
+		}
+		name := row.treePrefix + projectLabel(row.place)
+		if shell.StringWidth(name) > 30 {
+			continue
+		}
+		shown++
+		if shell.StringWidth(name) > layout.name {
+			t.Fatalf("name %q (%d cells) exceeds the %d-cell name column at 80 columns: %+v", name, shell.StringWidth(name), layout.name, layout)
+		}
+	}
+	if shown < 3 {
+		t.Fatalf("fixture stopped exercising short names: %d", shown)
 	}
 }
 

@@ -1680,16 +1680,23 @@ const (
 	// projectMinName is the floor the name column may shrink to before a row
 	// stops being readable.
 	projectMinName = 16
+	// projectMinBranch is the floor the branch column may shrink to before the
+	// name column gives up any of its own cells.
+	projectMinBranch = 12
 	// projectComfortBranch is the width the branch wants before the folder
 	// column is worth keeping. Dropping the folder buys the branch this space.
 	projectComfortBranch = 16
+	// projectNameShare is the share of the row the name column may claim
+	// before it is capped. Names are what the user scans, so they lead.
+	projectNameShare = 0.45
 )
 
 // projectLayout sizes the project columns from the content of the visible
-// rows. Every column gets only what it needs; the leftover goes to the
-// branch first, then the name. The summary column tracks its widest value
-// (and disappears when there is none), and the folder column is the first to
-// be dropped when the branch cannot stay readable.
+// rows. Names lead: the longest visible name claims its share of the row up
+// front, the Git summary takes its widest value, and the branch lives on what
+// remains. The flat-mode folder column is dropped first when keeping it would
+// starve the branch; only once the branch has fallen to its floor does the
+// name shrink below its cap, and never below its floor.
 func (m Model) projectLayout() projectColumns {
 	layout := projectColumns{search: string(m.query) != ""}
 	maxName, maxBranch, maxSummary, maxPath := 0, 0, 0, 0
@@ -1714,33 +1721,41 @@ func (m Model) projectLayout() projectColumns {
 	}
 
 	// The marker and the two-space gutters between columns are fixed costs;
-	// only the columns themselves compete for the remaining cells.
-	overhead := 2 + 2 + 2
-	if layout.search {
-		overhead += 2
-	}
-	available := max(0, m.width-overhead)
+	// the folder column pays for its own gutter when it survives.
+	available := max(0, m.width-(2+2+2))
 
 	// The summary is only as wide as its widest value; no value means the
 	// column takes no cells at all.
 	layout.summary = maxSummary
 
+	// The name leads. It claims the longest visible name up to its share of
+	// the row, but never drops below its floor.
 	nameFloor := min(projectMinName, maxName)
-	if layout.search && available-maxSummary-maxPath >= nameFloor+projectComfortBranch {
-		layout.path = maxPath
+	nameCap := int(float64(m.width) * projectNameShare)
+	if nameCap < projectMinName {
+		nameCap = projectMinName
+	}
+	nameTarget := min(maxName, nameCap)
+	if nameTarget < nameFloor {
+		nameTarget = nameFloor
 	}
 
-	budget := max(0, available-layout.summary-layout.path)
-	if budget >= maxBranch+nameFloor {
-		// The branch is fully served first, then the name takes the rest.
-		layout.branch = maxBranch
-		layout.name = budget - maxBranch
-	} else {
-		layout.name = nameFloor
-		layout.branch = budget - nameFloor
+	// The folder column is the first thing dropped: it only survives when the
+	// branch can still reach its comfortable width after the name, the summary
+	// and the folder itself have been served.
+	if layout.search && maxPath > 0 {
+		rest := available - layout.summary - nameTarget - (maxPath + 2)
+		if rest >= min(maxBranch, projectComfortBranch) {
+			layout.path = maxPath
+			available -= maxPath + 2
+		}
 	}
-	layout.name = min(layout.name, maxName)
-	layout.branch = min(layout.branch, maxBranch)
+
+	// The branch lives on the remainder. When there is too little it falls to
+	// its floor, and only then does the name give up cells down to its floor.
+	rest := available - layout.summary - nameTarget
+	layout.branch = min(maxBranch, max(rest, projectMinBranch))
+	layout.name = min(nameTarget, max(nameFloor, available-layout.summary-layout.branch))
 	layout.name = max(layout.name, 0)
 	layout.branch = max(layout.branch, 0)
 	return layout
