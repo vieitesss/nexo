@@ -258,20 +258,18 @@ statuses, and safe verification.
 
 ### Picker keys
 
-| Key | Place picker | Agent navigator |
-| --- | --- | --- |
-| `Tab` / `Shift-Tab` | Switch tabs | Switch tabs |
-| `F1` / `F2` / `F3` | Jump to Agents / Containers / Projects | Jump to Agents / Containers / Projects |
-| `↑` / `↓`, `Ctrl-N` / `Ctrl-P` | Move | Move |
-| `Enter` | Open the selected item | Focus the selected agent |
-| `←` / `→` | Fold project groups and linked worktrees | — |
-| `Ctrl-T` | Mark the selected container | — |
-| `Ctrl-X` | Kill marked or selected containers after confirmation | — |
-| `Ctrl-R` | Rename the selected container | — |
-| `Esc` / `Ctrl-C` | Clear search, then close / close | Clear search, then close / close |
-| Printable keys, `Backspace` / `Delete` | Fuzzy search, erase search | Fuzzy search, erase search |
-| `x` (or `d`), when the search is empty | Confirm batch close with `y`; cancel with `n` or `Esc` | — |
-| `q` | Quit when the search is empty | — |
+| Key | TUI behavior |
+| --- | --- |
+| `Tab` / `Shift-Tab` | Switch tabs |
+| `F1` / `F2` / `F3` | Jump to Agents / Containers / Projects |
+| `↑` / `↓`, `Ctrl-N` / `Ctrl-P` | Move |
+| `Enter` | Open the selected item or focus the selected agent |
+| `←` / `→` | Fold project groups and linked worktrees |
+| `Ctrl-T` | Mark the selected container |
+| `Ctrl-X` | Kill marked or selected containers after confirmation |
+| `Ctrl-R` | Rename the selected container |
+| `Esc` / `Ctrl-C` | Clear search, then close / close |
+| Printable keys, `Backspace` / `Delete` | Fuzzy search, erase search |
 
 ## Configuration
 
