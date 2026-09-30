@@ -29,6 +29,36 @@ func TestParseRequiresCommand(t *testing.T) {
 	}
 }
 
+func TestRunWithTUIUsageErrorsExitTwo(t *testing.T) {
+	for _, args := range [][]string{
+		{"--backend=tmux", "tui", "unknown"},
+		{"--backend=tmux", "tui", "agents", "projects"},
+		{"--backend=tmux", "tui", "--", "agents", "projects"},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			var output, errors strings.Builder
+			status := RunWith(args, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+				t.Fatal("usage errors should not invoke an external program")
+				return nil, nil
+			}), backend.MapEnvironment{}, "")
+			if status != 2 {
+				t.Fatalf("status=%d output=%q errors=%q, want 2", status, output.String(), errors.String())
+			}
+		})
+	}
+}
+
+func TestRunWithBareCommandPrintsUsage(t *testing.T) {
+	var output, errors strings.Builder
+	status := RunWith(nil, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("bare nexo should not invoke an external program")
+		return nil, nil
+	}), backend.MapEnvironment{}, "")
+	if status != 0 || !strings.Contains(output.String(), "Usage: nexo") || errors.Len() != 0 {
+		t.Fatalf("status=%d output=%q errors=%q", status, output.String(), errors.String())
+	}
+}
+
 func TestRunWithVersionDoesNotRequireCommandOrBackend(t *testing.T) {
 	var output, errors strings.Builder
 	status := RunWith([]string{"--version"}, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
@@ -43,6 +73,27 @@ func TestRunWithVersionDoesNotRequireCommandOrBackend(t *testing.T) {
 	}
 	if errors.Len() != 0 {
 		t.Fatalf("errors = %q", errors.String())
+	}
+}
+
+func TestRunWithLegacyTmuxOptionsWarnsOnce(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte(`[tmux]
+place-key = "C-s"
+popup-width = "80%"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output, errors strings.Builder
+	status := RunWith([]string{"-c", configPath, "backend"}, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("backend command should not invoke an external program")
+		return nil, nil
+	}), backend.MapEnvironment{}, "")
+	if status != 0 {
+		t.Fatalf("status=%d output=%q errors=%q", status, output.String(), errors.String())
+	}
+	if count := strings.Count(errors.String(), "tmux key and popup options are ignored"); count != 1 {
+		t.Fatalf("warning count=%d errors=%q, want one", count, errors.String())
 	}
 }
 

@@ -36,6 +36,20 @@ type Invocation struct {
 	Args              []string
 }
 
+// UsageError reports invalid arguments for a command.
+type UsageError struct {
+	Err error
+}
+
+func (e UsageError) Error() string {
+	if e.Err == nil {
+		return "invalid command usage"
+	}
+	return e.Err.Error()
+}
+
+func (e UsageError) Unwrap() error { return e.Err }
+
 // Command is a registered nexo subcommand.
 type Command interface {
 	Name() string

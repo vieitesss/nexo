@@ -2,33 +2,61 @@ id = "nexo"
 name = "nexo"
 version = "0.1.0"
 min_herdr_version = "0.9.0"
-description = "Open nexo's place picker and agent navigator in Herdr popups."
+description = "Open nexo's tabbed terminal UI in Herdr popups."
 platforms = ["linux", "macos"]
 
 [[actions]]
-id = "place-picker"
-title = "Open nexo place picker"
+id = "tui"
+title = "Open nexo TUI"
 contexts = ["workspace", "tab", "pane"]
-command = ["herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "place-picker"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "tui"]
 
 [[actions]]
-id = "agent-navigator"
-title = "Open nexo agent navigator"
+id = "tui-agents"
+title = "Open nexo agents"
 contexts = ["workspace", "tab", "pane"]
-command = ["herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "agent-navigator"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "tui-agents"]
+
+[[actions]]
+id = "tui-containers"
+title = "Open nexo containers"
+contexts = ["workspace", "tab", "pane"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "tui-containers"]
+
+[[actions]]
+id = "tui-projects"
+title = "Open nexo projects"
+contexts = ["workspace", "tab", "pane"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "tui-projects"]
 
 [[panes]]
-id = "place-picker"
-title = "nexo places"
+id = "tui"
+title = "nexo TUI"
 placement = "popup"
 width = "100%"
 height = "100%"
-command = ["nexo", "--backend=herdr"]
+command = ["nexo", "--backend=herdr", "tui"]
 
 [[panes]]
-id = "agent-navigator"
+id = "tui-agents"
 title = "nexo agents"
 placement = "popup"
 width = "100%"
 height = "100%"
-command = ["nexo", "--backend=herdr", "agents", "pick"]
+command = ["nexo", "--backend=herdr", "tui", "agents"]
+
+[[panes]]
+id = "tui-containers"
+title = "nexo containers"
+placement = "popup"
+width = "100%"
+height = "100%"
+command = ["nexo", "--backend=herdr", "tui", "containers"]
+
+[[panes]]
+id = "tui-projects"
+title = "nexo projects"
+placement = "popup"
+width = "100%"
+height = "100%"
+command = ["nexo", "--backend=herdr", "tui", "projects"]

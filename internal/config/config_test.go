@@ -209,8 +209,11 @@ func TestLoadParsesTmuxSettingsAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got.Tmux.PlaceKey != "none" || got.Tmux.AgentKey != "a" || got.Tmux.PopupWidth != "70%" || got.Tmux.PopupHeight != "100%" || got.Tmux.PopupX != "C" || got.Tmux.PopupY != "C" {
-		t.Fatalf("Tmux = %#v, want configured key and defaults", got.Tmux)
+	if got.Tmux != (TmuxConfig{}) {
+		t.Fatalf("Tmux = %#v, want empty active tmux config", got.Tmux)
+	}
+	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "ignored") {
+		t.Fatalf("Warnings = %#v, want one legacy tmux warning", got.Warnings)
 	}
 }
 

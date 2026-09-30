@@ -123,17 +123,25 @@ set -g @plugin 'vieitesss/nexo'
 ```
 
 Press TPM's install key (`prefix` + `I`). The committed `nexo.tmux` adapter
-only checks for the binary and invokes `nexo tmux init`; all bindings, hooks,
-and the agent watcher are configured by the binary. To run it manually from a
-checkout:
+only checks for the binary and invokes `nexo tmux init`; hooks and the agent
+watcher are configured by the binary, while key bindings remain yours. To run
+it manually from a checkout:
 
 ```sh
 tmux run-shell /path/to/nexo/nexo.tmux
 ```
 
-The default place-picker binding is `C-s` in tmux's root table (no prefix), and
-the default agent-navigator binding is `a` in the prefix table. See
-[docs/agents.md](docs/agents.md) for watcher behavior and notification details.
+nexo does not install key bindings or open popups itself. Bind the TUI
+entries yourself in `~/.tmux.conf`, including the popup surface and its
+geometry, for example:
+
+```tmux
+bind -n C-s display-popup -E -B -w 100% -h 100% "nexo tui"
+bind a display-popup -E -B -w 100% -h 100% "nexo tui agents"
+```
+
+See [docs/agents.md](docs/agents.md) for watcher behavior and notification
+details.
 
 ### Herdr adapter
 
@@ -149,22 +157,33 @@ For a checkout under development, link the manifest instead:
 herdr plugin link /path/to/nexo
 ```
 
-The manifest opens `nexo --backend=herdr` and
-`nexo --backend=herdr agents pick` in Herdr's native popup panes. Add the
-plugin actions to Herdr's key configuration if desired:
+The manifest provides four TUI actions and popup panes. Add the plugin
+actions to Herdr's key configuration if desired:
 
 ```toml
 [[keys.command]]
 key = "ctrl+s"
 type = "plugin_action"
-command = "nexo.place-picker"
-description = "open nexo place picker"
+command = "nexo.tui"
+description = "open nexo TUI"
 
 [[keys.command]]
 key = "prefix+a"
 type = "plugin_action"
-command = "nexo.agent-navigator"
-description = "open nexo agent navigator"
+command = "nexo.tui-agents"
+description = "open nexo agents"
+
+[[keys.command]]
+key = "prefix+c"
+type = "plugin_action"
+command = "nexo.tui-containers"
+description = "open nexo containers"
+
+[[keys.command]]
+key = "prefix+p"
+type = "plugin_action"
+command = "nexo.tui-projects"
+description = "open nexo projects"
 ```
 
 Reload the configuration after editing it:
@@ -178,13 +197,14 @@ See [docs/herdr.md](docs/herdr.md) for the complete adapter setup and
 
 ## Usage
 
-Running `nexo` with only global flags opens the place picker. Global flags can
-appear before or after a command:
+Running `nexo` with no command prints usage. The TUI entry point accepts an
+optional starting tab; global flags can appear before or after a command:
 
 ```console
 nexo
-nexo --backend=tmux
-nexo --backend=herdr -c ~/.config/nexo/config.toml
+nexo tui
+nexo tui agents
+nexo --backend=herdr -c ~/.config/nexo/config.toml tui projects
 nexo --backend=tmux --json backend
 nexo --version
 nexo --help
@@ -196,11 +216,12 @@ nexo --help
 | --- | --- |
 | `nexo backend` | Print the selected backend and its capabilities; add `--json` for structured output. |
 | `nexo list` | List configured project candidates; use `--places` to include local and configured remote containers. |
-| `nexo agents` | List agent panes; add `pick`, `watch`, or `seen PANE_ID`. |
+| `nexo tui [agents\|containers\|projects]` | Render the TUI in the terminal supplied by your binding. With no tab, open Agents for unseen-stopped agents, otherwise Containers. |
+| `nexo agents` | List agent panes; add `watch` or `seen PANE_ID`. |
 | `nexo open PATH` | Open a discovered project candidate; Herdr also accepts `--workspace-id ID`. |
 | `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, or `close [MACHINE/CONTAINER]`. |
 | `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch` or `--add-parent`. |
-| `nexo tmux init` | Install the configured tmux bindings, focus hooks, and watcher (tmux backend only). |
+| `nexo tmux init` | Install tmux focus hooks and the agent watcher, and migrate old nexo-owned bindings (tmux backend only). |
 
 Examples:
 
@@ -213,7 +234,7 @@ nexo --backend=tmux list --places --json
 
 # Inspect agents, or open the full-screen navigator.
 nexo --backend=herdr agents --json
-nexo --backend=tmux agents pick
+nexo --backend=tmux tui agents
 nexo --backend=tmux agents watch
 nexo --backend=tmux agents seen %4
 
@@ -281,12 +302,7 @@ reconnect-initial = "1s"
 reconnect-max = "30s"
 
 [tmux]
-place-key = "C-s"
-agent-key = "a"
-popup-width = "100%"
-popup-height = "100%"
-popup-x = "C"
-popup-y = "C"
+# Legacy key and popup options are ignored. Bind keys in tmux.conf instead.
 ```
 
 <details>
@@ -308,12 +324,7 @@ popup-y = "C"
 | `remote.transport` | `ssh` | Proxy attachment transport: `ssh`, `mosh`, or `et`. Listing always uses SSH. |
 | `remote.reconnect-initial` | `1s` | Initial retry delay for SSH proxy attachments; must be positive and no greater than `reconnect-max`. |
 | `remote.reconnect-max` | `30s` | Maximum retry delay for SSH proxy attachments; must be positive. |
-| `tmux.place-key` | `C-s` | Root-table key that opens the place picker; `none` leaves it unbound. |
-| `tmux.agent-key` | `a` | Prefix-table key that opens the agent navigator; `none` leaves it unbound. |
-| `tmux.popup-width` | `100%` | tmux popup width passed to `display-popup`. |
-| `tmux.popup-height` | `100%` | tmux popup height passed to `display-popup`. |
-| `tmux.popup-x` | `C` | tmux popup horizontal position passed to `display-popup`. |
-| `tmux.popup-y` | `C` | tmux popup vertical position passed to `display-popup`. |
+| `[tmux]` legacy key and popup options | ignored | Bind TUI keys in `tmux.conf`; nexo warns once when these old options are present. |
 
 </details>
 
@@ -324,7 +335,7 @@ config key, and an empty or `auto` selection detects the inner multiplexer.
 
 | Backend | v1 status | Implemented or checked capabilities |
 | --- | --- | --- |
-| **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, shows popups, focuses panes, creates Git worktrees, detects agents by process and screen polling, watches and notifies, and proxies remote tmux containers over SSH/mosh/et. |
+| **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, focuses panes, creates Git worktrees, detects agents by process and screen polling, watches and notifies, and proxies remote tmux containers over SSH/mosh/et. |
 | **Herdr** | Implemented | Opens and manages native workspaces, reads pane screens, focuses panes, creates Git worktrees, consumes Herdr's native agent state and notifications, registers Herdr remote machines for its native sidebar, and fills the tmux-remote gap with a workspace proxy. The plugin manifest supplies the popup surface. |
 | **Zellij** | Planned | Capability interfaces checked on paper: native project/session actions, pane listing, screen reads, focus, and floating panes; nexo would fill agent, notification, and remote-proxy gaps. |
 | **WezTerm** | Planned | Capability interfaces checked on paper: native spawn/list/read/focus; no popup CLI operation, and workspace switching needs a Lua/user action. |

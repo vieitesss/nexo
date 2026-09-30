@@ -28,7 +28,7 @@ func TestTmuxInitPassesTmuxConfigToAdapter(t *testing.T) {
 	if !ok {
 		t.Fatal("tmux command is not registered")
 	}
-	cfg := config.TmuxConfig{PlaceKey: "C-x"}
+	cfg := config.TmuxConfig{}
 	if err := command.Run(context.Background(), Invocation{
 		Selection:  backend.Selection{Kind: backend.Tmux},
 		Config:     config.Config{Tmux: cfg},
@@ -38,8 +38,8 @@ func TestTmuxInitPassesTmuxConfigToAdapter(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if initializer.config.PlaceKey != "C-x" || initializer.configPath != "/tmp/nexo.toml" {
-		t.Fatalf("input = %#v, want tmux settings and config path", initializer)
+	if initializer.config != cfg || initializer.configPath != "/tmp/nexo.toml" {
+		t.Fatalf("input = %#v, want empty tmux config and config path", initializer)
 	}
 }
 

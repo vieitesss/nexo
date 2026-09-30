@@ -14,8 +14,6 @@ import (
 	"github.com/vieitesss/nexo/internal/picker"
 )
 
-const agentNavigatorInlineEnv = "NEXO_AGENT_NAVIGATOR_INLINE"
-
 func runAgentPicker(ctx context.Context, invocation Invocation) error {
 	if err := invocation.Selection.Require(); err != nil {
 		return err
@@ -24,10 +22,6 @@ func runAgentPicker(ctx context.Context, invocation Invocation) error {
 	if !ok {
 		return errors.New("selected backend does not support agents")
 	}
-	if popup, ok := invocation.Adapter.(capabilities.Popup); ok && os.Getenv(agentNavigatorInlineEnv) != "1" {
-		return popup.ShowPopup(ctx, agentPickerCommand(string(invocation.Selection.Kind), invocation.ConfigPath))
-	}
-
 	cfg := invocation.Config.Agents.WithDefaults()
 	theme := picker.ThemeFromTerminal(ctx, picker.ThemeQuery{Reader: os.Stdin, Writer: os.Stdout}, 100*time.Millisecond)
 	model := navigator.NewModel(source, theme, time.Duration(cfg.PollInterval)*time.Second)
@@ -53,13 +47,4 @@ func runAgentPicker(ctx context.Context, invocation Invocation) error {
 		return fmt.Errorf("backend %q does not support focusing panes", invocation.Selection.Kind)
 	}
 	return focuser.FocusPane(ctx, agent.PaneID)
-}
-
-func agentPickerCommand(kind, configPath string) string {
-	binary := shellQuote(os.Args[0])
-	command := fmt.Sprintf("NEXO_AGENT_NAVIGATOR_INLINE=1 %s --backend=%s", binary, shellQuote(kind))
-	if configPath != "" {
-		command += " --config-file=" + shellQuote(configPath)
-	}
-	return command + " agents pick"
 }

@@ -37,8 +37,8 @@ _Avoid_: reimplementing native features
 
 **Adapter**:
 The thin, logic-free integration shipped per backend (a TPM entry file for
-tmux, a plugin manifest for Herdr) that registers keys, popups and status
-hooks and calls the `nexo` binary.
+tmux, a plugin manifest for Herdr) that registers popups and status hooks and
+calls the `nexo` binary. Key bindings remain owned by the user.
 
 ### Containers
 
@@ -127,3 +127,14 @@ to the selected backend for focus.
 **Agent container identity**:
 The stable backend-native identity used to associate an agent pane with its
 container. It is distinct from the optional display labels.
+
+### TUI
+
+**TUI**:
+The single terminal interface with Agents, Containers and Projects tabs. A
+user chooses how to open it by binding keys in the multiplexer configuration.
+
+**TUI tab**:
+The initial view selected when the TUI opens: Agents, Containers or Projects.
+Without an explicit tab, Agents is selected when an unseen-stopped agent
+exists; otherwise Containers is selected.
