@@ -669,9 +669,22 @@ func (m Model) containerRows() []row {
 			children = append(children, row{id: containerIdentity(place), kind: itemRow, itemKind: "container", label: place.ContainerName, machine: machine, group: machine, depth: 2, cursorable: true, matched: true, score: match.Score, place: place, activity: place.Activity})
 		}
 		sort.SliceStable(children, func(i, j int) bool { return m.containerBefore(children[i], children[j]) })
-		nameWidth := 0; for _, child := range children { if width := shell.StringWidth(sanitize(child.place.ContainerName)); width > nameWidth { nameWidth = width } }
-		capWidth := m.width * 40 / 100; if capWidth <= 0 { capWidth = 40 }; if nameWidth > capWidth { nameWidth = capWidth }
-		for i := range children { children[i].nameWidth = nameWidth }
+		nameWidth := 0
+		for _, child := range children {
+			if width := shell.StringWidth(sanitize(child.place.ContainerName)); width > nameWidth {
+				nameWidth = width
+			}
+		}
+		capWidth := m.width * 40 / 100
+		if capWidth <= 0 {
+			capWidth = 40
+		}
+		if nameWidth > capWidth {
+			nameWidth = capWidth
+		}
+		for i := range children {
+			children[i].nameWidth = nameWidth
+		}
 		_, machineMatch := picker.Rank(string(m.query), sanitize(machine))
 		remoteErr := m.groupErrors[machine]
 		isRemote := contains(m.remoteMachines, machine)
@@ -1491,7 +1504,10 @@ func displayContainer(a capabilities.Agent, machine string) string {
 }
 func (m Model) containerText(row row, marker string) (string, string) {
 	name := sanitize(row.place.ContainerName)
-	if row.nameWidth > 0 { name = shell.Truncate(name, row.nameWidth, "…"); name += strings.Repeat(" ", max(0, row.nameWidth-shell.StringWidth(name))) }
+	if row.nameWidth > 0 {
+		name = shell.Truncate(name, row.nameWidth, "…")
+		name += strings.Repeat(" ", max(0, row.nameWidth-shell.StringWidth(name)))
+	}
 	agents := m.containerAgents(row.place)
 	full := make([]string, 0, len(agents))
 	dots := ""

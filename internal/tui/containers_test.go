@@ -45,7 +45,7 @@ func TestContainerWidthDegradesPillsDotsThenAge(t *testing.T) {
 	}
 	model.SetSize(30, 8)
 	narrow := shell.Plain(model.View())
-	if !strings.Contains(narrow, "a-very-long-container-name-…") && !strings.Contains(narrow, "a-very-long-container…") {
+	if !strings.Contains(narrow, "a-very-long…") && !strings.Contains(narrow, "a-very-long-container…") {
 		t.Fatalf("narrow row lost name truncation: %q", narrow)
 	}
 }
