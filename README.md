@@ -131,8 +131,9 @@ it manually from a checkout:
 tmux run-shell /path/to/nexo/nexo.tmux
 ```
 
-nexo does not install key bindings. Bind the TUI entries yourself in
-`~/.tmux.conf`, for example:
+nexo does not install key bindings or open popups itself. Bind the TUI
+entries yourself in `~/.tmux.conf`, including the popup surface and its
+geometry, for example:
 
 ```tmux
 bind -n C-s display-popup -E -B -w 100% -h 100% "nexo tui"
@@ -215,7 +216,7 @@ nexo --help
 | --- | --- |
 | `nexo backend` | Print the selected backend and its capabilities; add `--json` for structured output. |
 | `nexo list` | List configured project candidates; use `--places` to include local and configured remote containers. |
-| `nexo tui [agents\|containers\|projects]` | Open the full-screen TUI on a tab. With no tab, open Agents for unseen-stopped agents, otherwise Containers. |
+| `nexo tui [agents\|containers\|projects]` | Render the TUI in the terminal supplied by your binding. With no tab, open Agents for unseen-stopped agents, otherwise Containers. |
 | `nexo agents` | List agent panes; add `watch` or `seen PANE_ID`. |
 | `nexo open PATH` | Open a discovered project candidate; Herdr also accepts `--workspace-id ID`. |
 | `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, or `close [MACHINE/CONTAINER]`. |
@@ -334,7 +335,7 @@ config key, and an empty or `auto` selection detects the inner multiplexer.
 
 | Backend | v1 status | Implemented or checked capabilities |
 | --- | --- | --- |
-| **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, shows popups, focuses panes, creates Git worktrees, detects agents by process and screen polling, watches and notifies, and proxies remote tmux containers over SSH/mosh/et. |
+| **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, focuses panes, creates Git worktrees, detects agents by process and screen polling, watches and notifies, and proxies remote tmux containers over SSH/mosh/et. |
 | **Herdr** | Implemented | Opens and manages native workspaces, reads pane screens, focuses panes, creates Git worktrees, consumes Herdr's native agent state and notifications, registers Herdr remote machines for its native sidebar, and fills the tmux-remote gap with a workspace proxy. The plugin manifest supplies the popup surface. |
 | **Zellij** | Planned | Capability interfaces checked on paper: native project/session actions, pane listing, screen reads, focus, and floating panes; nexo would fill agent, notification, and remote-proxy gaps. |
 | **WezTerm** | Planned | Capability interfaces checked on paper: native spawn/list/read/focus; no popup CLI operation, and workspace switching needs a Lua/user action. |
