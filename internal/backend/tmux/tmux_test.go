@@ -56,9 +56,9 @@ func (f *fakeRunner) RunInteractive(_ context.Context, name string, args ...stri
 
 func TestListContainersUsesStableIDsAndActivePane(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"list-sessions -F #{session_id}\t#{session_name}": []byte("$1\tdev\n$2\twork\n"),
-		"list-panes -t $1 -F #{pane_id}\t#{pane_active}":  []byte("%1\t0\n%2\t1\n"),
-		"list-panes -t $2 -F #{pane_id}\t#{pane_active}":  []byte("%3\t1\n"),
+		"list-sessions -F #{session_id}\t#{session_name}\t#{session_activity}\t#{@nexo-proxy}": []byte("$1\tdev\t0\t\n$2\twork\t0\t\n"),
+		"list-panes -t $1 -F #{pane_id}\t#{pane_active}":                                       []byte("%1\t0\n%2\t1\n"),
+		"list-panes -t $2 -F #{pane_id}\t#{pane_active}":                                       []byte("%3\t1\n"),
 	}}
 	backend := New(runner)
 	containers, err := backend.ListContainers(context.Background())

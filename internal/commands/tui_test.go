@@ -8,11 +8,21 @@ import (
 
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/tui"
 )
 
 type tuiFakeAdapter struct {
 	agents []capabilities.Agent
 	popup  string
+}
+
+type countingAgentAdapter struct {
+	calls int
+}
+
+func (a *countingAgentAdapter) ListAgents(context.Context) ([]capabilities.Agent, error) {
+	a.calls++
+	return nil, nil
 }
 
 func (f *tuiFakeAdapter) ListAgents(context.Context) ([]capabilities.Agent, error) {
@@ -69,6 +79,45 @@ func defaultTab(ctx context.Context, adapter capabilities.AgentSource) string {
 		return "error: " + err.Error()
 	}
 	return tab
+}
+
+func TestTUIRunsTabbedModelOnRequestedTabWithoutPopup(t *testing.T) {
+	command, ok := NewRegistry().Lookup("tui")
+	if !ok {
+		t.Fatal("tui command is not registered")
+	}
+	original := runTabbedTUI
+	defer func() { runTabbedTUI = original }()
+	var got []string
+	runTabbedTUI = func(_ context.Context, _ tui.Deps, tab tui.Tab) error { got = append(got, string(tab)); return nil }
+	for _, tab := range []string{"agents", "containers", "projects"} {
+		adapter := &tuiFakeAdapter{}
+		if err := command.Run(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter, Args: []string{tab}}); err != nil {
+			t.Fatal(err)
+		}
+		if adapter.popup != "" {
+			t.Fatalf("%s requested popup %q", tab, adapter.popup)
+		}
+	}
+	if got := strings.Join(got, ","); got != "agents,containers,projects" {
+		t.Fatalf("tabs = %q", got)
+	}
+}
+
+func TestTUIDependenciesPreserveAnInitialEmptySnapshot(t *testing.T) {
+	adapter := &countingAgentAdapter{}
+	if _, err := tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter}, "agents", nil, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.calls != 0 {
+		t.Fatalf("initial empty snapshot triggered %d duplicate reads", adapter.calls)
+	}
+	if _, err := tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter}, "agents", nil, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.calls != 1 {
+		t.Fatalf("unread snapshot calls = %d, want 1", adapter.calls)
+	}
 }
 
 func TestTUIRejectsUnknownTab(t *testing.T) {

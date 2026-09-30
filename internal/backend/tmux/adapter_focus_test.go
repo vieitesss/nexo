@@ -3,15 +3,13 @@ package tmux
 import (
 	"context"
 	"testing"
-
-	"github.com/vieitesss/nexo/internal/config"
 )
 
 func TestInitLeavesExistingFocusEventsEnabled(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"show-option -gqv focus-events": []byte("on\n"),
 	}}
-	if err := New(runner, true).Init(context.Background(), InitInput{Config: config.TmuxConfig{}}); err != nil {
+	if err := New(runner, true).Init(context.Background(), InitInput{}); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
 	for _, current := range runner.calls {

@@ -34,5 +34,5 @@ func (tmuxCommand) Run(ctx context.Context, invocation Invocation) error {
 	if configurable, ok := invocation.Adapter.(interface{ ConfigureAgents(config.AgentsConfig) }); ok {
 		configurable.ConfigureAgents(invocation.Config.Agents)
 	}
-	return initializer.Init(ctx, tmuxbackend.InitInput{Config: invocation.Config.Tmux, ConfigPath: invocation.ConfigPath, Stderr: invocation.Stderr})
+	return initializer.Init(ctx, tmuxbackend.InitInput{ConfigPath: invocation.ConfigPath})
 }

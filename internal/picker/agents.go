@@ -47,12 +47,6 @@ func AgentDot(agents []capabilities.Agent) (Decoration, bool) {
 	return Decoration{Text: "●", Style: style}, true
 }
 
-// ApplyAgentDots decorates places using the agent's stable container identity
-// when available, with unique display labels as a compatibility fallback.
-func ApplyAgentDots(places []Place, agents []capabilities.Agent) []Place {
-	return applyAgentDots(places, agents, "")
-}
-
 // ApplyAgentDotsForMachine applies one source machine's agent snapshot without
 // touching places owned by other machines. The source machine is supplied by
 // the caller because Agent deliberately does not invent a machine identity.

@@ -221,7 +221,7 @@ nexo --help
 | `nexo open PATH` | Open a discovered project candidate; Herdr also accepts `--workspace-id ID`. |
 | `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, or `close [MACHINE/CONTAINER]`. |
 | `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch` or `--add-parent`. |
-| `nexo tmux init` | Install tmux focus hooks and the agent watcher, and migrate old nexo-owned bindings (tmux backend only). |
+| `nexo tmux init` | Install tmux focus hooks and the agent watcher (tmux backend only). |
 
 Examples:
 
@@ -258,18 +258,18 @@ statuses, and safe verification.
 
 ### Picker keys
 
-| Key | Place picker | Agent navigator |
-| --- | --- | --- |
-| `↑` / `↓`, `Ctrl-K` / `Ctrl-J` | Move | Move |
-| `Enter` | Expand a group or open a place | Focus the selected agent pane |
-| `→` / `Space` | Expand a group | — |
-| `←` | Fold a group | — |
-| `Esc` / `Ctrl-C` | Cancel | Cancel |
-| Type, `Backspace` / `Delete` | Fuzzy search, erase search | Fuzzy search, erase search |
-| `Tab` / `Shift-Tab` | Mark next / previous container | — |
-| `r` | Rename the current container when the search is empty | — |
-| `x` (or `d`), when the search is empty | Confirm batch close with `y`; cancel with `n` or `Esc` | — |
-| `q` | Quit when the search is empty | — |
+| Key | TUI behavior |
+| --- | --- |
+| `Tab` / `Shift-Tab` | Switch tabs |
+| `F1` / `F2` / `F3` | Jump to Agents / Containers / Projects |
+| `↑` / `↓`, `Ctrl-N` / `Ctrl-P` | Move |
+| `Enter` | Open the selected item or focus the selected agent |
+| `←` / `→` | Fold project groups and linked worktrees |
+| `Ctrl-T` | Mark the selected container |
+| `Ctrl-X` | Kill marked or selected containers after confirmation |
+| `Ctrl-R` | Rename the selected container |
+| `Esc` / `Ctrl-C` | Clear search, then close / close |
+| Printable keys, `Backspace` / `Delete` | Fuzzy search, erase search |
 
 ## Configuration
 
@@ -301,8 +301,6 @@ transport = "ssh"
 reconnect-initial = "1s"
 reconnect-max = "30s"
 
-[tmux]
-# Legacy key and popup options are ignored. Bind keys in tmux.conf instead.
 ```
 
 <details>
@@ -324,7 +322,6 @@ reconnect-max = "30s"
 | `remote.transport` | `ssh` | Proxy attachment transport: `ssh`, `mosh`, or `et`. Listing always uses SSH. |
 | `remote.reconnect-initial` | `1s` | Initial retry delay for SSH proxy attachments; must be positive and no greater than `reconnect-max`. |
 | `remote.reconnect-max` | `30s` | Maximum retry delay for SSH proxy attachments; must be positive. |
-| `[tmux]` legacy key and popup options | ignored | Bind TUI keys in `tmux.conf`; nexo warns once when these old options are present. |
 
 </details>
 

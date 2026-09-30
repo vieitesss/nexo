@@ -141,9 +141,6 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		writeError(stderr, err)
 		return 2
 	}
-	for _, warning := range cfg.Warnings {
-		writeError(stderr, errors.New("warning: "+warning))
-	}
 	selection, err := backend.Resolve(context.Background(), backend.ResolveInput{
 		Flag:   options.Backend,
 		Config: cfg,

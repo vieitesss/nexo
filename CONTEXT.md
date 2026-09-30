@@ -54,11 +54,11 @@ located through panes.
 ### Places
 
 **Place**:
-Anything the place picker can take you to: a project candidate, an open local
-container, or a container on a remote machine.
+Anything the TUI can take you to: a project candidate, an open local container,
+or a container on a remote machine.
 
-**Place picker**:
-The single picker that lists places and opens the chosen one.
+**TUI place**:
+A project candidate or container row shown by the Containers or Projects tab.
 _Avoid_: switcher, launcher
 
 **Project candidate**:
@@ -113,16 +113,16 @@ _Avoid_: idle, done
 A stopped agent whose exact pane you have / have not focused since it
 stopped. Unseen-stopped agents are the ones that need you.
 
-**Agent navigator**:
-The picker that lists every agent pane, unseen-stopped first, and jumps to
-the chosen one. Separate from the place picker because it answers "who needs
-me?", not "where do I go?".
+**Agents tab**:
+The TUI tab that lists every agent pane, unseen-stopped first, and jumps to
+the chosen one. It answers "who needs me?" while the Containers and Projects
+tabs answer "where do I go?".
 _Avoid_: popup, switcher
 
 **Agent display labels**:
-Optional backend-neutral `container` and `window` labels shown by the agent
-navigator. They are display values only; `target` remains opaque and is passed
-to the selected backend for focus.
+Optional backend-neutral `container` and `window` labels shown by the Agents
+tab. They are display values only; `target` remains opaque and is passed to the
+selected backend for focus.
 
 **Agent container identity**:
 The stable backend-native identity used to associate an agent pane with its
@@ -138,3 +138,9 @@ user chooses how to open it by binding keys in the multiplexer configuration.
 The initial view selected when the TUI opens: Agents, Containers or Projects.
 Without an explicit tab, Agents is selected when an unseen-stopped agent
 exists; otherwise Containers is selected.
+
+**Containers tab**:
+The one-line container view orders unseen-stopped agents first, then containers
+by most recent backend activity. A backend without a native activity timestamp
+uses deterministic container-name order within its activity bucket; Herdr is
+currently such a backend.

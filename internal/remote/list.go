@@ -235,14 +235,14 @@ func (l Lister) runWithAgents(ctx context.Context, machine string) ([]byte, erro
 // one listing gathered in this SSH round trip. A running Herdr server wins;
 // tmux is the fallback for machines that do not expose Herdr.
 func (l Lister) remoteListingCommand(withAgents bool) string {
-	herdrStatus := shellCommand("herdr", "status", "server", "--json")
-	herdrList := shellCommand("herdr", "workspace", "list")
+	herdrStatus := ShellCommand("herdr", "status", "server", "--json")
+	herdrList := ShellCommand("herdr", "workspace", "list")
 	tmuxList := l.backendTmuxCommand()
-	herdrAgents := shellCommand("nexo", "--backend", string(backend.Herdr), "agents", "--json")
-	tmuxAgents := shellCommand("nexo", "--backend", string(backend.Tmux), "agents", "--json")
+	herdrAgents := ShellCommand("nexo", "--backend", string(backend.Herdr), "agents", "--json")
+	tmuxAgents := ShellCommand("nexo", "--backend", string(backend.Tmux), "agents", "--json")
 	agentFrames := ""
 	if withAgents {
-		agentFrames = "; printf '\\n%s\\n' " + shellCommand(agentFrameStart) + "; AGENT_COMMAND 2>/dev/null || true; printf '\\n%s\\n' " + shellCommand(agentFrameEnd)
+		agentFrames = "; printf '\\n%s\\n' " + ShellCommand(agentFrameStart) + "; AGENT_COMMAND 2>/dev/null || true; printf '\\n%s\\n' " + ShellCommand(agentFrameEnd)
 	}
 	// Herdr status exits successfully even when no server is running. Parse its
 	// running field before selecting the one authoritative listing command.
@@ -252,13 +252,13 @@ func (l Lister) remoteListingCommand(withAgents bool) string {
 		"herdr_compact=$(printf '%s' \"$herdr_status\" | tr -d '[:space:]')",
 		"case \"$herdr_compact\" in *'\"running\":true'*) herdr_running=1;; esac",
 		"listing_status=0",
-		"if test $herdr_running -eq 1; then listing_output=$(" + herdrList + ") || listing_status=$?; printf '%s\\n' " + shellCommand(remoteKindFrameStart+string(KindHerdr)) + "; printf '%s\\n' \"$listing_output\"" + strings.ReplaceAll(agentFrames, "AGENT_COMMAND", herdrAgents) + "; else listing_output=$(" + tmuxList + ") || listing_status=$?; printf '%s\\n' " + shellCommand(remoteKindFrameStart+string(KindTmux)) + "; printf '%s\\n' \"$listing_output\"" + strings.ReplaceAll(agentFrames, "AGENT_COMMAND", tmuxAgents) + "; fi",
+		"if test $herdr_running -eq 1; then listing_output=$(" + herdrList + ") || listing_status=$?; printf '%s\\n' " + ShellCommand(remoteKindFrameStart+string(KindHerdr)) + "; printf '%s\\n' \"$listing_output\"" + strings.ReplaceAll(agentFrames, "AGENT_COMMAND", herdrAgents) + "; else listing_output=$(" + tmuxList + ") || listing_status=$?; printf '%s\\n' " + ShellCommand(remoteKindFrameStart+string(KindTmux)) + "; printf '%s\\n' \"$listing_output\"" + strings.ReplaceAll(agentFrames, "AGENT_COMMAND", tmuxAgents) + "; fi",
 		"exit $listing_status",
 	}, "; ")
 }
 
 func (l Lister) backendTmuxCommand() string {
-	return shellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
+	return ShellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
 }
 
 func (l Lister) runCommand(ctx context.Context, machine, command string) ([]byte, error) {
@@ -288,20 +288,20 @@ func (l Lister) runCommand(ctx context.Context, machine, command string) ([]byte
 
 func (l Lister) backendCommand() string {
 	if l.Backend == backend.Tmux {
-		return shellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
+		return ShellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
 	}
-	return shellCommand("herdr", "workspace", "list")
+	return ShellCommand("herdr", "workspace", "list")
 }
 
 func (l Lister) backendAgentsCommand() string {
 	listing := l.backendCommand()
-	agents := shellCommand("nexo", "--backend", string(l.Backend), "agents", "--json")
+	agents := ShellCommand("nexo", "--backend", string(l.Backend), "agents", "--json")
 	return strings.Join([]string{
 		"agent_status=0",
 		listing + " || agent_status=$?",
-		"printf '\\n%s\\n' " + shellCommand(agentFrameStart),
+		"printf '\\n%s\\n' " + ShellCommand(agentFrameStart),
 		agents + " 2>/dev/null || true",
-		"printf '\\n%s\\n' " + shellCommand(agentFrameEnd),
+		"printf '\\n%s\\n' " + ShellCommand(agentFrameEnd),
 		"exit $agent_status",
 	}, "; ")
 }
@@ -363,12 +363,19 @@ func splitAgentFrame(output []byte) (listing, agents []byte) {
 	return listing, []byte(strings.Join(lines[start+1:end], "\n"))
 }
 
-func (l Lister) sshArgs(machine, command string) []string {
+// SSHCommandArgs builds the SSH invocation used for remote commands. The
+// command is one shell string because SSH executes its trailing arguments on
+// the remote shell; ShellCommand quotes every argument before joining it.
+func SSHCommandArgs(sshConfig, machine, command string) []string {
 	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=5"}
-	if l.SSHConfig != "" {
-		args = append(args, "-F", l.SSHConfig)
+	if sshConfig = strings.TrimSpace(sshConfig); sshConfig != "" {
+		args = append(args, "-F", sshConfig)
 	}
 	return append(args, machine, command)
+}
+
+func (l Lister) sshArgs(machine, command string) []string {
+	return SSHCommandArgs(l.SSHConfig, machine, command)
 }
 
 func decodeAgents(output []byte) ([]capabilities.Agent, error) {
@@ -388,7 +395,8 @@ func isNoServer(err error, output []byte) bool {
 	return strings.Contains(message, "no server running") || strings.Contains(message, "failed to connect to server")
 }
 
-func shellCommand(args ...string) string {
+// ShellCommand quotes arguments for execution by a remote POSIX shell.
+func ShellCommand(args ...string) string {
 	quoted := make([]string, len(args))
 	for index, arg := range args {
 		quoted[index] = "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
