@@ -1277,7 +1277,15 @@ func (m Model) tabLine() string {
 	return fit(strings.Join(parts, "   "), m.width)
 }
 func (m Model) searchLine() string {
-	count := muted().Render(fmt.Sprintf("%d matches", m.matchCount(m.tab)))
+	count := ""
+	if len(m.query) > 0 {
+		matches := m.matchCount(m.tab)
+		label := "matches"
+		if matches == 1 {
+			label = "match"
+		}
+		count = muted().Render(fmt.Sprintf("%d %s", matches, label))
+	}
 	countWidth := shell.StringWidth(count)
 	promptWidth := m.width - countWidth - 1
 	if promptWidth < 1 {
