@@ -569,12 +569,14 @@ func (m Model) Marked() []string {
 	return ids
 }
 
-func (m Model) markedTargets() []ContainerRef {
+// MarkedContainerRefs returns marked container identities in source order.
+// The identity includes the machine so remote and local IDs cannot collide.
+func MarkedContainerRefs(places []Place, marked map[ContainerRef]bool) []ContainerRef {
 	var targets []ContainerRef
 	seen := make(map[ContainerRef]bool)
-	for _, place := range m.places {
+	for _, place := range places {
 		ref := ContainerRef{Machine: place.Machine, ID: place.ContainerID}
-		if place.Kind != ContainerKind || place.ContainerID == "" || !m.marked[ref] || seen[ref] {
+		if place.Kind != ContainerKind || place.ContainerID == "" || !marked[ref] || seen[ref] {
 			continue
 		}
 		seen[ref] = true
@@ -582,6 +584,8 @@ func (m Model) markedTargets() []ContainerRef {
 	}
 	return targets
 }
+
+func (m Model) markedTargets() []ContainerRef { return MarkedContainerRefs(m.places, m.marked) }
 
 // SetClock replaces the clock used to render stopped-agent ages.
 func (m *Model) SetClock(now func() time.Time) {

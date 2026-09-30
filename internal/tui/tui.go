@@ -148,6 +148,9 @@ type agentRecord struct {
 
 type refreshTickMsg struct{}
 
+// ToastMsg replaces footer hints with a short status message.
+type ToastMsg struct{ Text string }
+
 // Model is the complete tabbed Bubble Tea model. Tests can drive it through
 // Update and inspect View without starting a terminal or a multiplexer.
 type Model struct {
@@ -379,6 +382,9 @@ func (m Model) execute(ctx context.Context) error {
 func (m *Model) SetSize(width, height int) {
 	m.width, m.height, m.sized = width, height, true
 }
+
+// SetToast displays a status message in place of the normal footer hints.
+func (m *Model) SetToast(text string) { m.toast = text }
 
 // SetQuery is useful to embedding callers and model tests. A changed query
 // always selects the first matching item, never a group or machine header.
@@ -798,17 +804,7 @@ func (m Model) currentItem() (row, bool) {
 }
 
 func (m Model) markedTargets() []picker.ContainerRef {
-	refs := []picker.ContainerRef{}
-	seen := map[picker.ContainerRef]bool{}
-	for _, place := range m.containerPlaces() {
-		ref := picker.ContainerRef{Machine: place.Machine, ID: place.ContainerID}
-		if place.Kind != picker.ContainerKind || ref.ID == "" || !m.marked[ref] || seen[ref] {
-			continue
-		}
-		seen[ref] = true
-		refs = append(refs, ref)
-	}
-	return refs
+	return picker.MarkedContainerRefs(m.containerPlaces(), m.marked)
 }
 
 // Update implements tea.Model. Printable keys are intentionally handled last
@@ -861,6 +857,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		return m.key(msg)
+	case ToastMsg:
+		m.toast = msg.Text
+		return m, nil
 	}
 	return m, nil
 }

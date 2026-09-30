@@ -9,6 +9,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
@@ -141,6 +144,21 @@ func TestLongSearchAndRenameKeepCursorVisible(t *testing.T) {
 	}
 }
 
+func TestContainerTextIsIndentedUnderMachine(t *testing.T) {
+	model := NewModel(context.Background(), richDeps(), ContainersTab)
+	model.SetSize(100, 10)
+	for _, line := range strings.Split(model.View(), "\n") {
+		plain := shell.Plain(line)
+		if strings.Contains(plain, "one") && !strings.Contains(plain, "matches") {
+			if strings.Index(plain, "one") < 3 {
+				t.Fatalf("container is not indented: %q", plain)
+			}
+			return
+		}
+	}
+	t.Fatal("container row was not rendered")
+}
+
 func TestPreviewNormalizesEmptyMachine(t *testing.T) {
 	model := NewModel(context.Background(), Deps{Containers: []capabilities.Container{{ID: "one", Name: "one"}}}, ContainersTab)
 	model.SetSize(80, 8)
@@ -183,8 +201,17 @@ func TestPlaceRankingAndVisibleAgentHighlights(t *testing.T) {
 	model = NewModel(context.Background(), Deps{Agents: []capabilities.Agent{{PaneID: "a", Container: "one", Target: "one:1", Harness: "pi", State: "working", Branch: "branch"}}}, AgentsTab)
 	model.SetQuery("branch")
 	model.SetSize(100, 8)
-	if !strings.Contains(model.View(), "branch") {
-		t.Fatalf("branch match not visible: %q", model.View())
+	lipgloss.SetColorProfile(termenv.ANSI)
+	if !strings.Contains(model.View(), "branch") || !strings.Contains(model.View(), "\x1b[33") {
+		t.Fatalf("branch match not highlighted: %q", model.View())
+	}
+	projects := NewModel(context.Background(), Deps{Projects: []picker.Place{
+		{Kind: picker.ProjectKind, Path: "/foobar", Group: "/work", DisplayRemainder: "foobar"},
+		{Kind: picker.ProjectKind, Path: "/bar", Group: "/work", DisplayRemainder: "bar"},
+	}}, ProjectsTab)
+	projects.SetQuery("bar")
+	if projects.Cursor() != "project:/bar" {
+		t.Fatalf("best project was not first: %q", projects.Cursor())
 	}
 }
 

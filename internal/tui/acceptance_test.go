@@ -81,7 +81,7 @@ func TestNoBackgroundSGRForEveryTabAndState(t *testing.T) {
 		func(m *Model) { m.toggleMark() },
 		func(m *Model) { m.confirmKill = true },
 		func(m *Model) { m.renameMode = true },
-		func(m *Model) { m.toast = "updated" },
+		func(m *Model) { m.SetToast("updated") },
 	}
 	for _, profile := range []termenv.Profile{termenv.ANSI, termenv.ANSI256, termenv.TrueColor} {
 		lipgloss.SetColorProfile(profile)
