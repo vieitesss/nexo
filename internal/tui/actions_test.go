@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -30,7 +31,7 @@ func TestAgentIdentityStaysSelectedAcrossRefresh(t *testing.T) {
 	}
 	model := NewModel(context.Background(), Deps{Agents: agents}, AgentsTab)
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
-	if model.Cursor() != "agent:two" {
+	if !strings.HasSuffix(model.Cursor(), ":two") {
 		t.Fatalf("cursor = %q, want the second agent identity", model.Cursor())
 	}
 	selected := model.Cursor()

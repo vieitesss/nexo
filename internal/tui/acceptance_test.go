@@ -10,6 +10,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
@@ -48,7 +51,7 @@ func noBackgroundSGR(t *testing.T, frame string) {
 			if _, err := fmt.Sscanf(parameter, "%d", &value); err != nil {
 				continue
 			}
-			if value == 48 || (value >= 40 && value <= 47) || (value >= 100 && value <= 107) {
+			if value == 7 || value == 48 || (value >= 40 && value <= 47) || (value >= 100 && value <= 107) {
 				t.Fatalf("frame contains background SGR %q in %q", match[0], frame)
 			}
 		}
@@ -65,8 +68,14 @@ func frameFor(t *testing.T, model Model, tab Tab) string {
 }
 
 func TestNoBackgroundSGRForEveryTabAndState(t *testing.T) {
-	model := NewModel(context.Background(), richDeps(), ContainersTab)
+	deps := richDeps()
+	deps.Containers[0].Name = "\x1b[41mone\x1b[0m"
+	deps.Containers[0].Preview = "\x1b[41mred\x1b[0m \x1b[7mreverse\x1b[0m \x1b[48;5;200mhostile\x1b[0m"
+	deps.Projects[0].DisplayRemainder = "\x1b[41mnexo\x1b[0m"
+	deps.Agents[0].Harness = "\x1b[41mpi\x1b[0m"
+	deps.Agents[0].Branch = "\x1b[7mmain\x1b[0m"
 	states := []func(*Model){
+
 		func(*Model) {},
 		func(m *Model) { m.SetQuery("o") },
 		func(m *Model) { m.toggleMark() },
@@ -74,18 +83,21 @@ func TestNoBackgroundSGRForEveryTabAndState(t *testing.T) {
 		func(m *Model) { m.renameMode = true },
 		func(m *Model) { m.toast = "updated" },
 	}
-	for _, prepare := range states {
-		for _, tab := range []Tab{AgentsTab, ContainersTab, ProjectsTab} {
-			copy := model
-			prepare(&copy)
-			frameFor(t, copy, tab)
+	for _, profile := range []termenv.Profile{termenv.ANSI, termenv.ANSI256, termenv.TrueColor} {
+		lipgloss.SetColorProfile(profile)
+		for _, prepare := range states {
+			for _, tab := range []Tab{AgentsTab, ContainersTab, ProjectsTab} {
+				copy := NewModel(context.Background(), deps, ContainersTab)
+				prepare(&copy)
+				frameFor(t, copy, tab)
+			}
 		}
 	}
 	loading := NewModel(context.Background(), richDeps(), ContainersTab)
 	frameFor(t, loading, ContainersTab)
 	loading = updateModel(t, loading, picker.RemoteBatch{Machine: "remote-loading"})
 	frameFor(t, loading, ContainersTab)
-	loading = updateModel(t, loading, picker.RemoteBatch{Machine: "remote-loading", Error: "offline"})
+	loading = updateModel(t, loading, picker.RemoteBatch{Machine: "remote-loading", Error: "\x1b[41moffline\x1b[0m"})
 	frameFor(t, loading, ContainersTab)
 }
 
@@ -224,7 +236,7 @@ func TestSelectionIdentityAcrossResizeAndAsyncBatches(t *testing.T) {
 	if model.Cursor() != identity {
 		t.Fatal("preview changed selection identity")
 	}
-	model = updateModel(t, model, agentsMsg{agents: model.agents})
+	model = updateModel(t, model, agentsMsg{agents: richDeps().Agents})
 	if model.Cursor() != identity {
 		t.Fatal("agent refresh changed selection identity")
 	}

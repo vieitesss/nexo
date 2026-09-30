@@ -175,7 +175,10 @@ func hasSecondary(lines []itemLine) bool {
 	return false
 }
 
-func viewportStart(total, height, selected int) int {
+// ViewportStart returns the first line of a viewport while keeping the
+// selected line visible. Full-screen views with an extra header can use this
+// seam for their body without reimplementing the scrolling policy.
+func ViewportStart(total, height, selected int) int {
 	if total <= height || selected < 0 {
 		return 0
 	}
@@ -188,6 +191,8 @@ func viewportStart(total, height, selected int) int {
 	}
 	return start
 }
+
+func viewportStart(total, height, selected int) int { return ViewportStart(total, height, selected) }
 
 func keepSelectedItemVisible(lines []itemLine, height, start, selected int) int {
 	if selected < 0 || selected+1 >= len(lines) || height < 2 {

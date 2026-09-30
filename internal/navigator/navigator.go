@@ -259,14 +259,19 @@ func (m *Model) rebuild() {
 	m.clampCursor()
 }
 
-func agentIdentity(agent capabilities.Agent) string {
+// AgentIdentity returns the stable backend pane identity used by the navigator.
+func AgentIdentity(agent capabilities.Agent) string {
 	if agent.PaneID != "" {
 		return agent.PaneID
 	}
 	return agent.Target
 }
 
-func attentionRank(agent capabilities.Agent) int {
+func attentionRank(agent capabilities.Agent) int    { return AttentionRank(agent) }
+func agentIdentity(agent capabilities.Agent) string { return AgentIdentity(agent) }
+
+// AttentionRank orders agents by the attention they need.
+func AttentionRank(agent capabilities.Agent) int {
 	switch strings.ToLower(strings.TrimSpace(agent.State)) {
 	case "stopped":
 		if !agent.Seen {
@@ -625,7 +630,8 @@ func rowText(agent capabilities.Agent, now time.Time) string {
 	return text
 }
 
-func age(now, since time.Time) string {
+// StoppedAge formats the elapsed stopped duration for secondary rows.
+func StoppedAge(now, since time.Time) string {
 	seconds := int(now.Sub(since) / time.Second)
 	if seconds < 0 {
 		seconds = 0
@@ -639,3 +645,5 @@ func age(now, since time.Time) string {
 	}
 	return fmt.Sprintf("%dh", minutes/60)
 }
+
+func age(now, since time.Time) string { return StoppedAge(now, since) }

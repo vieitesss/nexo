@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/navigator"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
 )
@@ -112,38 +113,40 @@ const (
 	groupRow
 	itemRow
 	newContainerRow
-	errorRow
 )
 
 type row struct {
-	id         string
-	kind       rowKind
-	itemKind   string
-	label      string
-	machine    string
-	group      string
-	depth      int
-	count      int
-	cursorable bool
-	matched    bool
-	score      int
-	match      picker.Match
-	place      picker.Place
-	agent      capabilities.Agent
-	expanded   bool
-	foldable   bool
-	remoteErr  string
-	loading    bool
+	id           string
+	kind         rowKind
+	itemKind     string
+	label        string
+	machine      string
+	group        string
+	depth        int
+	count        int
+	cursorable   bool
+	matched      bool
+	score        int
+	place        picker.Place
+	agent        capabilities.Agent
+	agentMachine string
+	expanded     bool
+	foldable     bool
+	remoteErr    string
+	loading      bool
 }
 
 type agentsMsg struct {
 	agents []capabilities.Agent
 	err    error
 }
-type refreshTickMsg struct{}
-type clearToastMsg struct{}
 
-type toastMsg struct{ text string }
+type agentRecord struct {
+	agent   capabilities.Agent
+	machine string
+}
+
+type refreshTickMsg struct{}
 
 // Model is the complete tabbed Bubble Tea model. Tests can drive it through
 // Update and inspect View without starting a terminal or a multiplexer.
@@ -155,29 +158,35 @@ type Model struct {
 	rows   []row
 	cursor string
 
-	width, height  int
-	sized          bool
-	forceFirst     bool
-	folded         map[string]bool
-	expanded       map[string]bool
-	marked         map[picker.ContainerRef]bool
-	remotePlaces   []picker.Place
-	remoteMachines []string
-	groupErrors    map[string]string
-	agents         []capabilities.Agent
-	remoteAgents   []capabilities.Agent
-	gitErrors      map[string]string
+	width, height   int
+	sized           bool
+	forceFirst      bool
+	folded          map[string]bool
+	expanded        map[string]bool
+	marked          map[picker.ContainerRef]bool
+	remotePlaces    []picker.Place
+	remoteMachines  []string
+	remoteLoaded    map[string]bool
+	groupErrors     map[string]string
+	agents          []agentRecord
+	remoteAgents    []agentRecord
+	gitErrors       map[string]string
+	refreshInFlight *bool
+	refreshErr      error
 
-	confirmKill   bool
-	killReady     bool
-	renameMode    bool
-	renameInput   []rune
-	renameReady   bool
-	selectedPlace *picker.Place
-	selectedAgent *capabilities.Agent
-	cancelled     bool
-	toast         string
-	now           func() time.Time
+	confirmKill     bool
+	killReady       bool
+	killTargets     []picker.ContainerRef
+	renameMode      bool
+	renameInput     []rune
+	renameReady     bool
+	renameTarget    picker.ContainerRef
+	renameTargetSet bool
+	selectedPlace   *picker.Place
+	selectedAgent   *capabilities.Agent
+	cancelled       bool
+	toast           string
+	now             func() time.Time
 }
 
 // NewModel creates a model with the requested opening tab. It does not do I/O.
@@ -199,10 +208,13 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 		now = time.Now
 	}
 	m := Model{
-		ctx: ctx, deps: deps, tab: tab, agents: append([]capabilities.Agent(nil), deps.Agents...),
+		ctx: ctx, deps: deps, tab: tab, agents: newAgentRecords(deps.Agents, ""),
 		folded: make(map[string]bool), expanded: make(map[string]bool), marked: make(map[picker.ContainerRef]bool),
 		groupErrors: make(map[string]string), gitErrors: make(map[string]string), now: now,
-		remoteMachines: append([]string(nil), deps.RemoteMachines...),
+		remoteMachines: append([]string(nil), deps.RemoteMachines...), remoteLoaded: make(map[string]bool), refreshInFlight: new(bool),
+	}
+	for _, machine := range deps.RemoteMachines {
+		m.remoteLoaded[machine] = false
 	}
 	m.rebuild(false)
 	return m
@@ -213,6 +225,10 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 func (m Model) Init() tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 3+len(m.deps.RemoteCommands))
 	if m.deps.AgentSource != nil {
+		if m.refreshInFlight == nil {
+			m.refreshInFlight = new(bool)
+		}
+		*m.refreshInFlight = true
 		cmds = append(cmds, m.refreshAgents(), m.tick())
 	}
 	cmds = append(cmds, m.deps.RemoteCommands...)
@@ -300,11 +316,9 @@ func (m Model) KillTargetsRequest() ([]picker.ContainerRef, bool) {
 	if !m.killReady {
 		return nil, false
 	}
-	refs := m.markedTargets()
-	if len(refs) == 0 {
-		if current, ok := m.currentItem(); ok && current.place.Kind == picker.ContainerKind {
-			refs = []picker.ContainerRef{{Machine: current.place.Machine, ID: current.place.ContainerID}}
-		}
+	refs := append([]picker.ContainerRef(nil), m.killTargets...)
+	if len(refs) == 0 && m.killReady {
+		refs = m.markedTargets()
 	}
 	return refs, len(refs) > 0
 }
@@ -314,11 +328,10 @@ func (m Model) RenameTargetRequest() (picker.ContainerRef, string, bool) {
 	if !m.renameReady {
 		return picker.ContainerRef{}, "", false
 	}
-	current, ok := m.currentItem()
-	if !ok || current.place.Kind != picker.ContainerKind {
+	if !m.renameTargetSet {
 		return picker.ContainerRef{}, "", false
 	}
-	return picker.ContainerRef{Machine: current.place.Machine, ID: current.place.ContainerID}, string(m.renameInput), true
+	return m.renameTarget, string(m.renameInput), true
 }
 
 func (m Model) execute(ctx context.Context) error {
@@ -437,17 +450,18 @@ func (m Model) projectPlaces() []picker.Place {
 	}
 	return out
 }
-func (m Model) matchAgent(agent capabilities.Agent) (picker.Match, bool) {
-	return picker.Rank(string(m.query), strings.Join([]string{agent.Harness, agent.Container, agentMachine(agent), agent.Target, agent.Branch}, " "))
+func (m Model) matchAgent(record agentRecord) (picker.Match, bool) {
+	agent := record.agent
+	return picker.Rank(string(m.query), strings.Join([]string{sanitize(agent.Harness), sanitize(agent.Container), sanitize(record.machine), sanitize(agent.Target), sanitize(agent.Branch)}, " "))
 }
 
 func (m Model) matchContainer(place picker.Place) (picker.Match, bool) {
-	text := strings.Join([]string{place.ContainerName, place.Machine, place.Preview}, " ")
+	text := strings.Join([]string{sanitize(place.ContainerName), sanitize(place.Machine), sanitize(place.Preview)}, " ")
 	return picker.Rank(string(m.query), text)
 }
 
 func (m Model) matchProject(place picker.Place) (picker.Match, bool) {
-	text := strings.Join([]string{place.DisplayRemainder, place.Path, gitIdentity(place)}, " ")
+	text := strings.Join([]string{sanitize(place.DisplayRemainder), sanitize(place.Path), sanitize(gitIdentity(place))}, " ")
 	return picker.Rank(string(m.query), text)
 }
 
@@ -490,11 +504,10 @@ func (m Model) matchCount(tab Tab) int {
 func (m Model) containerPlaces() []picker.Place {
 	places := picker.ContainerPlaces(m.deps.Containers)
 	places = append(places, m.remotePlaces...)
-	local := picker.LocalMachine()
 	for i := range places {
-		if strings.EqualFold(strings.TrimSpace(places[i].Machine), "local") {
-			places[i].Machine = local
-			places[i].Group = local
+		if places[i].Kind == picker.ContainerKind {
+			places[i].Machine = normalizedMachine(places[i].Machine)
+			places[i].Group = places[i].Machine
 		}
 		if places[i].Kind != picker.ContainerKind {
 			continue
@@ -505,18 +518,20 @@ func (m Model) containerPlaces() []picker.Place {
 }
 
 func (m Model) agentsFor(place picker.Place) []capabilities.Agent {
-	result := []capabilities.Agent{}
-	for _, agent := range m.allAgents() {
-		if place.ContainerID != "" && agent.ContainerID != "" && place.ContainerID == agent.ContainerID {
-			result = append(result, agent)
+	all := make([]capabilities.Agent, 0)
+	for _, record := range m.allAgents() {
+		if record.machine != place.Machine {
 			continue
 		}
-		machine := agentMachine(agent)
-		if machine == place.Machine && strings.TrimSpace(agent.Container) == strings.TrimSpace(place.ContainerName) {
-			result = append(result, agent)
-		}
+		all = append(all, record.agent)
 	}
-	return result
+	// Keep association semantics in the shared picker helper: IDs are only
+	// meaningful inside the source machine, and label fallback is scoped too.
+	updated := picker.ApplyAgentDotsForMachine([]picker.Place{place}, all, place.Machine)
+	if len(updated) == 1 {
+		return updated[0].Agents
+	}
+	return nil
 }
 
 func (m Model) rowsForTab(tab Tab) []row {
@@ -531,46 +546,33 @@ func (m Model) rowsForTab(tab Tab) []row {
 }
 
 func (m Model) agentRows() []row {
-	agents := append([]capabilities.Agent(nil), m.allAgents()...)
+	agents := append([]agentRecord(nil), m.allAgents()...)
 	sort.SliceStable(agents, func(i, j int) bool {
-		ri, rj := attentionRank(agents[i]), attentionRank(agents[j])
+		ri, rj := attentionRank(agents[i].agent), attentionRank(agents[j].agent)
 		if ri != rj {
 			return ri < rj
 		}
-		if ri == 0 && agents[i].StoppedSince != nil && agents[j].StoppedSince != nil && !agents[i].StoppedSince.Equal(*agents[j].StoppedSince) {
-			return agents[i].StoppedSince.Before(*agents[j].StoppedSince)
+		if ri == 0 && agents[i].agent.StoppedSince != nil && agents[j].agent.StoppedSince != nil && !agents[i].agent.StoppedSince.Equal(*agents[j].agent.StoppedSince) {
+			return agents[i].agent.StoppedSince.Before(*agents[j].agent.StoppedSince)
 		}
-		left, right := agentIdentity(agents[i]), agentIdentity(agents[j])
-		return left < right
+		return agentIdentity(agents[i]) < agentIdentity(agents[j])
 	})
 	rows := make([]row, 0, len(agents))
-	for _, agent := range agents {
-		match, ok := m.matchAgent(agent)
+	for _, record := range agents {
+		match, ok := m.matchAgent(record)
 		if !ok {
 			continue
 		}
-		rows = append(rows, row{id: agentIdentity(agent), kind: itemRow, itemKind: "agent", label: agent.Harness, group: agent.Container, cursorable: true, matched: true, score: match.Score, match: match, agent: agent})
+		agent := record.agent
+		rows = append(rows, row{id: agentIdentity(record), kind: itemRow, itemKind: "agent", label: agent.Harness, group: agent.Container, cursorable: true, matched: true, score: match.Score, agent: agent, agentMachine: record.machine})
 	}
 	return rows
 }
 
-func attentionRank(agent capabilities.Agent) int {
-	if strings.EqualFold(strings.TrimSpace(agent.State), "stopped") {
-		if !agent.Seen {
-			return 0
-		}
-		return 2
-	}
-	if strings.EqualFold(strings.TrimSpace(agent.State), "working") {
-		return 1
-	}
-	return 1
-}
-func agentIdentity(agent capabilities.Agent) string {
-	if agent.PaneID != "" {
-		return "agent:" + agent.PaneID
-	}
-	return "agent:" + agent.Target
+func attentionRank(agent capabilities.Agent) int { return navigator.AttentionRank(agent) }
+func agentIdentity(record agentRecord) string {
+	identity := navigator.AgentIdentity(record.agent)
+	return "agent:" + record.machine + ":" + identity
 }
 
 func (m Model) machineNames() []string {
@@ -614,8 +616,9 @@ func (m Model) containerRows() []row {
 			if !ok {
 				continue
 			}
-			children = append(children, row{id: containerIdentity(place), kind: itemRow, itemKind: "container", label: place.ContainerName, machine: machine, group: machine, depth: 1, cursorable: true, matched: true, score: match.Score, match: match, place: place})
+			children = append(children, row{id: containerIdentity(place), kind: itemRow, itemKind: "container", label: place.ContainerName, machine: machine, group: machine, depth: 2, cursorable: true, matched: true, score: match.Score, place: place})
 		}
+		sort.SliceStable(children, func(i, j int) bool { return children[i].score > children[j].score })
 		// A machine query keeps its header visible even if no child matches.
 		_, machineMatch := picker.Rank(string(m.query), machine)
 		remoteErr := m.groupErrors[machine]
@@ -623,7 +626,7 @@ func (m Model) containerRows() []row {
 		if len(children) == 0 && !machineMatch && remoteErr == "" && !isRemote && string(m.query) != "" {
 			continue
 		}
-		rows = append(rows, row{id: "machine:" + machine, kind: machineRow, label: machine, group: machine, machine: machine, count: len(children), cursorable: true, remoteErr: remoteErr, loading: isRemote && len(children) == 0 && remoteErr == ""})
+		rows = append(rows, row{id: "machine:" + machine, kind: machineRow, label: machine, group: machine, machine: machine, count: len(children), cursorable: true, remoteErr: remoteErr, loading: isRemote && !m.remoteLoaded[machine]})
 		rows = append(rows, children...)
 		// The affordance stays one line and cannot be opened or marked.
 		if string(m.query) == "" || machineMatch {
@@ -662,7 +665,10 @@ func (m Model) projectRows() []row {
 				matchedRoots = append(matchedRoots, root)
 			}
 		}
-		_, groupMatch := picker.Rank(query, group)
+		sort.SliceStable(matchedRoots, func(i, j int) bool {
+			return m.projectMatchScore(matchedRoots[i], places) > m.projectMatchScore(matchedRoots[j], places)
+		})
+		_, groupMatch := picker.Rank(query, sanitize(group))
 		if query != "" && len(matchedRoots) == 0 && !groupMatch {
 			continue
 		}
@@ -670,7 +676,7 @@ func (m Model) projectRows() []row {
 		expanded := m.expanded[key]
 		// Project groups start folded. A matching query unfolds only the
 		// matching group, without changing the user's explicit fold state.
-		if query != "" && len(matchedRoots) > 0 && !m.folded[key] {
+		if query != "" && len(matchedRoots) > 0 {
 			expanded = true
 		}
 		rows = append(rows, row{id: key, kind: groupRow, label: group, group: group, count: len(matchedRoots), cursorable: true, expanded: expanded, foldable: true})
@@ -687,22 +693,25 @@ func (m Model) projectRows() []row {
 			fold := len(children) > 0
 			projectKey := projectIdentity(root)
 			projectExpanded := m.expanded[projectKey]
-			if query != "" && childMatch && !m.folded[projectKey] {
+			if query != "" && childMatch {
 				projectExpanded = true
 			}
-			rows = append(rows, row{id: projectKey, kind: itemRow, itemKind: "project", label: projectLabel(root), group: group, depth: 1, cursorable: true, matched: direct, score: match.Score, match: match, place: root, expanded: projectExpanded, foldable: fold})
+			rows = append(rows, row{id: projectKey, kind: itemRow, itemKind: "project", label: projectLabel(root), group: group, depth: 1, cursorable: true, matched: direct, score: match.Score, place: root, expanded: projectExpanded, foldable: fold})
 			if !projectExpanded || (!childMatch && !direct) {
 				continue
 			}
 			if !m.projectExpanded(root, query, childMatch) {
 				continue
 			}
+			sort.SliceStable(children, func(i, j int) bool {
+				return m.projectMatchScore(children[i], places) > m.projectMatchScore(children[j], places)
+			})
 			for _, child := range children {
 				childMatchValue, childOK := m.matchProject(child)
 				if query != "" && !childOK {
 					continue
 				}
-				rows = append(rows, row{id: projectIdentity(child), kind: itemRow, itemKind: "project", label: projectLabel(child), group: group, depth: 2, cursorable: true, matched: childOK, score: childMatchValue.Score, match: childMatchValue, place: child, foldable: len(m.children(child, places)) > 0, expanded: false})
+				rows = append(rows, row{id: projectIdentity(child), kind: itemRow, itemKind: "project", label: projectLabel(child), group: group, depth: 2, cursorable: true, matched: childOK, score: childMatchValue.Score, place: child, foldable: len(m.children(child, places)) > 0, expanded: false})
 			}
 		}
 	}
@@ -711,14 +720,27 @@ func (m Model) projectRows() []row {
 
 func (m Model) projectExpanded(place picker.Place, query string, childMatch bool) bool {
 	id := projectIdentity(place)
-	if m.folded[id] {
-		return false
-	}
 	if m.expanded[id] {
 		return true
 	}
 	return query != "" && childMatch
 }
+func (m Model) projectMatchScore(place picker.Place, all []picker.Place) int {
+	best := -1
+	if match, ok := m.matchProject(place); ok {
+		best = match.Score
+	}
+	for _, child := range all {
+		if child.ParentPath != place.Path {
+			continue
+		}
+		if score := m.projectMatchScore(child, all); score > best {
+			best = score
+		}
+	}
+	return best
+}
+
 func (m Model) hasMatchingChild(place picker.Place, all []picker.Place) bool {
 	for _, child := range all {
 		if child.ParentPath == place.Path {
@@ -741,14 +763,25 @@ func (m Model) children(place picker.Place, all []picker.Place) []picker.Place {
 func projectIdentity(place picker.Place) string { return "project:" + place.Path }
 func projectLabel(place picker.Place) string {
 	if place.DisplayRemainder != "" {
-		return place.DisplayRemainder
+		return sanitize(place.DisplayRemainder)
 	}
-	return place.Path
+	return sanitize(place.Path)
 }
 
-func (m Model) allAgents() []capabilities.Agent {
-	agents := append([]capabilities.Agent(nil), m.agents...)
+func (m Model) allAgents() []agentRecord {
+	agents := append([]agentRecord(nil), m.agents...)
 	return append(agents, m.remoteAgents...)
+}
+
+func newAgentRecords(agents []capabilities.Agent, machine string) []agentRecord {
+	if machine == "" {
+		machine = picker.LocalMachine()
+	}
+	result := make([]agentRecord, 0, len(agents))
+	for _, agent := range agents {
+		result = append(result, agentRecord{agent: agent, machine: machine})
+	}
+	return result
 }
 
 func (m Model) currentRow() (row, bool) {
@@ -786,8 +819,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SetSize(msg.Width, msg.Height)
 		return m, nil
 	case agentsMsg:
-		if msg.err == nil {
-			m.agents = append([]capabilities.Agent(nil), msg.agents...)
+		if m.refreshInFlight != nil {
+			*m.refreshInFlight = false
+		}
+		if msg.err != nil {
+			m.refreshErr = msg.err
+		} else {
+			m.refreshErr = nil
+			m.agents = newAgentRecords(msg.agents, "")
+			m.rebuild(false)
+		}
+		return m, nil
+	case picker.AgentBatch:
+		// Keep the existing picker command seam compatible while callers move
+		// to AgentSource. A batch without machine provenance is local.
+		if msg.Error == "" {
+			m.agents = newAgentRecords(msg.Agents, "")
 			m.rebuild(false)
 		}
 		return m, nil
@@ -795,6 +842,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.deps.AgentSource == nil {
 			return m, nil
 		}
+		if m.refreshInFlight != nil && *m.refreshInFlight {
+			return m, m.tick()
+		}
+		if m.refreshInFlight == nil {
+			m.refreshInFlight = new(bool)
+		}
+		*m.refreshInFlight = true
 		return m, tea.Batch(m.refreshAgents(), m.tick())
 	case picker.GitContextMsg:
 		m.applyGit(msg)
@@ -807,12 +861,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		return m.key(msg)
-	case toastMsg:
-		m.toast = msg.text
-		return m, nil
-	case clearToastMsg:
-		m.toast = ""
-		return m, nil
 	}
 	return m, nil
 }
@@ -854,17 +902,40 @@ func (m *Model) applyGit(msg picker.GitContextMsg) {
 			}
 		}
 	}
+	m.revealProjectAncestors(msg.Path)
 	m.rebuild(false)
 }
+func (m *Model) revealProjectAncestors(path string) {
+	for path != "" {
+		var found *picker.Place
+		for i := range m.deps.Projects {
+			if m.deps.Projects[i].Path == path {
+				found = &m.deps.Projects[i]
+				break
+			}
+		}
+		if found == nil || found.ParentPath == "" {
+			if found != nil {
+				m.expanded["group:"+found.Group] = true
+			}
+			return
+		}
+		m.expanded[projectIdentity(*found)] = true
+		m.expanded["project:"+found.ParentPath] = true
+		m.expanded["group:"+found.Group] = true
+		path = found.ParentPath
+	}
+}
+
 func (m *Model) applyPreviews(msg picker.PreviewBatch) {
 	for i := range m.deps.Containers {
-		ref := picker.ContainerRef{Machine: m.deps.Containers[i].Machine, ID: m.deps.Containers[i].ID}
+		ref := picker.ContainerRef{Machine: normalizedMachine(m.deps.Containers[i].Machine), ID: m.deps.Containers[i].ID}
 		if value, ok := msg.Previews[ref]; ok {
 			m.deps.Containers[i].Preview = value
 		}
 	}
 	for i := range m.remotePlaces {
-		ref := picker.ContainerRef{Machine: m.remotePlaces[i].Machine, ID: m.remotePlaces[i].ContainerID}
+		ref := picker.ContainerRef{Machine: normalizedMachine(m.remotePlaces[i].Machine), ID: m.remotePlaces[i].ContainerID}
 		if value, ok := msg.Previews[ref]; ok {
 			m.remotePlaces[i].Preview = value
 		}
@@ -875,7 +946,8 @@ func (m *Model) applyRemote(msg picker.RemoteBatch) {
 	if msg.Machine == "" {
 		return
 	}
-	m.groupErrors[msg.Machine] = msg.Error
+	m.groupErrors[msg.Machine] = sanitize(msg.Error)
+	m.remoteLoaded[msg.Machine] = true
 	seen := false
 	for _, machine := range m.remoteMachines {
 		if machine == msg.Machine {
@@ -897,16 +969,27 @@ func (m *Model) applyRemote(msg picker.RemoteBatch) {
 		}
 	}
 	m.remotePlaces = append(updatedPlaces, msg.Places...)
-	updatedAgents := make([]capabilities.Agent, 0, len(m.remoteAgents)+len(msg.Agents))
-	for _, agent := range m.remoteAgents {
-		if agentMachine(agent) != msg.Machine {
-			updatedAgents = append(updatedAgents, agent)
+	updatedAgents := make([]agentRecord, 0, len(m.remoteAgents)+len(msg.Agents))
+	for _, record := range m.remoteAgents {
+		if record.machine != msg.Machine {
+			updatedAgents = append(updatedAgents, record)
 		}
 	}
-	m.remoteAgents = append(updatedAgents, msg.Agents...)
+	for _, agent := range msg.Agents {
+		updatedAgents = append(updatedAgents, agentRecord{agent: agent, machine: msg.Machine})
+	}
+	m.remoteAgents = updatedAgents
 	m.rebuild(false)
 }
 func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type == tea.KeyCtrlC {
+		m.cancelled = true
+		m.confirmKill = false
+		m.renameMode = false
+		m.killTargets = nil
+		m.renameTargetSet = false
+		return m, tea.Quit
+	}
 	if m.confirmKill {
 		switch strings.ToLower(msg.String()) {
 		case "y":
@@ -915,6 +998,7 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "n", "esc":
 			m.confirmKill = false
+			m.killTargets = nil
 			return m, nil
 		}
 		return m, nil
@@ -924,6 +1008,7 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case tea.KeyEsc:
 			m.renameMode = false
 			m.renameInput = nil
+			m.renameTargetSet = false
 		case tea.KeyEnter:
 			if strings.TrimSpace(string(m.renameInput)) != "" {
 				m.renameMode = false
@@ -936,6 +1021,8 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case tea.KeyRunes:
 			m.renameInput = append(m.renameInput, msg.Runes...)
+		case tea.KeySpace:
+			m.renameInput = append(m.renameInput, ' ')
 		}
 		return m, nil
 	}
@@ -968,14 +1055,23 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.toggleMark()
 		return m, nil
 	case tea.KeyCtrlX:
-		if len(m.markedTargets()) > 0 || m.currentContainer() {
+		refs := m.markedTargets()
+		if len(refs) == 0 {
+			if current, ok := m.currentItem(); ok && current.place.Kind == picker.ContainerKind && current.place.ContainerID != "" {
+				refs = []picker.ContainerRef{{Machine: current.place.Machine, ID: current.place.ContainerID}}
+			}
+		}
+		if len(refs) > 0 {
+			m.killTargets = append([]picker.ContainerRef(nil), refs...)
 			m.confirmKill = true
 		}
 		return m, nil
 	case tea.KeyCtrlR:
-		if m.currentContainer() {
+		if current, ok := m.currentItem(); ok && current.place.Kind == picker.ContainerKind && current.place.ContainerID != "" {
 			m.renameMode = true
 			m.renameInput = nil
+			m.renameTarget = picker.ContainerRef{Machine: current.place.Machine, ID: current.place.ContainerID}
+			m.renameTargetSet = true
 		}
 		return m, nil
 	case tea.KeyBackspace, tea.KeyDelete:
@@ -1017,6 +1113,11 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.forceFirst = true
 			m.rebuild(false)
 		}
+		return m, nil
+	case tea.KeySpace:
+		m.query = append(m.query, ' ')
+		m.forceFirst = true
+		m.rebuild(false)
 		return m, nil
 	}
 	if msg.String() == "shift+tab" {
@@ -1165,13 +1266,20 @@ func (m Model) tabLine() string {
 	return fit(strings.Join(parts, "   "), m.width)
 }
 func (m Model) searchLine() string {
-	left := accent().Render("⌕ ") + normal().Render(string(m.query)) + accent().Render("▌")
 	count := muted().Render(fmt.Sprintf("%d matches", m.matchCount(m.tab)))
-	available := m.width - shell.StringWidth(left) - shell.StringWidth(count)
-	if available < 1 {
-		available = 1
+	countWidth := shell.StringWidth(count)
+	promptWidth := m.width - countWidth - 1
+	if promptWidth < 1 {
+		promptWidth = 1
 	}
-	return fit(left+strings.Repeat(" ", available)+count, m.width)
+	prompt := shell.PromptLine(promptWidth, accent().Render("⌕ "), string(m.query), accent().Render("▌"))
+	gap := m.width - shell.StringWidth(prompt) - countWidth
+	if gap < 0 {
+		count = shell.Truncate(count, max(0, m.width-shell.StringWidth(prompt)), "")
+		countWidth = shell.StringWidth(count)
+		gap = m.width - shell.StringWidth(prompt) - countWidth
+	}
+	return fit(prompt+strings.Repeat(" ", max(0, gap))+count, m.width)
 }
 func (m Model) renderBody(height int) []string {
 	lines := []string{}
@@ -1182,17 +1290,14 @@ func (m Model) renderBody(height int) []string {
 		}
 		primary, secondary := m.rowText(row)
 		lines = append(lines, primary)
-		if secondary != "" && row.kind == itemRow {
+		if height >= 2 && secondary != "" && row.kind == itemRow {
 			lines = append(lines, secondary)
 		}
 	}
 	if height <= 0 {
 		return nil
 	}
-	start := viewportStart(len(lines), height, selectedLine)
-	if selectedLine >= 0 && selectedLine+1 < len(lines) && start+height <= selectedLine+1 {
-		start = selectedLine + 1 - height + 1
-	}
+	start := shell.ViewportStart(len(lines), height, selectedLine)
 	if start < 0 {
 		start = 0
 	}
@@ -1211,20 +1316,6 @@ func (m Model) renderBody(height int) []string {
 	}
 	return out
 }
-func viewportStart(total, height, selected int) int {
-	if total <= height || selected < 0 {
-		return 0
-	}
-	start := selected - height/2
-	if start < 0 {
-		start = 0
-	}
-	if start+height > total {
-		start = total - height
-	}
-	return start
-}
-
 func (m Model) rowText(row row) (string, string) {
 	selected := row.cursorable && row.id == m.cursor
 	marker := "  "
@@ -1237,9 +1328,9 @@ func (m Model) rowText(row row) (string, string) {
 	}
 	switch row.kind {
 	case machineRow:
-		value := strings.Repeat("  ", row.depth) + bold().Render(row.label) + muted().Render(fmt.Sprintf("  %d", row.count))
+		value := strings.Repeat("  ", row.depth) + bold().Render(highlightText(sanitize(row.label), string(m.query))) + muted().Render(fmt.Sprintf("  %d", row.count))
 		if row.remoteErr != "" {
-			value += muted().Render("  " + row.remoteErr)
+			value += muted().Render("  " + sanitize(row.remoteErr))
 		} else if row.loading {
 			value += muted().Faint(true).Render("  loading…")
 		}
@@ -1249,11 +1340,9 @@ func (m Model) rowText(row row) (string, string) {
 		if row.expanded {
 			arrow = "⌄"
 		}
-		return marker + strings.Repeat("  ", row.depth) + bold().Render(arrow+"  "+row.label) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
+		return marker + strings.Repeat("  ", row.depth) + bold().Render(arrow+"  "+sanitize(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
 	case newContainerRow:
-		return "  " + strings.Repeat("  ", row.depth) + muted().Render(row.label), ""
-	case errorRow:
-		return "  " + muted().Render(row.label), ""
+		return "  " + strings.Repeat("  ", row.depth) + muted().Render(sanitize(row.label)), ""
 	case itemRow:
 		if row.itemKind == "agent" {
 			return m.agentText(row, marker, secondaryMarker)
@@ -1266,11 +1355,12 @@ func (m Model) rowText(row row) (string, string) {
 
 func (m Model) agentText(row row, marker, secondaryMarker string) (string, string) {
 	a := row.agent
-	primary := bold().Render(highlightText(a.Harness, string(m.query))) + muted().Render("  "+displayContainer(a))
+	container := displayContainer(a, row.agentMachine)
+	primary := bold().Render(highlightText(sanitize(a.Harness), string(m.query))) + muted().Render("  "+highlightText(sanitize(container), string(m.query)))
 	if row.id == m.cursor {
 		primary = bold().Render(primary)
 	}
-	state := strings.ToLower(strings.TrimSpace(a.State))
+	state := strings.ToLower(strings.TrimSpace(sanitize(a.State)))
 	stateText := "● " + state
 	if state == "stopped" && a.StoppedSince != nil {
 		stateText += " " + stoppedAge(m.now(), *a.StoppedSince)
@@ -1278,9 +1368,9 @@ func (m Model) agentText(row row, marker, secondaryMarker string) (string, strin
 	stateStyle := stateColor(a)
 	left := stateStyle.Render(stateText)
 	if a.Branch != "" {
-		left += "   " + muted().Render("⎇ "+a.Branch)
+		left += "   " + muted().Render("⎇ "+highlightText(sanitize(a.Branch), string(m.query)))
 	}
-	target := muted().Render(a.Target)
+	target := muted().Render(highlightText(sanitize(a.Target), string(m.query)))
 	gap := m.width - shell.StringWidth(secondaryMarker) - shell.StringWidth(left) - shell.StringWidth(target)
 	if gap < 2 {
 		gap = 2
@@ -1288,8 +1378,7 @@ func (m Model) agentText(row row, marker, secondaryMarker string) (string, strin
 	secondary := secondaryMarker + left + strings.Repeat(" ", gap) + target
 	return marker + primary, secondary
 }
-func displayContainer(a capabilities.Agent) string {
-	machine := agentMachine(a)
+func displayContainer(a capabilities.Agent, machine string) string {
 	if machine != "" && machine != picker.LocalMachine() {
 		return machine + "/" + a.Container
 	}
@@ -1320,14 +1409,14 @@ func (m Model) containerSecondary(place picker.Place) string {
 	agents := m.agentsFor(place)
 	if len(agents) == 0 {
 		if preview := previewLine(place.Preview); preview != "" {
-			return muted().Render(preview)
+			return muted().Render(highlightText(preview, string(m.query)))
 		}
 		return muted().Faint(true).Render("no agents")
 	}
 	parts := []string{}
 	for _, agent := range agents {
-		state := strings.ToLower(strings.TrimSpace(agent.State))
-		text := strings.TrimSpace(agent.Harness) + " " + state
+		state := strings.ToLower(strings.TrimSpace(sanitize(agent.State)))
+		text := sanitize(strings.TrimSpace(agent.Harness)) + " " + sanitize(state)
 		if state == "stopped" && agent.StoppedSince != nil {
 			text += " " + stoppedAge(m.now(), *agent.StoppedSince)
 		}
@@ -1336,6 +1425,9 @@ func (m Model) containerSecondary(place picker.Place) string {
 	return strings.Join(parts, "  ")
 }
 func (m Model) gitSecondary(place picker.Place) string {
+	if errText := sanitize(m.gitErrors[place.Path]); errText != "" {
+		return muted().Render("git: error " + errText)
+	}
 	if place.GitContext == nil {
 		if place.Git {
 			return muted().Faint(true).Render("git context loading…")
@@ -1345,13 +1437,16 @@ func (m Model) gitSecondary(place picker.Place) string {
 	g := *place.GitContext
 	parts := []string{}
 	if g.Identity != "" {
-		parts = append(parts, muted().Render("⎇ "+g.Identity))
+		parts = append(parts, muted().Render("⎇ "+highlightText(sanitize(g.Identity), string(m.query))))
 	}
 	if g.Adds > 0 {
 		parts = append(parts, brightGreen().Render("+"+itoa(g.Adds)))
 	}
 	if g.Deletes > 0 {
 		parts = append(parts, brightRed().Render("-"+itoa(g.Deletes)))
+	}
+	if g.Dirty && g.Adds == 0 && g.Deletes == 0 {
+		parts = append(parts, yellow().Render("*"))
 	}
 	if g.Ahead > 0 {
 		parts = append(parts, muted().Render("↑"+itoa(g.Ahead)))
@@ -1367,13 +1462,22 @@ func (m Model) gitSecondary(place picker.Place) string {
 
 func (m Model) footer() string {
 	if m.toast != "" {
-		return fit(accent().Render(m.toast), m.width)
+		return fit(accent().Render(sanitize(m.toast)), m.width)
 	}
 	if m.confirmKill {
 		return fit(accent().Render("kill selected containers? ")+accent().Render("y")+muted().Render(" confirm  ")+accent().Render("n")+muted().Render(" cancel"), m.width)
 	}
 	if m.renameMode {
-		return fit(accent().Render("rename: ")+normal().Render(string(m.renameInput))+accent().Render("▌")+muted().Render("  Enter save  Esc cancel"), m.width)
+		suffix := muted().Render("  Enter save  Esc cancel")
+		promptWidth := m.width - shell.StringWidth(suffix)
+		if promptWidth < 1 {
+			promptWidth = 1
+		}
+		prompt := shell.PromptLine(promptWidth, accent().Render("rename: "), string(m.renameInput), accent().Render("▌"))
+		return fit(prompt+suffix, m.width)
+	}
+	if m.refreshErr != nil {
+		return fit(muted().Render("agent refresh: "+sanitize(m.refreshErr.Error())), m.width)
 	}
 	left := []string{}
 	left = append(left, hint("↑↓", "move"))
@@ -1408,6 +1512,16 @@ func hint(keyValue, label string) string {
 	return accent().Bold(true).Render(keyValue) + " " + muted().Faint(true).Render(label)
 }
 
+func sanitize(value string) string { return shell.Plain(value) }
+
+func normalizedMachine(machine string) string {
+	machine = strings.TrimSpace(sanitize(machine))
+	if machine == "" || strings.EqualFold(machine, "local") {
+		return picker.LocalMachine()
+	}
+	return machine
+}
+
 func fit(value string, width int) string {
 	if width <= 0 {
 		return ""
@@ -1431,6 +1545,7 @@ func contains(values []string, value string) bool {
 }
 func itoa(value int) string { return fmt.Sprintf("%d", value) }
 func previewLine(value string) string {
+	value = sanitize(value)
 	for _, line := range strings.Split(value, "\n") {
 		if line = strings.TrimSpace(line); line != "" {
 			return line
@@ -1438,20 +1553,7 @@ func previewLine(value string) string {
 	}
 	return ""
 }
-func stoppedAge(now, since time.Time) string {
-	seconds := int(now.Sub(since) / time.Second)
-	if seconds < 0 {
-		seconds = 0
-	}
-	if seconds < 60 {
-		return fmt.Sprintf("%ds", seconds)
-	}
-	minutes := seconds / 60
-	if minutes < 60 {
-		return fmt.Sprintf("%dm", minutes)
-	}
-	return fmt.Sprintf("%dh", minutes/60)
-}
+func stoppedAge(now, since time.Time) string { return navigator.StoppedAge(now, since) }
 func stateColor(agent capabilities.Agent) lipgloss.Style {
 	switch {
 	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && !agent.Seen:
@@ -1493,18 +1595,7 @@ func highlightText(text, query string) string {
 	return out.String()
 }
 
-// Machine is not part of capabilities.Agent in older adapters; derive it
-// from the opaque target when a backend did not populate ContainerID labels.
-func agentMachine(agent capabilities.Agent) string {
-	target := strings.TrimSpace(strings.SplitN(agent.Target, ":", 2)[0])
-	parts := strings.SplitN(target, "/", 2)
-	if len(parts) == 2 && parts[0] != "" {
-		return parts[0]
-	}
-	return picker.LocalMachine()
-}
-
 func (m *Model) SetAgents(agents []capabilities.Agent) {
-	m.agents = append([]capabilities.Agent(nil), agents...)
+	m.agents = newAgentRecords(agents, "")
 	m.rebuild(false)
 }
