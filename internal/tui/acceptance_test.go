@@ -123,14 +123,17 @@ func TestProjectQueryStartsAtMatchingItem(t *testing.T) {
 
 func TestOnlyProjectsFold(t *testing.T) {
 	projects := NewModel(context.Background(), richDeps(), ProjectsTab)
-	projects = updateModel(t, projects, keyMsg(tea.KeyRight)) // group
-	if len(projects.Rows()) != 3 {
-		t.Fatalf("group expansion rows = %v", projects.Rows())
+	if got := len(projects.Rows()); got != 4 {
+		t.Fatalf("groups start expanded with all worktrees, rows = %v", projects.Rows())
 	}
-	projects = updateModel(t, projects, keyMsg(tea.KeyDown))  // root
-	projects = updateModel(t, projects, keyMsg(tea.KeyRight)) // linked worktree
-	if len(projects.Rows()) != 4 {
-		t.Fatalf("worktree expansion rows = %v", projects.Rows())
+	projects = updateModel(t, projects, keyMsg(tea.KeyUp)) // group
+	projects = updateModel(t, projects, keyMsg(tea.KeyLeft))
+	if got := projects.Rows(); len(got) != 1 || got[0] != "group:/work" {
+		t.Fatalf("group did not fold as a unit: %v", got)
+	}
+	projects = updateModel(t, projects, keyMsg(tea.KeyRight))
+	if got := len(projects.Rows()); got != 4 {
+		t.Fatalf("group did not unfold with all worktrees: %v", projects.Rows())
 	}
 	containers := NewModel(context.Background(), richDeps(), ContainersTab)
 	containers = updateModel(t, containers, keyMsg(tea.KeyUp))
@@ -267,6 +270,7 @@ func TestSizeContractForEveryTab(t *testing.T) {
 func TestFooterOnlyAdvertisesCurrentActions(t *testing.T) {
 	model := NewModel(context.Background(), richDeps(), ProjectsTab)
 	model.SetSize(100, 10)
+	model = updateModel(t, model, keyMsg(tea.KeyUp))
 	groupFooter := shell.Plain(model.footer())
 	if strings.Contains(groupFooter, "Enter") || strings.Contains(groupFooter, "Ctrl-R") {
 		t.Fatalf("group footer advertises unavailable action: %q", groupFooter)
@@ -274,8 +278,8 @@ func TestFooterOnlyAdvertisesCurrentActions(t *testing.T) {
 	model = updateModel(t, model, keyMsg(tea.KeyRight))
 	model = updateModel(t, model, keyMsg(tea.KeyDown))
 	projectFooter := shell.Plain(model.footer())
-	if !strings.Contains(projectFooter, "Enter") || !strings.Contains(projectFooter, "fold") {
-		t.Fatalf("project footer missing actions: %q", projectFooter)
+	if !strings.Contains(projectFooter, "Enter") || strings.Contains(projectFooter, "fold") {
+		t.Fatalf("project footer has wrong actions: %q", projectFooter)
 	}
 	model = NewModel(context.Background(), richDeps(), ContainersTab)
 	model.SetSize(100, 10)

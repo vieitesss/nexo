@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -152,6 +153,7 @@ type row struct {
 	loading      bool
 	activity     *time.Time
 	nameWidth    int
+	treePrefix   string
 }
 
 type agentsMsg struct {
@@ -513,8 +515,39 @@ func (m Model) matchContainer(place picker.Place) (picker.Match, bool) {
 }
 
 func (m Model) matchProject(place picker.Place) (picker.Match, bool) {
-	text := strings.Join([]string{sanitize(place.DisplayRemainder), sanitize(place.Path), sanitize(gitIdentity(place))}, " ")
-	return picker.Rank(string(m.query), text)
+	query := string(m.query)
+	if query == "" {
+		return picker.Match{}, true
+	}
+
+	// A project name is the strongest signal.  Ranking one combined string
+	// lets a long checkout path beat an exact project name, which is especially
+	// surprising for short queries.  Keep the fields separate and make that
+	// precedence explicit instead.
+	name := projectLabel(place)
+	if match, ok := picker.Rank(query, name); ok {
+		match.Score += 100000
+		return match, true
+	}
+	if branch := gitIdentity(place); branch != "" {
+		if match, ok := picker.Rank(query, sanitize(branch)); ok {
+			match.Score += 50000
+			return match, true
+		}
+	}
+	path := sanitize(place.SearchText)
+	if path == "" {
+		path = sanitize(place.Path)
+	}
+	if match, ok := picker.Rank(query, path); ok {
+		// A sparse match spanning a full path is noise.  Contiguous path
+		// matches remain useful when the project name itself is unavailable.
+		if match.Score < len([]rune(query))*10 {
+			return picker.Match{}, false
+		}
+		return match, true
+	}
+	return picker.Match{}, false
 }
 
 func gitIdentity(place picker.Place) string {
@@ -629,6 +662,14 @@ func (m Model) agentRows() []row {
 		agent := record.agent
 		rows = append(rows, row{id: agentIdentity(record), kind: itemRow, itemKind: "agent", label: agent.Harness, group: agent.Container, cursorable: true, matched: true, score: match.Score, agent: agent, agentMachine: record.machine, agentBackend: record.backend})
 	}
+	if string(m.query) != "" {
+		sort.SliceStable(rows, func(i, j int) bool {
+			if rows[i].score != rows[j].score {
+				return rows[i].score > rows[j].score
+			}
+			return rows[i].label < rows[j].label
+		})
+	}
 	return rows
 }
 
@@ -670,6 +711,15 @@ func (m Model) machineNames() []string {
 func (m Model) containerRows() []row {
 	rows := []row{}
 	machines := m.machineNames()
+	if string(m.query) != "" {
+		sort.SliceStable(machines, func(i, j int) bool {
+			left, right := m.machineMatchScore(machines[i]), m.machineMatchScore(machines[j])
+			if left != right {
+				return left > right
+			}
+			return machines[i] < machines[j]
+		})
+	}
 	for machineIndex, machine := range machines {
 		children := []row{}
 		for _, place := range m.containerPlaces() {
@@ -682,7 +732,16 @@ func (m Model) containerRows() []row {
 			}
 			children = append(children, row{id: containerIdentity(place), kind: itemRow, itemKind: "container", label: place.ContainerName, machine: machine, group: machine, depth: 2, cursorable: true, matched: true, score: match.Score, place: place, activity: place.Activity})
 		}
-		sort.SliceStable(children, func(i, j int) bool { return m.containerBefore(children[i], children[j]) })
+		if string(m.query) != "" {
+			sort.SliceStable(children, func(i, j int) bool {
+				if children[i].score != children[j].score {
+					return children[i].score > children[j].score
+				}
+				return children[i].label < children[j].label
+			})
+		} else {
+			sort.SliceStable(children, func(i, j int) bool { return m.containerBefore(children[i], children[j]) })
+		}
 		nameWidth := 0
 		for _, child := range children {
 			if width := shell.StringWidth(sanitize(child.place.ContainerName)); width > nameWidth {
@@ -715,6 +774,22 @@ func (m Model) containerRows() []row {
 		rows = append(rows, row{id: "new:local", kind: newContainerRow, label: "+ new container…", depth: 1})
 	}
 	return rows
+}
+
+func (m Model) machineMatchScore(machine string) int {
+	best := -1
+	for _, place := range m.containerPlaces() {
+		if place.Machine != machine {
+			continue
+		}
+		if match, ok := m.matchContainer(place); ok && match.Score > best {
+			best = match.Score
+		}
+	}
+	if match, ok := picker.Rank(string(m.query), sanitize(machine)); ok && match.Score > best {
+		best = match.Score
+	}
+	return best
 }
 
 func (m Model) containerBefore(left, right row) bool {
@@ -757,6 +832,11 @@ func containerIdentity(place picker.Place) string {
 
 func (m Model) projectRows() []row {
 	places := m.projectPlaces()
+	query := string(m.query)
+	if query != "" {
+		return m.flatProjectRows(places)
+	}
+
 	groups := make([]string, 0)
 	seenGroups := map[string]bool{}
 	for _, place := range places {
@@ -765,107 +845,88 @@ func (m Model) projectRows() []row {
 			groups = append(groups, place.Group)
 		}
 	}
-	rows := []row{}
-	query := string(m.query)
+	rows := make([]row, 0, len(places)+len(groups))
 	for _, group := range groups {
-		roots := []picker.Place{}
+		groupPlaces := make([]picker.Place, 0)
 		for _, place := range places {
-			if place.Group == group && place.ParentPath == "" {
-				roots = append(roots, place)
+			if place.Group == group {
+				groupPlaces = append(groupPlaces, place)
 			}
-		}
-		matchedRoots := []picker.Place{}
-		for _, root := range roots {
-			if _, ok := m.matchProject(root); ok || m.hasMatchingChild(root, places) {
-				matchedRoots = append(matchedRoots, root)
-			}
-		}
-		sort.SliceStable(matchedRoots, func(i, j int) bool {
-			return m.projectMatchScore(matchedRoots[i], places) > m.projectMatchScore(matchedRoots[j], places)
-		})
-		_, groupMatch := picker.Rank(query, sanitize(group))
-		if query != "" && len(matchedRoots) == 0 && !groupMatch {
-			continue
 		}
 		key := "group:" + group
-		expanded := m.expanded[key]
-		// Project groups start folded. A matching query unfolds only the
-		// matching group, without changing the user's explicit fold state.
-		if query != "" && len(matchedRoots) > 0 && !m.folded[key] {
+		// Empty-query project browsing is an overview: all worktrees are
+		// visible below their checkout. Folding remains available explicitly.
+		expanded := !m.folded[key]
+		if m.expanded[key] {
 			expanded = true
 		}
-		rows = append(rows, row{id: key, kind: groupRow, label: group, group: group, count: len(matchedRoots), cursorable: true, expanded: expanded, foldable: true})
+		rows = append(rows, row{id: key, kind: groupRow, label: group, group: group, count: len(groupPlaces), cursorable: true, expanded: expanded, foldable: true})
 		if !expanded {
 			continue
 		}
-		for _, root := range matchedRoots {
-			match, direct := m.matchProject(root)
-			childMatch := m.hasMatchingChild(root, places)
-			if !direct && query != "" && !childMatch {
-				continue
+		roots := make([]picker.Place, 0)
+		for _, place := range groupPlaces {
+			if place.ParentPath == "" || !containsPlacePath(groupPlaces, place.ParentPath) {
+				roots = append(roots, place)
 			}
-			children := m.children(root, places)
-			fold := len(children) > 0
-			projectKey := projectIdentity(root)
-			projectExpanded := m.expanded[projectKey]
-			if query != "" && childMatch && !m.folded[projectKey] {
-				projectExpanded = true
-			}
-			rows = append(rows, row{id: projectKey, kind: itemRow, itemKind: "project", label: projectLabel(root), group: group, depth: 1, cursorable: true, matched: direct, score: match.Score, place: root, expanded: projectExpanded, foldable: fold})
-			if !projectExpanded || (!childMatch && !direct) {
-				continue
-			}
-			if !m.projectExpanded(root, query, childMatch) {
-				continue
-			}
-			sort.SliceStable(children, func(i, j int) bool {
-				return m.projectMatchScore(children[i], places) > m.projectMatchScore(children[j], places)
-			})
-			for _, child := range children {
-				childMatchValue, childOK := m.matchProject(child)
-				if query != "" && !childOK {
-					continue
-				}
-				rows = append(rows, row{id: projectIdentity(child), kind: itemRow, itemKind: "project", label: projectLabel(child), group: group, depth: 2, cursorable: true, matched: childOK, score: childMatchValue.Score, place: child, foldable: len(m.children(child, places)) > 0, expanded: false})
-			}
+		}
+		for _, root := range roots {
+			rows = append(rows, projectRow(root, group, 0, "", true))
+			rows = append(rows, m.projectChildRows(root, groupPlaces, group, "")...)
 		}
 	}
 	return rows
 }
 
-func (m Model) projectExpanded(place picker.Place, query string, childMatch bool) bool {
-	id := projectIdentity(place)
-	if m.expanded[id] {
-		return true
-	}
-	return query != "" && childMatch && !m.folded[id]
-}
-func (m Model) projectMatchScore(place picker.Place, all []picker.Place) int {
-	best := -1
-	if match, ok := m.matchProject(place); ok {
-		best = match.Score
-	}
-	for _, child := range all {
-		if child.ParentPath != place.Path {
+func (m Model) flatProjectRows(places []picker.Place) []row {
+	rows := make([]row, 0, len(places))
+	for _, place := range places {
+		match, ok := m.matchProject(place)
+		if !ok {
 			continue
 		}
-		if score := m.projectMatchScore(child, all); score > best {
-			best = score
-		}
+		rows = append(rows, row{
+			id: projectIdentity(place), kind: itemRow, itemKind: "project", label: projectLabel(place),
+			group: place.Group, depth: 0, cursorable: true, matched: true, score: match.Score, place: place,
+		})
 	}
-	return best
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].score != rows[j].score {
+			return rows[i].score > rows[j].score
+		}
+		return rows[i].label < rows[j].label
+	})
+	return rows
 }
 
-func (m Model) hasMatchingChild(place picker.Place, all []picker.Place) bool {
-	for _, child := range all {
-		if child.ParentPath == place.Path {
-			if _, ok := m.matchProject(child); ok || m.hasMatchingChild(child, all) {
-				return true
-			}
+func projectRow(place picker.Place, group string, depth int, treePrefix string, cursorable bool) row {
+	match, _ := picker.Rank("", projectLabel(place))
+	return row{id: projectIdentity(place), kind: itemRow, itemKind: "project", label: projectLabel(place), group: group, depth: depth, treePrefix: treePrefix, cursorable: cursorable, matched: true, score: match.Score, place: place}
+}
+
+func (m Model) projectChildRows(parent picker.Place, all []picker.Place, group, parentPrefix string) []row {
+	children := m.children(parent, all)
+	rows := make([]row, 0, len(children))
+	for index, child := range children {
+		prefix := "├ "
+		if index == len(children)-1 {
+			prefix = "└ "
+		}
+		rows = append(rows, projectRow(child, group, 1, prefix, true))
+		rows = append(rows, m.projectChildRows(child, all, group, prefix)...)
+	}
+	return rows
+}
+
+func containsPlacePath(places []picker.Place, path string) bool {
+	for _, place := range places {
+		if place.Path == path {
+			return true
 		}
 	}
 	return false
 }
+
 func (m Model) children(place picker.Place, all []picker.Place) []picker.Place {
 	children := []picker.Place{}
 	for _, candidate := range all {
@@ -881,6 +942,28 @@ func projectLabel(place picker.Place) string {
 		return sanitize(place.DisplayRemainder)
 	}
 	return sanitize(place.Path)
+}
+
+func abbreviateHome(value string) string {
+	value = sanitize(value)
+	home := sanitize(os.Getenv("HOME"))
+	if home == "" {
+		if detected, err := os.UserHomeDir(); err == nil {
+			home = sanitize(detected)
+		}
+	}
+	if home == "" {
+		return value
+	}
+	home = strings.TrimRight(filepath.ToSlash(home), "/")
+	value = filepath.ToSlash(value)
+	if value == home {
+		return "~"
+	}
+	if strings.HasPrefix(value, home+"/") {
+		return "~" + strings.TrimPrefix(value, home)
+	}
+	return value
 }
 
 func (m Model) allAgents() []agentRecord {
@@ -1433,10 +1516,10 @@ func (m Model) rowText(row row) (string, string) {
 	if selected {
 		marker = accent().Render("▌") + " "
 	}
+	// Secondary agent details may occupy a second line, but the selection
+	// accent belongs to the row's first line only. This keeps its height
+	// constant while moving across every tab.
 	secondaryMarker := "  "
-	if selected {
-		secondaryMarker = accent().Render("▌") + " "
-	}
 	switch row.kind {
 	case machineRow:
 		value := strings.Repeat("  ", row.depth) + bold().Render(highlightText(sanitize(row.label), string(m.query))) + muted().Render(fmt.Sprintf("  %d", row.count))
@@ -1451,7 +1534,7 @@ func (m Model) rowText(row row) (string, string) {
 		if row.expanded {
 			arrow = "⌄"
 		}
-		return marker + strings.Repeat("  ", row.depth) + bold().Render(arrow+"  "+sanitize(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
+		return marker + strings.Repeat("  ", row.depth) + bold().Render(arrow+"  "+abbreviateHome(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
 	case newContainerRow:
 		return "  " + strings.Repeat("  ", row.depth) + muted().Render(sanitize(row.label)), ""
 	case separatorRow:
@@ -1574,51 +1657,150 @@ func (m Model) containerText(row row, marker string) (string, string) {
 
 func activityAge(now, activity time.Time) string { return stoppedAge(now, activity) }
 
-func (m Model) placeText(row row, marker, secondaryMarker string) (string, string) {
-	place := row.place
-	name := projectLabel(place)
-	marked := place.Kind == picker.ContainerKind && m.marked[picker.ContainerRef{Machine: place.Machine, ID: place.ContainerID}]
-	if marked {
-		// Marked containers keep the marker directly before the name.
-		name = magenta().Render("◆ ") + highlightMarkedText(name, string(m.query))
-	} else {
-		name = highlightText(name, string(m.query))
-		if row.depth > 1 {
-			name = muted().Render("└ ") + name
+type projectColumns struct {
+	name, branch, summary, path int
+	search                      bool
+}
+
+func (m Model) projectLayout() projectColumns {
+	layout := projectColumns{search: string(m.query) != ""}
+	maxName, maxBranch, maxSummary, maxPath := 1, 1, 1, 0
+	for _, candidate := range m.rows {
+		if candidate.kind != itemRow || candidate.itemKind != "project" {
+			continue
+		}
+		name := shell.StringWidth(candidate.treePrefix + projectLabel(candidate.place))
+		if name > maxName {
+			maxName = name
+		}
+		if branch := shell.StringWidth(projectBranch(candidate.place)); branch > maxBranch {
+			maxBranch = branch
+		}
+		if summary := shell.StringWidth(m.projectSummary(candidate.place)); summary > maxSummary {
+			maxSummary = summary
+		}
+		if path := shell.StringWidth(abbreviateHome(candidate.group)); path > maxPath {
+			maxPath = path
 		}
 	}
-	primary := strings.Repeat("  ", row.depth-1) + name
-	if row.id == m.cursor {
-		primary = bold().Render(primary)
+	// Two-character gutters and two spaces between each column are reserved.
+	available := m.width - 2 - 2 - 6
+	if available < 12 {
+		available = 12
 	}
-	secondary := ""
-	if place.Kind == picker.ProjectKind {
-		secondary = secondaryMarker + m.gitSecondary(place)
+	nameCap := available * 45 / 100
+	if nameCap < 8 {
+		nameCap = 8
 	}
-	return marker + primary, secondary
+	layout.name = min(maxName, nameCap)
+	if layout.search {
+		layout.path = min(maxPath, max(12, available/5))
+	}
+	layout.summary = min(maxSummary, max(6, available/6+2))
+	layout.branch = maxBranch
+	remaining := available - layout.name - layout.summary - layout.path
+	if remaining < 6 {
+		layout.name = max(6, layout.name+remaining-6)
+		remaining = available - layout.name - layout.summary - layout.path
+	}
+	if remaining < 1 {
+		remaining = 1
+	}
+	layout.branch = max(1, remaining)
+	return layout
 }
-func (m Model) gitSecondary(place picker.Place) string {
-	if errText := sanitize(m.gitErrors[place.Path]); errText != "" {
-		return muted().Render("git: error " + errText)
+
+func min(a, b int) int {
+	if a < b {
+		return a
 	}
+	return b
+}
+
+func (m Model) placeText(row row, marker, secondaryMarker string) (string, string) {
+	if row.place.Kind != picker.ProjectKind {
+		return marker + highlightText(projectLabel(row.place), string(m.query)), ""
+	}
+	layout := m.projectLayout()
+	name := row.treePrefix + projectLabel(row.place)
+	name = shell.Truncate(name, layout.name, "…")
+	nameText := highlightText(name, string(m.query))
+	if row.treePrefix != "" {
+		// Tree gutters are structural, not part of fuzzy matching.
+		nameText = muted().Render(row.treePrefix) + highlightText(strings.TrimPrefix(name, row.treePrefix), string(m.query))
+	}
+	if row.id == m.cursor {
+		nameText = bold().Render(nameText)
+	}
+	nameCell := fit(nameText, layout.name)
+	branch := fit(muted().Render(projectBranch(row.place)), layout.branch)
+	summary := fit(m.projectSummaryStyled(row.place), layout.summary)
+	line := nameCell + "  " + branch + "  " + summary
+	if layout.search {
+		path := abbreviateHome(row.group)
+		pathCell := shell.Truncate(path, layout.path, "…")
+		pathCell = strings.Repeat(" ", max(0, layout.path-shell.StringWidth(pathCell))) + muted().Render(pathCell)
+		line += "  " + pathCell
+	}
+	return marker + line, ""
+}
+
+func projectBranch(place picker.Place) string {
 	if place.GitContext == nil {
 		if place.Git {
-			return muted().Faint(true).Render("git context loading…")
+			return "…"
 		}
+		return ""
+	}
+	if identity := sanitize(place.GitContext.Identity); identity != "" {
+		return "⎇ " + identity
+	}
+	return ""
+}
+
+func (m Model) projectSummary(place picker.Place) string {
+	if errText := sanitize(m.gitErrors[place.Path]); errText != "" {
+		return "git: error " + errText
+	}
+	if place.GitContext == nil {
 		return ""
 	}
 	g := *place.GitContext
 	parts := []string{}
-	if g.Identity != "" {
-		parts = append(parts, muted().Render("⎇ "+highlightText(sanitize(g.Identity), string(m.query))))
+	if g.Adds > 0 {
+		parts = append(parts, "+"+itoa(g.Adds))
 	}
+	if g.Deletes > 0 {
+		parts = append(parts, "−"+itoa(g.Deletes))
+	}
+	if g.Dirty {
+		parts = append(parts, "*")
+	}
+	if g.Ahead > 0 {
+		parts = append(parts, "↑"+itoa(g.Ahead))
+	}
+	if g.Behind > 0 {
+		parts = append(parts, "↓"+itoa(g.Behind))
+	}
+	return strings.Join(parts, " ")
+}
+
+func (m Model) projectSummaryStyled(place picker.Place) string {
+	if errText := sanitize(m.gitErrors[place.Path]); errText != "" {
+		return muted().Render("git: error " + errText)
+	}
+	if place.GitContext == nil {
+		return ""
+	}
+	g := *place.GitContext
+	parts := []string{}
 	if g.Adds > 0 {
 		parts = append(parts, brightGreen().Render("+"+itoa(g.Adds)))
 	}
 	if g.Deletes > 0 {
-		parts = append(parts, brightRed().Render("-"+itoa(g.Deletes)))
+		parts = append(parts, brightRed().Render("−"+itoa(g.Deletes)))
 	}
-	if g.Dirty && g.Adds == 0 && g.Deletes == 0 {
+	if g.Dirty {
 		parts = append(parts, yellow().Render("*"))
 	}
 	if g.Ahead > 0 {
@@ -1626,9 +1808,6 @@ func (m Model) gitSecondary(place picker.Place) string {
 	}
 	if g.Behind > 0 {
 		parts = append(parts, muted().Render("↓"+itoa(g.Behind)))
-	}
-	if len(parts) == 0 {
-		return muted().Faint(true).Render("clean")
 	}
 	return strings.Join(parts, " ")
 }

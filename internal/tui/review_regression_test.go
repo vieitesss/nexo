@@ -43,31 +43,33 @@ func TestSearchRevealsPreviouslyFoldedProjects(t *testing.T) {
 	}
 }
 
-func TestSearchFoldingHonorsExplicitGroupAndLinkedRootFolds(t *testing.T) {
+func TestSearchIsFlatAndIgnoresGroupFolding(t *testing.T) {
 	model := NewModel(context.Background(), richDeps(), ProjectsTab)
 	model.SetQuery("nexo-wt")
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp}) // group
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
-	if len(model.Rows()) != 1 {
-		t.Fatalf("group left did not fold search rows: %v", model.Rows())
+	if got := model.Rows(); len(got) != 1 || got[0] != "project:/work/nexo-wt" {
+		t.Fatalf("query rows = %v, want the matching worktree only", got)
 	}
-	model.SetQuery("nexo-wt")
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp}) // linked root's parent
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
-	if strings.Contains(strings.Join(model.Rows(), "\x00"), "nexo-wt") {
-		t.Fatalf("linked root left did not fold: %v", model.Rows())
+	if got := model.Rows(); len(got) != 1 || got[0] != "project:/work/nexo-wt" {
+		t.Fatalf("fold key changed flat search rows: %v", got)
+	}
+	model.SetQuery("")
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp}) // group header
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
+	if got := model.Rows(); len(got) != 1 {
+		t.Fatalf("empty-query group fold rows = %v", got)
 	}
 }
 
-func TestUnrelatedGitLoadDoesNotUnfoldInitialGroups(t *testing.T) {
+func TestGitLoadPreservesExpandedGroupState(t *testing.T) {
 	model := NewModel(context.Background(), richDeps(), ProjectsTab)
-	if got := model.Rows(); len(got) != 1 {
-		t.Fatalf("initial rows = %v", got)
+	if got := model.Rows(); len(got) != 4 {
+		t.Fatalf("initial rows = %v, want expanded group", got)
 	}
 	model = updateModel(t, model, picker.GitContextMsg{Path: "/work/nexo", Context: picker.GitContext{Identity: "main"}})
-	if got := model.Rows(); len(got) != 1 {
-		t.Fatalf("unrelated Git load unfolded group: %v", got)
+	if got := model.Rows(); len(got) != 4 {
+		t.Fatalf("Git load changed expanded group: %v", got)
 	}
 }
 
