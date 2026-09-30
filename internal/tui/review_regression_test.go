@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +43,34 @@ func TestSearchRevealsPreviouslyFoldedProjects(t *testing.T) {
 	}
 }
 
+func TestSearchFoldingHonorsExplicitGroupAndLinkedRootFolds(t *testing.T) {
+	model := NewModel(context.Background(), richDeps(), ProjectsTab)
+	model.SetQuery("nexo-wt")
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp}) // group
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
+	if len(model.Rows()) != 1 {
+		t.Fatalf("group left did not fold search rows: %v", model.Rows())
+	}
+	model.SetQuery("nexo-wt")
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp}) // linked root's parent
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
+	if strings.Contains(strings.Join(model.Rows(), "\x00"), "nexo-wt") {
+		t.Fatalf("linked root left did not fold: %v", model.Rows())
+	}
+}
+
+func TestUnrelatedGitLoadDoesNotUnfoldInitialGroups(t *testing.T) {
+	model := NewModel(context.Background(), richDeps(), ProjectsTab)
+	if got := model.Rows(); len(got) != 1 {
+		t.Fatalf("initial rows = %v", got)
+	}
+	model = updateModel(t, model, picker.GitContextMsg{Path: "/work/nexo", Context: picker.GitContext{Identity: "main"}})
+	if got := model.Rows(); len(got) != 1 {
+		t.Fatalf("unrelated Git load unfolded group: %v", got)
+	}
+}
+
 func TestGitDiscoveryRevealsSelectedWorktreeAndRendersStates(t *testing.T) {
 	model := NewModel(context.Background(), Deps{Projects: []picker.Place{
 		{Kind: picker.ProjectKind, Path: "/p", Group: "/work", DisplayRemainder: "primary", Git: true},
@@ -75,6 +104,10 @@ func TestRemoteLoadCompletionAndMachineScopedAgents(t *testing.T) {
 		RemoteMachines: []string{"dev"},
 	}, ContainersTab)
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%1", ContainerID: "1", Container: "remote", Harness: "claude", State: "working"}}})
+	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%1", ContainerID: "1", Container: "remote", Harness: "claude", State: "stopped"}}})
+	if len(model.remoteAgents) != 1 || model.remoteAgents[0].agent.State != "stopped" {
+		t.Fatalf("nonempty remote snapshot was not replaced: %#v", model.remoteAgents)
+	}
 	if got := len(model.agentsFor(picker.Place{Kind: picker.ContainerKind, Machine: "dev", ContainerID: "1", ContainerName: "remote"})); got != 1 {
 		t.Fatalf("remote association count = %d", got)
 	}
@@ -93,6 +126,14 @@ func TestRemoteLoadCompletionAndMachineScopedAgents(t *testing.T) {
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%1", Target: "raw-target", Harness: "claude", State: "stopped"}}})
 	if len(model.remoteAgents) != 1 || model.remoteAgents[0].agent.State != "stopped" {
 		t.Fatalf("remote snapshot = %#v", model.remoteAgents)
+	}
+}
+
+func TestAgentBatchCompatibility(t *testing.T) {
+	model := NewModel(context.Background(), richDeps(), AgentsTab)
+	model = updateModel(t, model, picker.AgentBatch{Agents: []capabilities.Agent{{PaneID: "new", Target: "new:1", Harness: "codex", State: "working"}}})
+	if len(model.Rows()) != 1 || !strings.Contains(strings.Join(model.Rows(), "\x00"), "new") {
+		t.Fatalf("AgentBatch was ignored: %v", model.Rows())
 	}
 }
 
@@ -139,8 +180,9 @@ func TestLongSearchAndRenameKeepCursorVisible(t *testing.T) {
 	for _, value := range strings.Repeat("x", 90) {
 		model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{value}})
 	}
-	if !strings.Contains(strings.Split(model.View(), "\n")[3], "▌") {
-		t.Fatalf("long rename line = %q", model.View())
+	lines := strings.Split(model.View(), "\n")
+	if !strings.Contains(shell.Plain(lines[len(lines)-1]), "▌") {
+		t.Fatalf("long rename footer lost cursor = %q", model.View())
 	}
 }
 
@@ -150,8 +192,8 @@ func TestContainerTextIsIndentedUnderMachine(t *testing.T) {
 	for _, line := range strings.Split(model.View(), "\n") {
 		plain := shell.Plain(line)
 		if strings.Contains(plain, "one") && !strings.Contains(plain, "matches") {
-			if strings.Index(plain, "one") < 3 {
-				t.Fatalf("container is not indented: %q", plain)
+			if !strings.HasPrefix(plain, "▌   ") {
+				t.Fatalf("container gutter is not indented: %q", plain)
 			}
 			return
 		}
@@ -168,23 +210,40 @@ func TestPreviewNormalizesEmptyMachine(t *testing.T) {
 	}
 }
 
-type blockingAgentSource struct{}
+type blockingAgentSource struct {
+	calls   atomic.Int32
+	started chan struct{}
+	release chan struct{}
+}
 
-func (blockingAgentSource) ListAgents(context.Context) ([]capabilities.Agent, error) {
+func (source *blockingAgentSource) ListAgents(context.Context) ([]capabilities.Agent, error) {
+	source.calls.Add(1)
+	select {
+	case source.started <- struct{}{}:
+	default:
+	}
+	<-source.release
 	return nil, errors.New("source failed")
 }
 
 func TestAgentRefreshProtectsInFlightAndDisplaysError(t *testing.T) {
-	model := NewModel(context.Background(), Deps{AgentSource: blockingAgentSource{}, AgentRefreshInterval: time.Hour}, AgentsTab)
+	source := &blockingAgentSource{started: make(chan struct{}, 1), release: make(chan struct{})}
+	model := NewModel(context.Background(), Deps{AgentSource: source, AgentRefreshInterval: time.Hour}, AgentsTab)
 	model.Init()
 	if model.refreshInFlight == nil || !*model.refreshInFlight {
 		t.Fatal("initial refresh was not marked in flight")
 	}
+	first := model.refreshAgents()
+	done := make(chan struct{})
+	go func() { first(); close(done) }()
+	<-source.started
 	updated, cmd := model.Update(refreshTickMsg{})
 	model = updated.(Model)
-	if cmd == nil || model.refreshInFlight == nil || !*model.refreshInFlight {
-		t.Fatal("in-flight refresh was launched again")
+	if cmd == nil || source.calls.Load() != 1 {
+		t.Fatalf("in-flight tick launched another source call: calls=%d", source.calls.Load())
 	}
+	close(source.release)
+	<-done
 	model = updateModel(t, model, agentsMsg{err: errors.New("source failed")})
 	model.SetSize(100, 8)
 	if !strings.Contains(shell.Plain(model.footer()), "agent refresh: source failed") {
@@ -218,10 +277,22 @@ func TestPlaceRankingAndVisibleAgentHighlights(t *testing.T) {
 func TestModalTargetsAreFrozen(t *testing.T) {
 	model := NewModel(context.Background(), richDeps(), ContainersTab)
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlX})
-	model = updateModel(t, model, picker.RemoteBatch{Machine: "remote", Places: picker.ContainerPlaces([]capabilities.Container{{ID: "new", Name: "new", Machine: "remote"}})})
+	model.cursor = containerIdentity(picker.ContainerPlaces([]capabilities.Container{{ID: "remote-two", Name: "two", Machine: "remote"}})[0])
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	refs, ok := model.KillTargetsRequest()
 	if !ok || len(refs) != 1 || refs[0].ID != "local-one" {
 		t.Fatalf("frozen kill target = %v, %v", refs, ok)
+	}
+
+	rename := NewModel(context.Background(), richDeps(), ContainersTab)
+	rename = updateModel(t, rename, tea.KeyMsg{Type: tea.KeyCtrlR})
+	rename.cursor = containerIdentity(picker.ContainerPlaces([]capabilities.Container{{ID: "remote-two", Name: "two", Machine: "remote"}})[0])
+	for _, value := range []rune{'n', 'e', 'w'} {
+		rename = updateModel(t, rename, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{value}})
+	}
+	rename = updateModel(t, rename, tea.KeyMsg{Type: tea.KeyEnter})
+	ref, _, ok := rename.RenameTargetRequest()
+	if !ok || ref.ID != "local-one" {
+		t.Fatalf("frozen rename target = %v, %v", ref, ok)
 	}
 }

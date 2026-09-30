@@ -390,8 +390,14 @@ func (m *Model) SetToast(text string) { m.toast = text }
 // always selects the first matching item, never a group or machine header.
 func (m *Model) SetQuery(query string) {
 	m.query = []rune(query)
-	m.forceFirst = true
+	m.resetSearchFolds()
 	m.rebuild(false)
+}
+
+func (m *Model) resetSearchFolds() {
+	m.folded = make(map[string]bool)
+	m.expanded = make(map[string]bool)
+	m.forceFirst = true
 }
 
 func (m *Model) rebuild(force bool) {
@@ -685,7 +691,7 @@ func (m Model) projectRows() []row {
 		expanded := m.expanded[key]
 		// Project groups start folded. A matching query unfolds only the
 		// matching group, without changing the user's explicit fold state.
-		if query != "" && len(matchedRoots) > 0 {
+		if query != "" && len(matchedRoots) > 0 && !m.folded[key] {
 			expanded = true
 		}
 		rows = append(rows, row{id: key, kind: groupRow, label: group, group: group, count: len(matchedRoots), cursorable: true, expanded: expanded, foldable: true})
@@ -702,7 +708,7 @@ func (m Model) projectRows() []row {
 			fold := len(children) > 0
 			projectKey := projectIdentity(root)
 			projectExpanded := m.expanded[projectKey]
-			if query != "" && childMatch {
+			if query != "" && childMatch && !m.folded[projectKey] {
 				projectExpanded = true
 			}
 			rows = append(rows, row{id: projectKey, kind: itemRow, itemKind: "project", label: projectLabel(root), group: group, depth: 1, cursorable: true, matched: direct, score: match.Score, place: root, expanded: projectExpanded, foldable: fold})
@@ -732,7 +738,7 @@ func (m Model) projectExpanded(place picker.Place, query string, childMatch bool
 	if m.expanded[id] {
 		return true
 	}
-	return query != "" && childMatch
+	return query != "" && childMatch && !m.folded[id]
 }
 func (m Model) projectMatchScore(place picker.Place, all []picker.Place) int {
 	best := -1
@@ -874,6 +880,10 @@ func (m *Model) applyGit(msg picker.GitContextMsg) {
 		return
 	}
 	delete(m.gitErrors, msg.Path)
+	selectedPath := ""
+	if current, ok := m.currentItem(); ok && current.place.Kind == picker.ProjectKind {
+		selectedPath = current.place.Path
+	}
 	value := msg.Context
 	for i := range m.deps.Projects {
 		if m.deps.Projects[i].Path != msg.Path {
@@ -904,7 +914,9 @@ func (m *Model) applyGit(msg picker.GitContextMsg) {
 			}
 		}
 	}
-	m.revealProjectAncestors(msg.Path)
+	if selectedPath == msg.Path {
+		m.revealProjectAncestors(msg.Path)
+	}
 	m.rebuild(false)
 }
 func (m *Model) revealProjectAncestors(path string) {
@@ -917,9 +929,6 @@ func (m *Model) revealProjectAncestors(path string) {
 			}
 		}
 		if found == nil || found.ParentPath == "" {
-			if found != nil {
-				m.expanded["group:"+found.Group] = true
-			}
 			return
 		}
 		m.expanded[projectIdentity(*found)] = true
@@ -1035,7 +1044,7 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEsc:
 		if len(m.query) > 0 {
 			m.query = nil
-			m.forceFirst = true
+			m.resetSearchFolds()
 			m.rebuild(false)
 			return m, nil
 		}
@@ -1079,7 +1088,7 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyBackspace, tea.KeyDelete:
 		if len(m.query) > 0 {
 			m.query = m.query[:len(m.query)-1]
-			m.forceFirst = true
+			m.resetSearchFolds()
 			m.rebuild(false)
 		}
 		return m, nil
@@ -1112,13 +1121,13 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyRunes:
 		if len(msg.Runes) > 0 {
 			m.query = append(m.query, msg.Runes...)
-			m.forceFirst = true
+			m.resetSearchFolds()
 			m.rebuild(false)
 		}
 		return m, nil
 	case tea.KeySpace:
 		m.query = append(m.query, ' ')
-		m.forceFirst = true
+		m.resetSearchFolds()
 		m.rebuild(false)
 		return m, nil
 	}
@@ -1300,6 +1309,9 @@ func (m Model) renderBody(height int) []string {
 		return nil
 	}
 	start := shell.ViewportStart(len(lines), height, selectedLine)
+	if height >= 2 && selectedLine >= 0 && selectedLine+1 < len(lines) && start+height <= selectedLine+1 {
+		start = selectedLine + 2 - height
+	}
 	if start < 0 {
 		start = 0
 	}
@@ -1547,9 +1559,9 @@ func contains(values []string, value string) bool {
 }
 func itoa(value int) string { return fmt.Sprintf("%d", value) }
 func previewLine(value string) string {
-	value = sanitize(value)
 	for _, line := range strings.Split(value, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
+		line = strings.TrimSpace(sanitize(line))
+		if line != "" {
 			return line
 		}
 	}
