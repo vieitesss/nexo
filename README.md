@@ -264,12 +264,23 @@ statuses, and safe verification.
 | `F1` / `F2` / `F3` | Jump to Agents / Containers / Projects |
 | `↑` / `↓`, `Ctrl-N` / `Ctrl-P` | Move |
 | `Enter` | Open the selected item or focus the selected agent |
-| `←` / `→` | Fold project groups and linked worktrees |
+| `←` / `→` | Fold or unfold the selected project, linked worktree children, or project group |
 | `Ctrl-T` | Mark the selected container |
 | `Ctrl-X` | Kill marked or selected containers after confirmation |
 | `Ctrl-R` | Rename the selected container |
 | `Esc` / `Ctrl-C` | Clear search, then close / close |
 | Printable keys, `Backspace` / `Delete` | Fuzzy search, erase search |
+
+### TUI rows and search
+
+Rows are aligned one-line entries. In Projects, folders contain checkout rows and
+linked worktree children; folders and projects start expanded. Use Left/Right to
+fold the selected project or folder, with a hidden-worktree count retained on a
+folded project. Search is flat and ranked across project names, branches, and
+folders. Name matches rank ahead of branch matches, then folder matches; ties are
+ordered by shorter name, checkout before worktree, and finally name.
+
+See [docs/tui.md](docs/tui.md) for the complete row and search behavior.
 
 ## Configuration
 
