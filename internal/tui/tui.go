@@ -1514,12 +1514,13 @@ func (m Model) containerText(row row, marker string) (string, string) {
 		name = shell.Truncate(name, row.nameWidth, "…")
 		name += strings.Repeat(" ", max(0, row.nameWidth-shell.StringWidth(name)))
 	}
-	name = highlightText(name, string(m.query))
 	nameGutter := "  "
 	marked := m.marked[picker.ContainerRef{Machine: row.place.Machine, ID: row.place.ContainerID}]
 	if marked {
 		nameGutter = magenta().Render("◆ ")
-		name = magenta().Render(name)
+		name = highlightMarkedText(name, string(m.query))
+	} else {
+		name = highlightText(name, string(m.query))
 	}
 	name = nameGutter + name
 	agents := m.containerAgents(row.place)
@@ -1575,11 +1576,16 @@ func activityAge(now, activity time.Time) string { return stoppedAge(now, activi
 
 func (m Model) placeText(row row, marker, secondaryMarker string) (string, string) {
 	place := row.place
-	name := highlightText(projectLabel(place), string(m.query))
-	if place.Kind == picker.ContainerKind && m.marked[picker.ContainerRef{Machine: place.Machine, ID: place.ContainerID}] {
-		name = magenta().Render("◆ " + name)
-	} else if row.depth > 1 {
-		name = muted().Render("└ ") + name
+	name := projectLabel(place)
+	marked := place.Kind == picker.ContainerKind && m.marked[picker.ContainerRef{Machine: place.Machine, ID: place.ContainerID}]
+	if marked {
+		// Marked containers keep the marker directly before the name.
+		name = magenta().Render("◆ ") + highlightMarkedText(name, string(m.query))
+	} else {
+		name = highlightText(name, string(m.query))
+		if row.depth > 1 {
+			name = muted().Render("└ ") + name
+		}
 	}
 	primary := strings.Repeat("  ", row.depth-1) + name
 	if row.id == m.cursor {
@@ -1776,6 +1782,29 @@ func highlightText(text, query string) string {
 		} else {
 			out.WriteRune(r)
 		}
+	}
+	return out.String()
+}
+
+// highlightMarkedText keeps the required magenta foreground for every name
+// character. Matching characters use bold and underline instead of a yellow
+// foreground so the query remains visible without changing the mark colour.
+func highlightMarkedText(text, query string) string {
+	match, ok := picker.Rank(query, text)
+	if !ok || len(match.Positions) == 0 {
+		return magenta().Render(text)
+	}
+	positions := map[int]bool{}
+	for _, pos := range match.Positions {
+		positions[pos] = true
+	}
+	out := strings.Builder{}
+	for i, r := range []rune(text) {
+		style := magenta()
+		if positions[i] {
+			style = style.Bold(true).Underline(true)
+		}
+		out.WriteString(style.Render(string(r)))
 	}
 	return out.String()
 }

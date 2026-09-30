@@ -3,8 +3,10 @@ package tui
 import (
 	"context"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -74,6 +76,83 @@ func TestCtrlTMarksContainer(t *testing.T) {
 	if got := model.Marked(); len(got) != 1 || got[0] != "one" {
 		t.Fatalf("marked = %v, want [one]", got)
 	}
+}
+
+func TestMarkedSearchNameKeepsMagentaForeground(t *testing.T) {
+	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
+	model = updateModel(t, model, keyMsg(tea.KeyCtrlT))
+	model.SetQuery("one")
+	model.SetSize(80, 24)
+	var line string
+	for _, candidate := range strings.Split(model.View(), "\n") {
+		if strings.Contains(shell.Plain(candidate), "◆ one") {
+			line = candidate
+			break
+		}
+	}
+	if line == "" {
+		t.Fatal("marked container line was not rendered")
+	}
+	styled := styledRunes(line)
+	for index := 0; index+2 < len(styled); index++ {
+		if styled[index].r == 'o' && styled[index+1].r == 'n' && styled[index+2].r == 'e' {
+			for _, value := range styled[index : index+3] {
+				if value.fg != 5 {
+					t.Fatalf("name rune %q has foreground %d, want magenta (5): %q", value.r, value.fg, line)
+				}
+			}
+			return
+		}
+	}
+	t.Fatalf("marked name not found in styled line: %q", line)
+}
+
+type styledRune struct {
+	r  rune
+	fg int
+}
+
+func styledRunes(value string) []styledRune {
+	foreground := -1
+	result := []styledRune{}
+	for index := 0; index < len(value); {
+		if value[index] == '\x1b' && index+1 < len(value) && value[index+1] == '[' {
+			end := strings.IndexByte(value[index+2:], 'm')
+			if end < 0 {
+				break
+			}
+			end += index + 2
+			params := value[index+2 : end]
+			codes := strings.Split(params, ";")
+			for position := 0; position < len(codes); position++ {
+				code, err := strconv.Atoi(codes[position])
+				if err != nil {
+					continue
+				}
+				switch {
+				case code == 0:
+					foreground = -1
+				case code == 39:
+					foreground = -1
+				case code >= 30 && code <= 37:
+					foreground = code - 30
+				case code >= 90 && code <= 97:
+					foreground = code - 90 + 8
+				case code == 38 && position+2 < len(codes) && codes[position+1] == "5":
+					if color, err := strconv.Atoi(codes[position+2]); err == nil {
+						foreground = color
+					}
+					position += 2
+				}
+			}
+			index = end + 1
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(value[index:])
+		result = append(result, styledRune{r: r, fg: foreground})
+		index += size
+	}
+	return result
 }
 
 func TestRenderHasNoBackgroundSGR(t *testing.T) {

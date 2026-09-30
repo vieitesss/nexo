@@ -17,3 +17,10 @@ func TestPromptLineKeepsCursorAtInputEnd(t *testing.T) {
 		t.Fatalf("PromptLine = %q", line)
 	}
 }
+
+func TestPlainDropsOSCAndControlPayloads(t *testing.T) {
+	value := "before\x1b]8;;https://example.test\x07link\x1b]8;;\x1b\\after\x1bPbinary\x1b\\\x00end"
+	if got, want := Plain(value), "beforelinkafter end"; got != want {
+		t.Fatalf("Plain = %q, want %q", got, want)
+	}
+}
