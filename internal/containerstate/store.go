@@ -10,11 +10,16 @@ import (
 	"github.com/vieitesss/nexo/internal/statefile"
 )
 
+// maxEntries bounds the recent-container list. The latest identity of every
+// machine is retained beyond the bound so activity on one machine cannot erase
+// another machine's last-used container.
 const maxEntries = 32
 
 // Entry is the stable identity of a recently focused or opened container.
 // Proxy entries retain the remote machine/container pair separately from the
-// local proxy's native ID, so reconnects cannot change their target.
+// local proxy's native ID, so reconnects cannot change their target. Names are
+// mutable display data for local entries and authoritative identity for
+// proxies.
 type Entry struct {
 	ID      string `json:"id,omitempty"`
 	Name    string `json:"name,omitempty"`
@@ -26,11 +31,14 @@ type document struct {
 	Entries []Entry `json:"entries"`
 }
 
-// Store persists recent identities for one backend on one machine.
+// Store persists recent identities for one backend on one native server of one
+// machine. The native server/socket identity is part of the state namespace,
+// because native IDs are only unique within one server instance.
 type Store struct {
 	Dir     string
 	backend string
 	machine string
+	server  string
 }
 
 // LocalMachine returns the stable machine identity used by container history.
@@ -42,28 +50,41 @@ func LocalMachine() string {
 	return strings.TrimSpace(machine)
 }
 
-// New creates a store. dir may be empty to use nexo's default state
-// directory; machine is the owning machine identity used to isolate records.
-func New(dir, backend, machine string) Store {
+// New creates a store. dir may be empty to use nexo's default state directory;
+// machine is the owning machine identity and server is the native
+// server/socket identity that scopes otherwise server-local native IDs.
+func New(dir, backend, machine, server string) Store {
 	machine = strings.TrimSpace(machine)
 	if machine == "" {
 		machine = "local"
 	}
-	return Store{Dir: dir, backend: strings.TrimSpace(backend), machine: machine}
+	server = strings.TrimSpace(server)
+	if server == "" {
+		server = "default"
+	}
+	return Store{Dir: dir, backend: strings.TrimSpace(backend), machine: machine, server: server}
+}
+
+func (s Store) namespace() string {
+	parts := []string{"containers", s.backend, s.machine}
+	if s.server != "" {
+		parts = append(parts, s.server)
+	}
+	return strings.Join(parts, "-")
 }
 
 func (s Store) path() string {
-	server := "containers-" + s.backend + "-" + s.machine
-	return statefile.Path(s.Dir, server, "json")
+	return statefile.Path(s.Dir, s.namespace(), "json")
 }
 
 func (s Store) lockPath() string {
-	server := "containers-" + s.backend + "-" + s.machine
-	return statefile.Path(s.Dir, server, "lock")
+	return statefile.Path(s.Dir, s.namespace(), "lock")
 }
 
 // Record makes entry the most recently used identity. Repeated focus events
-// move one identity to the front rather than growing the history indefinitely.
+// for an unchanged canonical top identity are not written, so a synchronous
+// focus hook stays cheap. Local containers deduplicate by native ID and
+// proxies by canonical machine/container identity.
 func (s Store) Record(entry Entry) error {
 	entry.Machine = strings.TrimSpace(entry.Machine)
 	if entry.Machine == "" {
@@ -78,37 +99,69 @@ func (s Store) Record(entry Entry) error {
 	if err != nil {
 		return err
 	}
-	filtered := doc.Entries[:0]
+	if len(doc.Entries) > 0 && doc.Entries[0] == entry {
+		return nil
+	}
+	entries := make([]Entry, 0, len(doc.Entries)+1)
+	entries = append(entries, entry)
 	for _, current := range doc.Entries {
 		if sameContainer(current, entry) {
 			continue
 		}
-		filtered = append(filtered, current)
+		entries = append(entries, current)
 	}
-	doc.Entries = append([]Entry{entry}, filtered...)
-	if len(doc.Entries) > maxEntries {
-		doc.Entries = doc.Entries[:maxEntries]
-	}
-	return s.write(doc)
+	return s.write(document{Entries: trimEntries(entries, maxEntries)})
 }
 
-// Previous returns the newest proxy or non-proxy entry as requested. Missing
-// history is represented by ok=false and is not an error.
-func (s Store) Previous(proxy bool) (entry Entry, ok bool, err error) {
+// Entries returns the recorded identities newest first. The caller selects
+// from them against live state; the store never performs native lookups.
+func (s Store) Entries() ([]Entry, error) {
 	doc, err := s.read()
 	if err != nil {
-		return Entry{}, false, err
+		return nil, err
 	}
-	for _, current := range doc.Entries {
-		if current.Proxy == proxy {
-			return current, true, nil
-		}
-	}
-	return Entry{}, false, nil
+	return append([]Entry(nil), doc.Entries...), nil
 }
 
 func sameContainer(a, b Entry) bool {
-	return a.Proxy == b.Proxy && a.Machine == b.Machine && a.ID == b.ID && a.Name == b.Name
+	if a.Proxy != b.Proxy {
+		return false
+	}
+	if a.Proxy {
+		return a.Machine == b.Machine && a.Name == b.Name
+	}
+	return a.ID == b.ID
+}
+
+// trimEntries drops the oldest entries beyond max, but never the latest
+// identity of a machine.
+func trimEntries(entries []Entry, max int) []Entry {
+	for len(entries) > max {
+		index := lastEvictable(entries)
+		if index < 0 {
+			break
+		}
+		entries = append(entries[:index], entries[index+1:]...)
+	}
+	return entries
+}
+
+// lastEvictable returns the oldest entry that is not the latest identity for
+// its machine, or -1 when every entry is protected.
+func lastEvictable(entries []Entry) int {
+	for i := len(entries) - 1; i >= 0; i-- {
+		latest := true
+		for j := 0; j < i; j++ {
+			if entries[j].Machine == entries[i].Machine {
+				latest = false
+				break
+			}
+		}
+		if !latest {
+			return i
+		}
+	}
+	return -1
 }
 
 func (s Store) read() (document, error) {

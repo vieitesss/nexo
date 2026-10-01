@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
-	"github.com/vieitesss/nexo/internal/containerstate"
 )
 
 type previousCommand struct{}
@@ -17,6 +16,8 @@ func init() {
 
 func (previousCommand) Name() string { return "previous" }
 
+// Run opens the most recent live non-proxy container that is not the current
+// one. It is the scriptable equivalent of tmux's switch-client -l.
 func (previousCommand) Run(ctx context.Context, invocation Invocation) error {
 	if err := invocation.Selection.Require(); err != nil {
 		return err
@@ -24,23 +25,31 @@ func (previousCommand) Run(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) != 0 {
 		return errors.New("previous accepts no arguments")
 	}
-	entry, ok, err := historyStore(invocation).Previous(false)
-	if err != nil {
-		return fmt.Errorf("read previous container: %w", err)
-	}
+	history, ok := invocation.Adapter.(containerHistory)
 	if !ok {
-		return nil
+		return fmt.Errorf("backend %q does not support container history", invocation.Selection.Kind)
 	}
 	opener, ok := invocation.Adapter.(capabilities.ContainerOpener)
 	if !ok {
 		return fmt.Errorf("backend %q does not support opening containers", invocation.Selection.Kind)
 	}
-	if entry.ID == "" {
-		return nil
+	entries, err := history.RecentContainers(ctx)
+	if err != nil {
+		return fmt.Errorf("read previous container: %w", err)
 	}
-	return opener.OpenContainer(ctx, entry.ID)
-}
-
-func historyStore(invocation Invocation) containerstate.Store {
-	return containerstate.New(invocation.StateDir, string(invocation.Selection.Kind), containerstate.LocalMachine())
+	live, err := liveLocalContainerIDs(ctx, invocation)
+	if err != nil {
+		return fmt.Errorf("list live containers: %w", err)
+	}
+	current := currentContainerID(ctx, invocation)
+	for _, entry := range entries {
+		if entry.Proxy || entry.ID == "" || entry.ID == current {
+			continue
+		}
+		if _, ok := live[entry.ID]; !ok {
+			continue
+		}
+		return opener.OpenContainer(ctx, entry.ID)
+	}
+	return nil
 }

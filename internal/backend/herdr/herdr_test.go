@@ -190,6 +190,7 @@ func TestContainerActionsUseNativeHerdrCommands(t *testing.T) {
 	}
 	want := []call{
 		{name: "herdr", args: []string{"workspace", "focus", "workspace-1"}},
+		{name: "herdr", args: []string{"workspace", "list"}},
 		{name: "herdr", args: []string{"workspace", "rename", "workspace-1", "renamed"}},
 		{name: "herdr", args: []string{"workspace", "close", "workspace-1"}},
 		{name: "herdr", args: []string{"workspace", "close", "workspace-2"}},
@@ -241,6 +242,7 @@ func TestOpenProjectFocusesWorkspaceWithExactTargetLabel(t *testing.T) {
 	want := []call{
 		{name: "herdr", args: []string{"workspace", "list"}},
 		{name: "herdr", args: []string{"workspace", "focus", "workspace-exact"}},
+		{name: "herdr", args: []string{"workspace", "list"}},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
@@ -260,6 +262,7 @@ func TestOpenProjectFocusesWorkspaceWhoseLabelContainsDirectoryName(t *testing.T
 	want := []call{
 		{name: "herdr", args: []string{"workspace", "list"}},
 		{name: "herdr", args: []string{"workspace", "focus", "workspace-containing"}},
+		{name: "herdr", args: []string{"workspace", "list"}},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
@@ -279,6 +282,7 @@ func TestOpenProjectFocusesFirstWorkspaceWhenLabelsBothContainDirectoryName(t *t
 	want := []call{
 		{name: "herdr", args: []string{"workspace", "list"}},
 		{name: "herdr", args: []string{"workspace", "focus", "workspace-first"}},
+		{name: "herdr", args: []string{"workspace", "list"}},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want first matching workspace: %#v", runner.calls, want)
@@ -298,6 +302,7 @@ func TestOpenProjectCreatesWorkspaceWhenNoLabelMatches(t *testing.T) {
 	want := []call{
 		{name: "herdr", args: []string{"workspace", "list"}},
 		{name: "herdr", args: []string{"workspace", "create", "--cwd", "/work/acme/app", "--label", "acme_app", "--focus"}},
+		{name: "herdr", args: []string{"workspace", "list"}},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
@@ -314,7 +319,7 @@ func TestOpenProjectDoesNotUseOtherWorkspaceTabPath(t *testing.T) {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
 
-	if len(runner.calls) != 2 || !reflect.DeepEqual(runner.calls[1], call{name: "herdr", args: []string{"workspace", "create", "--cwd", "/work/acme/app", "--label", "acme_app", "--focus"}}) {
+	if len(runner.calls) != 3 || !reflect.DeepEqual(runner.calls[1], call{name: "herdr", args: []string{"workspace", "create", "--cwd", "/work/acme/app", "--label", "acme_app", "--focus"}}) {
 		t.Fatalf("calls = %#v, want list followed by create", runner.calls)
 	}
 }
@@ -345,6 +350,7 @@ func TestOpenProjectWorkspaceIDFocusReportsWorkspaceLabel(t *testing.T) {
 	want := []call{
 		{name: "herdr", args: []string{"workspace", "list"}},
 		{name: "herdr", args: []string{"workspace", "focus", "workspace-forced"}},
+		{name: "herdr", args: []string{"workspace", "list"}},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)

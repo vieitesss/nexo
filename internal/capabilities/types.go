@@ -14,7 +14,6 @@ type Agent struct {
 	Harness      string     `json:"harness"`
 	State        string     `json:"state"`
 	Seen         bool       `json:"seen"`
-	Focused      bool       `json:"-"`
 	StoppedSince *time.Time `json:"stopped_since,omitempty"`
 	Branch       string     `json:"branch,omitempty"`
 }

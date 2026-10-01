@@ -9,6 +9,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/agentstate"
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/config"
 )
 
 type call struct {
@@ -93,12 +94,33 @@ func TestContainerActionsUseBackendNativeCommands(t *testing.T) {
 	}
 	want := []call{
 		{name: "tmux", args: []string{"switch-client", "-t", "$1"}},
+		{name: "tmux", args: []string{"-u", "display-message", "-p", "-t", "$1", "#{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}"}},
 		{name: "tmux", args: []string{"-u", "rename-session", "-t", "$1", "renamed"}},
 		{name: "tmux", args: []string{"-u", "kill-session", "-t", "$1"}},
 		{name: "tmux", args: []string{"-u", "kill-session", "-t", "$2"}},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestOpenContainerRecordsProxyClassification(t *testing.T) {
+	socket := "/tmp/tmux-1000/default"
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"display-message -p -t $3 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}": []byte("$3\tdevbox/api\tdevbox/api\t" + socket + "\n"),
+	}}
+	backend := New(runner, true)
+	backend.usageStateDir = t.TempDir()
+	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"devbox"}}, "")
+	if err := backend.OpenContainer(context.Background(), "$3"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := backend.RecentContainers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !entries[0].Proxy || entries[0].Machine != "devbox" || entries[0].Name != "api" {
+		t.Fatalf("entries = %#v, want the proxy identity rather than a local one", entries)
 	}
 }
 
@@ -138,7 +160,7 @@ func TestOpenProjectSwitchesToExistingExactSessionInsideTmux(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
-	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "display-message", "-p", "-t", "=acme_app:", "#{session_id}"}}, {name: "tmux", args: []string{"switch-client", "-t", "=acme_app"}}}
+	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "display-message", "-p", "-t", "=acme_app:", "#{session_id}"}}, {name: "tmux", args: []string{"switch-client", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "display-message", "-p", "-t", "$12", "#{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}"}}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
@@ -212,7 +234,7 @@ func TestOpenProjectCreatesAndAttachesMissingSessionOutsideTmux(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
-	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "new-session", "-d", "-s", "acme_app", "-c", "/work/acme/app"}}, {name: "tmux", args: []string{"-u", "display-message", "-p", "-t", "=acme_app:", "#{session_id}"}}, {name: "tmux", args: []string{"attach-session", "-t", "=acme_app"}}}
+	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "new-session", "-d", "-s", "acme_app", "-c", "/work/acme/app"}}, {name: "tmux", args: []string{"-u", "display-message", "-p", "-t", "=acme_app:", "#{session_id}"}}, {name: "tmux", args: []string{"attach-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "display-message", "-p", "-t", "$12", "#{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}"}}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}

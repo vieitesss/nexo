@@ -58,8 +58,18 @@ func TestHerdrPluginManifestDeclaresPopupActions(t *testing.T) {
 	if !sameStrings(manifest.Platforms, []string{"linux", "macos"}) {
 		t.Fatalf("plugin platforms = %#v, want linux and macos", manifest.Platforms)
 	}
-	if len(manifest.Events) != 0 {
-		t.Fatalf("events = %#v, want no event hooks", manifest.Events)
+	if len(manifest.Events) != 2 {
+		t.Fatalf("events = %#v, want focus event hooks", manifest.Events)
+	}
+	wantEvents := []pluginEventHook{
+		{On: "workspace.focused", Command: []string{"nexo", "--backend=herdr", "focus"}},
+		{On: "pane.focused", Command: []string{"nexo", "--backend=herdr", "focus"}},
+	}
+	for index, want := range wantEvents {
+		got := manifest.Events[index]
+		if got.On != want.On || !sameStrings(got.Command, want.Command) {
+			t.Errorf("event %d = %#v, want %#v", index, got, want)
+		}
 	}
 
 	wantActions := []pluginAction{

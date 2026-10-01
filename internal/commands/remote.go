@@ -217,12 +217,7 @@ func runRemotePaste(ctx context.Context, invocation Invocation) error {
 	if !ok {
 		return fmt.Errorf("backend %q does not support remote paste", invocation.Selection.Kind)
 	}
-	paneID := ""
-	if invocation.Selection.Kind == backend.Herdr {
-		paneID = strings.TrimSpace(os.Getenv("HERDR_PANE_ID"))
-	} else {
-		paneID = strings.TrimSpace(os.Getenv("TMUX_PANE"))
-	}
+	paneID := currentPaneID(invocation.Selection.Kind)
 	if paneID == "" {
 		return errors.New("remote paste requires the current pane (tmux: bind with TMUX_PANE=#{pane_id})")
 	}
@@ -263,6 +258,13 @@ func runRemotePaste(ctx context.Context, invocation Invocation) error {
 	return paster.SendPaneText(ctx, paneID, remote.ShellQuotePath(path))
 }
 
+func currentPaneID(kind backend.Kind) string {
+	if kind == backend.Herdr {
+		return strings.TrimSpace(os.Getenv("HERDR_PANE_ID"))
+	}
+	return strings.TrimSpace(os.Getenv("TMUX_PANE"))
+}
+
 func runRemotePassthrough(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) < 2 {
 		return errors.New("remote passthrough requires at least one key")
@@ -271,20 +273,17 @@ func runRemotePassthrough(ctx context.Context, invocation Invocation) error {
 	if !ok {
 		return fmt.Errorf("backend %q does not support remote passthrough", invocation.Selection.Kind)
 	}
-	paneID := ""
-	if invocation.Selection.Kind == backend.Herdr {
-		paneID = strings.TrimSpace(os.Getenv("HERDR_PANE_ID"))
-	} else {
-		paneID = strings.TrimSpace(os.Getenv("TMUX_PANE"))
-	}
+	paneID := currentPaneID(invocation.Selection.Kind)
 	if paneID == "" {
 		return errors.New("remote passthrough requires the current pane (tmux: bind with TMUX_PANE=#{pane_id})")
 	}
 	keys := append([]string(nil), invocation.Args[1:]...)
-	if _, err := paster.ProxyTarget(ctx, paneID); err != nil {
-		// Proxy detection is advisory for a pass-through binding: the local
-		// pane receives the same key sequence when metadata is unavailable.
-		return paster.SendPaneKeys(ctx, paneID, keys)
+	target, err := paster.ProxyTarget(ctx, paneID)
+	if err != nil || strings.TrimSpace(target) == "" {
+		// Outside a proxy the key belongs to the user's local binding. Return
+		// a handled status so `nexo ... passthrough KEY || local-action` runs
+		// the original action without injecting bytes into the pane.
+		return HandledError{Reason: "current pane is not inside a proxy"}
 	}
 	return paster.SendPaneKeys(ctx, paneID, keys)
 }
@@ -297,14 +296,28 @@ func runRemotePrevious(ctx context.Context, invocation Invocation) error {
 	if !ok {
 		return fmt.Errorf("backend %q does not support remote proxies", invocation.Selection.Kind)
 	}
-	entry, ok, err := historyStore(invocation).Previous(true)
+	history, ok := invocation.Adapter.(containerHistory)
+	if !ok {
+		return fmt.Errorf("backend %q does not support container history", invocation.Selection.Kind)
+	}
+	entries, err := history.RecentContainers(ctx)
 	if err != nil {
 		return fmt.Errorf("read previous remote container: %w", err)
 	}
-	if !ok {
-		return nil
+	configured := proxyidentity.NewMachineSet(invocation.Config.Remote.ConfiguredMachines())
+	current := currentProxyMachine(ctx, invocation)
+	for _, entry := range entries {
+		if !entry.Proxy || entry.Machine == "" || entry.Name == "" {
+			continue
+		}
+		// Skip the machine we are attached to and any machine that is no longer
+		// configured; both are definite reasons not to select the entry.
+		if proxyidentity.NormalizeMachineName(entry.Machine) == current || !configured.Contains(entry.Machine) {
+			continue
+		}
+		return proxy.Proxy(ctx, entry.Machine, entry.Name)
 	}
-	return proxy.Proxy(ctx, entry.Machine, entry.Name)
+	return nil
 }
 
 func runRemoteAttach(ctx context.Context, invocation Invocation) error {

@@ -49,29 +49,16 @@ func (b *Backend) OpenContainer(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	return b.recordContainer(containerstate.Entry{ID: id, Machine: localMachine()})
+	return b.recordWorkspace(ctx, id)
 }
 
 // ListAgents implements capabilities.AgentSource with Herdr's native agent
-// awareness.
+// awareness. Recording focus is owned by the plugin event hook, not listing.
 func (b *Backend) ListAgents(ctx context.Context) ([]capabilities.Agent, error) {
 	if b == nil || b.agents == nil {
 		return nil, errors.New("herdr agents requires a command runner")
 	}
-	agents, err := b.agents.ListAgents(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, agent := range agents {
-		if !agent.Focused {
-			continue
-		}
-		if err := b.recordContainer(containerstate.Entry{ID: agent.ContainerID, Name: agent.Container, Machine: localMachine()}); err != nil {
-			return nil, err
-		}
-		break
-	}
-	return agents, nil
+	return b.agents.ListAgents(ctx)
 }
 
 // FocusPane focuses the exact agent pane ID through Herdr's agent command.
@@ -276,14 +263,17 @@ func (b *Backend) OpenProject(ctx context.Context, path string, options capabili
 	if err != nil {
 		return container, err
 	}
-	if err := b.recordContainer(containerstate.Entry{ID: container.ID, Name: container.Name, Machine: localMachine()}); err != nil {
+	if options.NoFocus || container.ID == "" {
+		return container, nil
+	}
+	if err := b.recordWorkspace(ctx, container.ID); err != nil {
 		return container, err
 	}
 	return container, nil
 }
 
 func (b *Backend) usageStore() containerstate.Store {
-	return containerstate.New(b.usageStateDir, "herdr", localMachine())
+	return containerstate.New(b.usageStateDir, "herdr", localMachine(), herdrServerIdentity())
 }
 
 func (b *Backend) recordContainer(entry containerstate.Entry) error {
@@ -291,6 +281,113 @@ func (b *Backend) recordContainer(entry containerstate.Entry) error {
 		return errors.New("herdr container state is unavailable")
 	}
 	return b.usageStore().Record(entry)
+}
+
+// RecentContainers returns the recorded identities for this Herdr socket.
+func (b *Backend) RecentContainers(ctx context.Context) ([]containerstate.Entry, error) {
+	if b == nil || b.Runner == nil {
+		return nil, errors.New("herdr container history requires a command runner")
+	}
+	return b.usageStore().Entries()
+}
+
+// CurrentContainerID reports the workspace owning the calling pane.
+func (b *Backend) CurrentContainerID(ctx context.Context) (string, error) {
+	if b == nil || b.Runner == nil {
+		return "", errors.New("herdr container history requires a command runner")
+	}
+	if workspace := strings.TrimSpace(os.Getenv("HERDR_WORKSPACE_ID")); workspace != "" {
+		return workspace, nil
+	}
+	pane := strings.TrimSpace(os.Getenv("HERDR_PANE_ID"))
+	if pane == "" {
+		return "", nil
+	}
+	output, err := b.run(ctx, "pane", "get", pane)
+	if err != nil {
+		return "", nil
+	}
+	workspace, err := decodePaneWorkspace(output)
+	if err != nil {
+		return "", nil
+	}
+	return strings.TrimSpace(workspace), nil
+}
+
+// CurrentProxyMachine reports the remote machine attached by the calling pane.
+func (b *Backend) CurrentProxyMachine(ctx context.Context) (string, error) {
+	pane := strings.TrimSpace(os.Getenv("HERDR_PANE_ID"))
+	if pane == "" {
+		return "", nil
+	}
+	target, err := b.ProxyTarget(ctx, pane)
+	if err != nil || strings.TrimSpace(target) == "" {
+		return "", nil
+	}
+	identity, ok := proxyidentity.ParseValue(target)
+	if !ok {
+		return "", nil
+	}
+	return proxyidentity.NormalizeMachineName(identity.Machine), nil
+}
+
+// recordWorkspace classifies one workspace from authoritative metadata before
+// recording it, so a proxy is never stored as a local container.
+func (b *Backend) recordWorkspace(ctx context.Context, workspaceID string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return nil
+	}
+	workspaces, err := b.listWorkspaces(ctx)
+	if err != nil {
+		return err
+	}
+	for _, workspace := range workspaces {
+		if workspace.ID != workspaceID {
+			continue
+		}
+		if machine, container, ok := b.proxyWorkspaceTarget(workspace); ok {
+			return b.recordContainer(containerstate.Entry{ID: workspace.ID, Name: container, Machine: machine, Proxy: true})
+		}
+		return b.recordContainer(containerstate.Entry{ID: workspace.ID, Name: workspace.Label, Machine: localMachine()})
+	}
+	return nil
+}
+
+// RecordFocusEvent records the container named by a Herdr plugin focus event.
+// Herdr emits workspace.focused and pane.focused events; the payload carries
+// the workspace that gained focus.
+func (b *Backend) RecordFocusEvent(ctx context.Context, payload []byte) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("herdr container history requires a command runner")
+	}
+	workspaceID := focusEventWorkspace(payload)
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(os.Getenv("HERDR_WORKSPACE_ID"))
+	}
+	if workspaceID == "" {
+		return nil
+	}
+	return b.recordWorkspace(ctx, workspaceID)
+}
+
+// focusEventWorkspace extracts the workspace id from a Herdr event payload,
+// accepting both the event data itself and a wrapper with an event field.
+func focusEventWorkspace(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var event struct {
+		WorkspaceID string          `json:"workspace_id"`
+		Event       json.RawMessage `json:"event"`
+	}
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return ""
+	}
+	if len(event.Event) != 0 && string(event.Event) != "null" {
+		return focusEventWorkspace(event.Event)
+	}
+	return strings.TrimSpace(event.WorkspaceID)
 }
 
 func (b *Backend) openProjectNative(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {

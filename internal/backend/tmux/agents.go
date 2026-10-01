@@ -721,7 +721,9 @@ func focusHookCommand(binary, configPath string) string {
 		command += " --config-file=" + shellQuote(configPath)
 	}
 	command += " agents seen #{pane_id}"
-	return "run-shell " + shellQuote(command)
+	// -b keeps the durable history write off the synchronous hook queue; the
+	// store's flock preserves ordering between concurrent focus events.
+	return "run-shell -b " + shellQuote(command)
 }
 
 func nexoHookIndex(output, hook string) int {
@@ -736,7 +738,7 @@ func nexoHookIndex(output, hook string) int {
 			continue
 		}
 		index, err := strconv.Atoi(line[len(prefix) : len(prefix)+end])
-		if err != nil || !strings.HasPrefix(strings.TrimSpace(line[len(prefix)+end+1:]), `run-shell "`+focusHookMarker+" ") {
+		if err != nil || !strings.HasPrefix(strings.TrimSpace(line[len(prefix)+end+1:]), `run-shell -b "`+focusHookMarker+" ") {
 			continue
 		}
 		return index

@@ -126,7 +126,6 @@ func (s *Source) ListAgents(ctx context.Context) ([]capabilities.Agent, error) {
 			Harness:      agentName(current),
 			State:        result.State.State,
 			Seen:         result.State.Seen,
-			Focused:      current.Focused,
 			StoppedSince: result.State.StoppedSince,
 			Branch:       git.Branch(ctx, s.runner, herdrPath(current)),
 		})
