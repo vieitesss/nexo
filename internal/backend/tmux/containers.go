@@ -126,6 +126,16 @@ func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) 
 	if b == nil || b.Runner == nil {
 		return false, errors.New("tmux active-project check requires a command runner")
 	}
+	// The pane ID listing is authoritative: a pane ID cannot contain a
+	// newline, so it cannot be forged by a crafted working directory. The path
+	// records must account for exactly these panes.
+	idsOutput, err := b.run(ctx, "list-panes", "-a", "-F", "#{pane_id}")
+	if err != nil {
+		if isNoServer(err) {
+			return false, nil
+		}
+		return false, err
+	}
 	// q: uses tmux's shell escaping for ordinary special bytes. The decoder
 	// validates the pane ID and absolute path fields so any ambiguous control
 	// byte fails closed instead of claiming that the project is idle.
@@ -136,10 +146,17 @@ func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) 
 		}
 		return false, err
 	}
+	livePanes, idErr := decodePaneIDList(string(idsOutput))
+	if idErr != nil {
+		return false, idErr
+	}
 	path = filepath.Clean(path)
 	panePaths, decodeErr := decodePanePathRecords(string(output))
 	if decodeErr != nil {
 		return false, decodeErr
+	}
+	if matchErr := matchPanePathRecords(livePanes, panePaths); matchErr != nil {
+		return false, matchErr
 	}
 	for _, panePath := range panePaths {
 		if pathpolicy.Contains(path, panePath, isSymlink(path), pathpolicy.OSResolver{}) {
@@ -154,10 +171,9 @@ func isSymlink(path string) bool {
 	return err == nil && info.Mode()&os.ModeSymlink != 0
 }
 
-func decodePanePathRecords(output string) ([]string, error) {
+func decodePanePathRecords(output string) (map[string]string, error) {
 	parts := strings.Split(output, "\n")
-	paths := make([]string, 0, len(parts))
-	seenPanes := make(map[string]struct{}, len(parts))
+	paths := make(map[string]string, len(parts))
 	for index, record := range parts {
 		if index == len(parts)-1 && record == "" {
 			continue
@@ -166,10 +182,9 @@ func decodePanePathRecords(output string) ([]string, error) {
 		if len(fields) != 2 || !validPaneID(fields[0]) || fields[1] == "" {
 			return nil, errors.New("tmux pane path output contains an invalid record")
 		}
-		if _, seen := seenPanes[fields[0]]; seen {
+		if _, seen := paths[fields[0]]; seen {
 			return nil, errors.New("tmux pane path output contains a duplicate pane")
 		}
-		seenPanes[fields[0]] = struct{}{}
 		path, err := decodeTmuxQuotedPath(fields[1])
 		if err != nil {
 			return nil, err
@@ -180,9 +195,45 @@ func decodePanePathRecords(output string) ([]string, error) {
 		if path == "" || strings.ContainsAny(path, "\n\t") || !filepath.IsAbs(path) {
 			return nil, errors.New("tmux pane path output contains an unsafe path")
 		}
-		paths = append(paths, path)
+		paths[fields[0]] = path
 	}
 	return paths, nil
+}
+
+// decodePaneIDList parses the authoritative pane ID listing. Every record must
+// already be one complete valid ID because a pane ID cannot contain a newline.
+func decodePaneIDList(output string) (map[string]struct{}, error) {
+	records := strings.Split(output, "\n")
+	ids := make(map[string]struct{}, len(records))
+	for index, record := range records {
+		if index == len(records)-1 && record == "" {
+			continue
+		}
+		if !validPaneID(record) {
+			return nil, errors.New("tmux pane id output contains an invalid record")
+		}
+		if _, seen := ids[record]; seen {
+			return nil, errors.New("tmux pane id output contains a duplicate pane")
+		}
+		ids[record] = struct{}{}
+	}
+	return ids, nil
+}
+
+// matchPanePathRecords requires the path observations to account for exactly
+// the live panes. A pane that appeared, disappeared or changed its ID between
+// the two listings cannot be attributed to a path, so the check fails closed
+// and the deletion stays retryable.
+func matchPanePathRecords(livePanes map[string]struct{}, records map[string]string) error {
+	if len(livePanes) != len(records) {
+		return errors.New("tmux pane path output does not match the live pane list")
+	}
+	for id := range records {
+		if _, ok := livePanes[id]; !ok {
+			return errors.New("tmux pane path output does not match the live pane list")
+		}
+	}
+	return nil
 }
 
 func validPaneID(value string) bool {

@@ -26,19 +26,45 @@ func TestProjectActiveUsesActualTmuxEscapingAndSharedPathPolicy(t *testing.T) {
 			if err := os.MkdirAll(child, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			backend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
-				return []byte("%1\t" + tmuxActualQuote(child) + "\n"), nil
-			}))
+			backend := New(panePathRunner("%1\n", "%1\t"+tmuxActualQuote(child)+"\n"))
 			active, err := backend.ProjectActive(context.Background(), project)
 			if err != nil || !active {
 				t.Fatalf("ProjectActive() = %v, %v; want descendant active", active, err)
 			}
-			exactBackend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
-				return []byte("%1\t" + tmuxActualQuote(project) + "\n"), nil
-			}))
+			exactBackend := New(panePathRunner("%1\n", "%1\t"+tmuxActualQuote(project)+"\n"))
 			active, err = exactBackend.ProjectActive(context.Background(), project)
 			if err != nil || !active {
 				t.Fatalf("exact ProjectActive() = %v, %v; want active", active, err)
+			}
+		})
+	}
+}
+
+func TestProjectActiveFailsClosedWhenPathRecordsDoNotMatchLivePanes(t *testing.T) {
+	setSafetyEnv(t)
+	root := t.TempDir()
+	project := filepath.Join(root, "p", "a\n%999\t/x")
+	if err := os.MkdirAll(filepath.Join(project, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, runner := range map[string]funcRunner{
+		// A live pane whose cwd contains a newline, percent sign and tab prints
+		// as two well-formed records. The forged second record is not a live
+		// pane, so the real cwd must not be observed.
+		"forged record": panePathRunner(
+			"%1\n",
+			"%1\t"+filepath.Join(root, "p")+"\n%999\t/x\n",
+		),
+		// A pane that disappeared between the two listings cannot be attributed
+		// to a path either.
+		"pane vanished between listings": panePathRunner(
+			"%1\n%2\n",
+			"%1\t"+filepath.Join(root, "p")+"\n",
+		),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := New(runner).ProjectActive(context.Background(), project); err == nil {
+				t.Fatal("ProjectActive() error = nil for path records that do not match the live panes")
 			}
 		})
 	}
@@ -51,11 +77,7 @@ func TestProjectActiveFailsClosedForLiteralNewlineRecord(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(project, "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	backend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
-		// q: leaves a literal newline in the path; the separator parser must
-		// reject the resulting incomplete record rather than claim inactivity.
-		return []byte("%1\t" + filepath.Join(project, "src") + "\n"), nil
-	}))
+	backend := New(panePathRunner("%1\n", "%1\t"+filepath.Join(project, "src")+"\n"))
 	if _, err := backend.ProjectActive(context.Background(), project); err == nil {
 		t.Fatal("ProjectActive() error = nil for an unparseable newline record")
 	}
@@ -68,13 +90,10 @@ func TestProjectActiveFailsClosedForNewlineTabNativeRecord(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(project, "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	backend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
-		// This is the literal native output from tmux q: for a path containing
-		// a newline, percent sign and tab. The continuation looks like a second
-		// record unless pane IDs and absolute paths are validated.
-		native := "%7\t" + filepath.Join(root, "repo") + "\n\\%99\tother/src\n"
-		return []byte(native), nil
-	}))
+	// This is the literal native output from tmux q: for a path containing a
+	// newline, percent sign and tab. The continuation looks like a second record
+	// unless pane IDs and absolute paths are validated.
+	backend := New(panePathRunner("%7\n", "%7\t"+filepath.Join(root, "repo")+"\n\\%99\tother/src\n"))
 	if _, err := backend.ProjectActive(context.Background(), project); err == nil {
 		t.Fatal("ProjectActive() error = nil for a newline/tab-framing ambiguity")
 	}
@@ -93,6 +112,18 @@ func TestDecodePanePathRecordsRejectsEmbeddedTabAndRelativeContinuation(t *testi
 			}
 		})
 	}
+}
+
+// panePathRunner answers the two listings ProjectActive issues: the
+// authoritative pane ID list and the pane ID/path records. The formats are
+// distinguished by their final format argument.
+func panePathRunner(ids, records string) funcRunner {
+	return funcRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if args[len(args)-1] == "#{pane_id}" {
+			return []byte(ids), nil
+		}
+		return []byte(records), nil
+	})
 }
 
 func tmuxActualQuote(path string) string {
@@ -121,16 +152,12 @@ func TestProjectActiveBlocksDescendantAndPhysicalAliasButNotLinkTarget(t *testin
 	if err := os.Symlink(project, alias); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	backend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
-		return []byte("%1\t" + tmuxActualQuote(filepath.Join(alias, "src")) + "\n"), nil
-	}))
+	backend := New(panePathRunner("%1\n", "%1\t"+tmuxActualQuote(filepath.Join(alias, "src"))+"\n"))
 	active, err := backend.ProjectActive(context.Background(), project)
 	if err != nil || !active {
 		t.Fatalf("physical alias ProjectActive() = %v, %v", active, err)
 	}
-	linkBackend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
-		return []byte("%1\t" + tmuxActualQuote(filepath.Join(project, "src")) + "\n"), nil
-	}))
+	linkBackend := New(panePathRunner("%1\n", "%1\t"+tmuxActualQuote(filepath.Join(project, "src"))+"\n"))
 	active, err = linkBackend.ProjectActive(context.Background(), alias)
 	if err != nil {
 		t.Fatal(err)
