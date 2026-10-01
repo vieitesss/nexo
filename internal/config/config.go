@@ -25,6 +25,7 @@ type Config struct {
 	Backend        string `toml:"backend"`
 	ProjectsConfig `toml:",inline"`
 	Agents         AgentsConfig `toml:"agents"`
+	TUI            TUIConfig    `toml:"tui"`
 	Remote         RemoteConfig `toml:"remote"`
 }
 
@@ -78,6 +79,7 @@ func parse(contents []byte, path string) (Config, error) {
 		Backend string `toml:"backend"`
 		ProjectsConfig
 		Agents AgentsConfig `toml:"agents"`
+		TUI    TUIConfig    `toml:"tui"`
 		Remote struct {
 			Machines         []string          `toml:"machines"`
 			Backends         map[string]string `toml:"backends"`
@@ -94,6 +96,7 @@ func parse(contents []byte, path string) (Config, error) {
 		Backend:        raw.Backend,
 		ProjectsConfig: raw.ProjectsConfig,
 		Agents:         raw.Agents,
+		TUI:            raw.TUI,
 		Remote: RemoteConfig{
 			Machines:  raw.Remote.Machines,
 			Backends:  raw.Remote.Backends,
@@ -124,10 +127,14 @@ func parse(contents []byte, path string) (Config, error) {
 	if err := validateBackend(cfg.Backend); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "backend")
 	}
+	if err := validateTUI(cfg.TUI); err != nil {
+		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "tui.theme")
+	}
 	if err := validateRemote(cfg.Remote); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, remoteValidationKey(err))
 	}
 	cfg.Agents = cfg.Agents.WithDefaults()
+	cfg.TUI = cfg.TUI.WithDefaults()
 	return cfg, nil
 }
 

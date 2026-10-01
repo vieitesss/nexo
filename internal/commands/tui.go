@@ -69,7 +69,7 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 			_, _ = fmt.Fprintf(invocation.Stderr, "nexo: warning: %s\n", warning)
 		}
 	}
-	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Projects: picker.ProjectPlaces(discovery.Candidates), Input: invocation.Stdin, Output: invocation.Stdout}
+	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Theme: invocation.Config.TUI.EffectiveTheme(), Projects: picker.ProjectPlaces(discovery.Candidates), Input: invocation.Stdin, Output: invocation.Stdout}
 	localProxyIDs := make(map[string]bool)
 	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
 		containers, err := lister.ListContainers(ctx)

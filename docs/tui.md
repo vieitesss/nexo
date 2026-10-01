@@ -56,8 +56,9 @@ need the terminal's normal text selection.
 
 The brand colours come from the icon in `assets/logo.svg`. The lime accent
 (`#B8F15A`), the foreground (`#E8EAED`) and the muted grey (`#8A919E`) are
-adaptive: on a light terminal they switch to an olive accent, a darker grey and
-a near-black foreground so the text stays readable. The icon also defines a
+adaptive: on a light terminal they switch to an olive accent (`#4E7A00`), a
+darker grey (`#5F6774`) and a near-black foreground (`#1F2329`) so the text
+stays readable. The icon also defines a
 ground (`#0F1115`), a tile (`#171A21`) and a tile border (`#2A2F3A`); the
 interface paints no background, so those are not used on screen.
 
@@ -67,4 +68,10 @@ green and bright red, and errors are red. The selected row is the only painted
 background — one blue bar with a single foreground — and its text is stripped
 of every other colour.
 
-There is no user theming; the colours are not configurable.
+The `[tui]` `theme` setting controls how adaptive colours are selected. The
+default `"auto"` queries OSC 11 on the controlling terminal (including inside
+tmux), then falls back to `COLORFGBG` and finally dark mode when no answer is
+available. tmux versions older than 3.4 may not answer when the pane has its
+default background; set `theme = "light"` in that case. Set it to `"dark"` or
+`"light"` to force a variant. Semantic ANSI colours continue to follow the
+terminal in every mode.

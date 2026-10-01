@@ -100,6 +100,9 @@ processes = ["pi", "claude"]
 idle-seconds = 3
 poll-interval = 2
 working-pattern = { pi = "⠋" }
+
+[tui]
+theme = "auto"
 ```
 
 Agent state is computed on demand: `nexo agents --json` on the remote already

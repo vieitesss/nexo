@@ -46,7 +46,9 @@ type AgentRef struct {
 // Places and agents are snapshots; optional commands keep slow discovery out
 // of Update and let a caller retain its backend-specific command runner.
 type Deps struct {
-	Backend    string
+	Backend string
+	// Theme is auto, dark, or light. An empty value is treated as auto.
+	Theme      string
 	Projects   []picker.Place
 	Containers []capabilities.Container
 	Agents     []capabilities.Agent
@@ -78,6 +80,7 @@ func Run(ctx context.Context, deps Deps, tab Tab) error {
 	if !validTab(tab) {
 		tab = defaultTab(deps.Agents)
 	}
+	configureTheme(deps.Theme)
 	model := NewModel(ctx, deps, tab)
 	input := deps.Input
 	if input == nil {
