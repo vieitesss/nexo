@@ -9,6 +9,8 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
@@ -155,12 +157,57 @@ func styledRunes(value string) []styledRune {
 	return result
 }
 
-func TestRenderHasNoBackgroundSGR(t *testing.T) {
+func TestSelectedRowHasTheOnlyBackgroundSGR(t *testing.T) {
 	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
 	model.SetSize(80, 24)
 	frame := model.View()
-	if regexp.MustCompile(`\x1b\[[0-9;:]*([4][0-7]|10[0-7]|48)[^m]*m`).MatchString(frame) {
-		t.Fatalf("frame contains a background SGR: %q", frame)
+	lines := strings.Split(frame, "\n")
+	background := regexp.MustCompile(`\x1b\[[0-9;:]*([47][0-9]|10[0-7]|48)[^m]*m`)
+	count := 0
+	for lineNumber, line := range lines {
+		if matches := background.FindAllString(line, -1); len(matches) > 0 {
+			if lineNumber < 2 || lineNumber == len(lines)-1 {
+				t.Fatalf("background painted outside the body: %q", frame)
+			}
+			count += len(matches)
+		}
+	}
+	if count == 0 {
+		t.Fatalf("selected row has no background: %q", frame)
+	}
+}
+
+func TestSelectedRowPreservesPlainTextAndWidth(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	deps := testContainerDeps()
+	deps.Containers[0].Name = "東京😀"
+	model := NewModel(context.Background(), deps, ContainersTab)
+	model.SetSize(24, 8)
+	rows := strings.Split(model.View(), "\n")
+	var selected string
+	for _, line := range rows[2 : len(rows)-1] {
+		if strings.Contains(shell.Plain(line), "東京😀") {
+			selected = line
+			break
+		}
+	}
+	if selected == "" {
+		t.Fatalf("selected CJK/emoji row was not rendered; cursor=%q rows=%v view=%q", model.Cursor(), model.Rows(), model.View())
+	}
+	if got := shell.StringWidth(selected); got != 24 {
+		t.Fatalf("selected row width = %d, want 24: %q", got, selected)
+	}
+	plain := shell.Plain(selected)
+	if !strings.Contains(plain, "東京😀") {
+		t.Fatalf("selected row changed plain text: %q", plain)
+	}
+	if !strings.HasPrefix(selected, "\x1b[") || !strings.HasSuffix(selected, "\x1b[0m") {
+		t.Fatalf("selected row background does not cover its full line: %q", selected)
+	}
+	for _, line := range rows[2 : len(rows)-1] {
+		if !strings.Contains(shell.Plain(line), "東京😀") && strings.HasPrefix(line, "\x1b[") && strings.Contains(line, "48;") {
+			t.Fatalf("selection background bled to another row: %q", line)
+		}
 	}
 }
 

@@ -42,17 +42,21 @@ func richDeps() Deps {
 func noBackgroundSGR(t *testing.T, frame string) {
 	t.Helper()
 	re := regexp.MustCompile(`\x1b\[([0-9;:]*)m`)
-	for _, match := range re.FindAllStringSubmatch(frame, -1) {
-		for _, parameter := range strings.FieldsFunc(match[1], func(r rune) bool { return r == ';' || r == ':' }) {
-			if parameter == "" {
-				continue
-			}
-			var value int
-			if _, err := fmt.Sscanf(parameter, "%d", &value); err != nil {
-				continue
-			}
-			if value == 7 || value == 48 || value == 49 || (value >= 40 && value <= 47) || (value >= 100 && value <= 107) {
-				t.Fatalf("frame contains background SGR %q in %q", match[0], frame)
+	lines := strings.Split(frame, "\n")
+	for lineNumber, line := range lines {
+		for _, match := range re.FindAllStringSubmatch(line, -1) {
+			for _, parameter := range strings.FieldsFunc(match[1], func(r rune) bool { return r == ';' || r == ':' }) {
+				if parameter == "" {
+					continue
+				}
+				var value int
+				if _, err := fmt.Sscanf(parameter, "%d", &value); err != nil {
+					continue
+				}
+				background := value == 7 || value == 48 || value == 49 || (value >= 40 && value <= 47) || (value >= 100 && value <= 107)
+				if background && (lineNumber < 2 || lineNumber == len(lines)-1) {
+					t.Fatalf("frame contains an unexpected background SGR %q on line %d in %q", match[0], lineNumber, frame)
+				}
 			}
 		}
 	}

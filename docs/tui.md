@@ -37,4 +37,12 @@ and visible folders are highlighted independently within their cells.
 
 See the picker key table in the README for the complete list. Left/Right only
 fold project rows and project folders; they do not fold machine groups in the
-Containers tab.
+Containers tab. In the search row, Ctrl-W deletes back to whitespace, Alt-Backspace
+deletes back to the previous alphanumeric word boundary, and Ctrl-U clears the
+query.
+
+## Mouse
+
+Mouse support is enabled for tab and row clicks, folding project headers,
+opening a selected row, and wheel navigation. Shift-drag still selects text in
+most terminals; hold Shift when you need the terminal's normal text selection.
