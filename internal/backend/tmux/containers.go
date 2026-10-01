@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	_ capabilities.ContainerLister  = (*Backend)(nil)
-	_ capabilities.ContainerRenamer = (*Backend)(nil)
-	_ capabilities.ContainerKiller  = (*Backend)(nil)
+	_ capabilities.ContainerLister   = (*Backend)(nil)
+	_ capabilities.ContainerRenamer  = (*Backend)(nil)
+	_ capabilities.ContainerKiller   = (*Backend)(nil)
+	_ capabilities.ProjectUseChecker = (*Backend)(nil)
 )
 
 // ListContainers lists tmux sessions and records each session's active pane.
@@ -117,9 +118,9 @@ func (b *Backend) RenameContainer(ctx context.Context, id, name string) error {
 	return err
 }
 
-// ProjectActive reports whether any live tmux pane currently has the lexical
-// project path as its working directory. It is deliberately read-only so the
-// deletion preflight can reject active projects before mutation.
+// ProjectActive reports whether any live tmux pane currently has the project
+// or one of its descendants as its working directory. It is deliberately
+// read-only so deletion can reject active projects before mutation.
 func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) {
 	if b == nil || b.Runner == nil {
 		return false, errors.New("tmux active-project check requires a command runner")
@@ -133,11 +134,39 @@ func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) 
 	}
 	path = filepath.Clean(path)
 	for _, line := range strings.Split(string(output), "\n") {
-		if filepath.Clean(strings.TrimSpace(line)) == path {
+		panePath := strings.TrimSuffix(line, "\r")
+		if panePath == "" {
+			continue
+		}
+		if projectPathContains(path, panePath) {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+func projectPathContains(project, pane string) bool {
+	project, pane = filepath.Clean(project), filepath.Clean(pane)
+	if project == pane || descendantPath(project, pane) {
+		return true
+	}
+	// A selected symlink is removed as a link, so its target's use must not
+	// turn a safe link deletion into a deletion of the target.
+	info, err := os.Lstat(project)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	resolvedProject, projectErr := filepath.EvalSymlinks(project)
+	resolvedPane, paneErr := filepath.EvalSymlinks(pane)
+	if projectErr != nil || paneErr != nil {
+		return false
+	}
+	return filepath.Clean(resolvedProject) == filepath.Clean(resolvedPane) || descendantPath(resolvedProject, resolvedPane)
+}
+
+func descendantPath(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // KillContainer kills one selected tmux session.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 
 	"github.com/vieitesss/nexo/internal/runner"
 )
@@ -91,7 +92,40 @@ func Execute(ctx context.Context, plan Plan, force, permanent bool, fs FileSyste
 		if git == nil {
 			return errors.New("linked worktree removal requires a Git adapter")
 		}
-		return git.RemoveWorktree(ctx, plan.PrimaryPath(), plan.Path)
+		return git.RemoveWorktree(ctx, plan.Repository, plan.Path)
+	}
+
+	// Stage ordinary paths through the identity-aware seam. The stage operation
+	// is the mutation boundary: all subsequent operations address the moved
+	// inode, not a pathname that another process could replace.
+	if stager, ok := fs.(IdentityStager); ok {
+		staged, stageErr := stager.Stage(plan.Path, plan.Fingerprint)
+		if stageErr != nil {
+			return stageErr
+		}
+		if permanent {
+			if plan.Symlink {
+				return fs.Remove(staged)
+			}
+			return fs.RemoveAll(staged)
+		}
+		restore := func() error {
+			if restorer, ok := fs.(identityRestorer); ok {
+				return restorer.Restore(staged, plan.Path)
+			}
+			return errors.New("staged path cannot be restored")
+		}
+		if trash == nil {
+			_ = restore()
+			return errors.New("delete requires a trash adapter")
+		}
+		if err := trash.Trash(ctx, staged); err != nil {
+			if restoreErr := restore(); restoreErr != nil {
+				return errors.Join(err, fmt.Errorf("restore after trash failure: %w", restoreErr))
+			}
+			return err
+		}
+		return nil
 	}
 	if permanent {
 		if plan.Symlink {
@@ -105,24 +139,10 @@ func Execute(ctx context.Context, plan Plan, force, permanent bool, fs FileSyste
 	return trash.Trash(ctx, plan.Path)
 }
 
-// PrimaryPath returns the repository path embedded in worktree plans.
-func (p Plan) PrimaryPath() string { return p.Repository }
-
 func formatFindings(findings []Finding) string {
 	parts := make([]string, 0, len(findings))
 	for _, finding := range findings {
 		parts = append(parts, finding.Message)
 	}
-	return join(parts, "; ")
-}
-
-func join(values []string, separator string) string {
-	result := ""
-	for index, value := range values {
-		if index > 0 {
-			result += separator
-		}
-		result += value
-	}
-	return result
+	return strings.Join(parts, "; ")
 }

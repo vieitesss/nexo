@@ -76,8 +76,59 @@ func (b *Backend) FocusPane(ctx context.Context, paneID string) error {
 	return err
 }
 
+// ProjectActive performs a read-only workspace inspection. Herdr workspace
+// metadata must include a project path for every live workspace; missing path
+// metadata is an unknown safety state, not proof that the project is unused.
+func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) {
+	if b == nil || b.Runner == nil {
+		return false, errors.New("herdr active-project check requires a command runner")
+	}
+	output, err := b.run(ctx, "workspace", "list")
+	if err != nil {
+		return false, err
+	}
+	workspaces, err := decodeWorkspaceList(output)
+	if err != nil {
+		return false, err
+	}
+	path = filepath.Clean(path)
+	for _, workspace := range workspaces {
+		workspacePath := workspace.ProjectPath()
+		if workspacePath == "" {
+			return false, fmt.Errorf("workspace %q has no project path", workspace.ID)
+		}
+		if herdrPathContains(path, workspacePath) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func herdrPathContains(project, candidate string) bool {
+	project, candidate = filepath.Clean(project), filepath.Clean(candidate)
+	if project == candidate || herdrDescendant(project, candidate) {
+		return true
+	}
+	info, err := os.Lstat(project)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	resolvedProject, projectErr := filepath.EvalSymlinks(project)
+	resolvedCandidate, candidateErr := filepath.EvalSymlinks(candidate)
+	if projectErr != nil || candidateErr != nil {
+		return false
+	}
+	return filepath.Clean(resolvedProject) == filepath.Clean(resolvedCandidate) || herdrDescendant(resolvedProject, resolvedCandidate)
+}
+
+func herdrDescendant(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
 var _ capabilities.AgentSource = (*Backend)(nil)
 var _ capabilities.PaneFocuser = (*Backend)(nil)
+var _ capabilities.ProjectUseChecker = (*Backend)(nil)
 
 // Error reports a failed Herdr operation and preserves Herdr's stderr.
 type Error struct {
@@ -485,6 +536,46 @@ type workspace struct {
 	Focused     bool              `json:"focused"`
 	ActiveTabID string            `json:"active_tab_id"`
 	PaneCount   int               `json:"pane_count"`
+	Path        string            `json:"path"`
+	CWD         string            `json:"cwd"`
+	Root        string            `json:"root"`
+	Worktree    string            `json:"worktree_path"`
+	Panes       []workspacePane   `json:"panes"`
+	Tabs        []workspaceTab    `json:"tabs"`
+}
+
+type workspaceTab struct {
+	Panes []workspacePane `json:"panes"`
+}
+
+type workspacePane struct {
+	Path             string `json:"path"`
+	CWD              string `json:"cwd"`
+	WorkingDirectory string `json:"working_directory"`
+}
+
+func (w workspace) ProjectPath() string {
+	for _, value := range []string{w.Path, w.CWD, w.Root, w.Worktree} {
+		if value != "" {
+			return value
+		}
+	}
+	for _, pane := range append(append([]workspacePane(nil), w.Panes...), panesFromTabs(w.Tabs)...) {
+		for _, value := range []string{pane.Path, pane.CWD, pane.WorkingDirectory} {
+			if value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func panesFromTabs(tabs []workspaceTab) []workspacePane {
+	var panes []workspacePane
+	for _, tab := range tabs {
+		panes = append(panes, tab.Panes...)
+	}
+	return panes
 }
 
 // decodeWorkspaceList accepts the JSON envelope emitted by the Herdr CLI and

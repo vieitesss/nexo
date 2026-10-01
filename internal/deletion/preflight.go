@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 )
 
@@ -40,6 +41,8 @@ type GitState struct {
 	Stashes            bool     `json:"stashes"`
 	RemoteChecked      bool     `json:"remote_checked"`
 	RemoteCheckError   string   `json:"remote_check_error,omitempty"`
+	WorktreeLocked     bool     `json:"worktree_locked"`
+	HasSubmodules      bool     `json:"has_submodules"`
 	GitRefusal         string   `json:"git_refusal,omitempty"`
 }
 
@@ -49,6 +52,8 @@ type Observation struct {
 	Path               string
 	Candidate          bool
 	Configured         bool
+	Protected          bool
+	ProtectedReason    string
 	Exists             bool
 	Directory          bool
 	Symlink            bool
@@ -56,6 +61,7 @@ type Observation struct {
 	Fingerprint        string
 	CurrentFingerprint string
 	PathChanged        bool
+	AncestorCheckError error
 	ActiveContainer    bool
 	ActiveCheckError   error
 	Git                GitState
@@ -90,7 +96,7 @@ func Preflight(observation Observation) Plan {
 		plan.Warnings = append(plan.Warnings, Finding{Code: code, Severity: Warning, Message: message})
 	}
 
-	if strings.TrimSpace(observation.Path) == "" {
+	if observation.Path == "" {
 		addBlocker("empty-path", "project path is empty")
 	}
 	if !observation.Candidate {
@@ -99,8 +105,21 @@ func Preflight(observation Observation) Plan {
 	if !observation.Configured {
 		addBlocker("outside-configured-paths", fmt.Sprintf("%q is outside configured project paths", path))
 	}
+	if path == filepath.Clean(string(filepath.Separator)) || observation.Protected {
+		reason := observation.ProtectedReason
+		if path == filepath.Clean(string(filepath.Separator)) {
+			reason = "filesystem root"
+		}
+		if reason == "" {
+			reason = "protected infrastructure path"
+		}
+		addBlocker("protected-path", fmt.Sprintf("%q is a protected %s", path, reason))
+	}
 	if !observation.Exists {
 		addBlocker("missing-path", fmt.Sprintf("project path %q does not exist", path))
+	}
+	if observation.AncestorCheckError != nil {
+		addBlocker("ancestor-check-failed", fmt.Sprintf("path traversal is unsafe: %v", observation.AncestorCheckError))
 	}
 	if observation.GitError != nil {
 		addBlocker("git-check-failed", fmt.Sprintf("Git check failed: %v", observation.GitError))
@@ -125,6 +144,17 @@ func Preflight(observation Observation) Plan {
 	}
 	if observation.Git.GitRefusal != "" {
 		addBlocker("git-refusal", fmt.Sprintf("Git refused deletion: %s", observation.Git.GitRefusal))
+	}
+	if observation.Git.LinkedWorktree {
+		if observation.Git.WorktreeLocked {
+			addBlocker("worktree-locked", "linked worktree is locked")
+		}
+		if observation.Git.Dirty || observation.Git.Untracked {
+			addBlocker("worktree-changed", "linked worktree has tracked or untracked changes")
+		}
+		if observation.Git.HasSubmodules {
+			addBlocker("worktree-submodules", "linked worktree contains submodules")
+		}
 	}
 
 	if observation.Symlink {
@@ -171,12 +201,79 @@ type FileSystem interface {
 	RemoveAll(string) error
 }
 
+// IdentityStager binds a mutation to the inode observed during preflight. A
+// successful stage moves the exact lexical entry out of the user-visible
+// pathname before trashing or removing it, so a later pathname replacement
+// cannot redirect the destructive operation.
+type IdentityStager interface {
+	Stage(string, string) (string, error)
+}
+
+type identityRestorer interface {
+	Restore(string, string) error
+}
+
 type OSFileSystem struct{}
 
 func (OSFileSystem) Lstat(path string) (os.FileInfo, error)     { return os.Lstat(path) }
 func (OSFileSystem) ReadDir(path string) ([]os.DirEntry, error) { return os.ReadDir(path) }
 func (OSFileSystem) Remove(path string) error                   { return os.Remove(path) }
 func (OSFileSystem) RemoveAll(path string) error                { return os.RemoveAll(path) }
+
+// Stage atomically moves a path to a private sibling after checking the
+// expected Lstat identity. The second identity check catches a replacement
+// racing with the rename before any destructive operation is attempted.
+func (OSFileSystem) Stage(path, expected string) (string, error) {
+	if expected == "" {
+		return "", errors.New("cannot stage a path without an identity")
+	}
+	if err := validateAncestors(OSFileSystem{}, path); err != nil {
+		return "", fmt.Errorf("validate deletion path: %w", err)
+	}
+	current, err := Fingerprint(OSFileSystem{}, path)
+	if err != nil {
+		return "", err
+	}
+	if current != expected {
+		return "", fmt.Errorf("path changed since preflight: %q", path)
+	}
+	parent := filepath.Dir(path)
+	tmp, err := os.CreateTemp(parent, ".nexo-delete-*")
+	if err != nil {
+		return "", fmt.Errorf("prepare deletion stage: %w", err)
+	}
+	staged := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(staged)
+		return "", fmt.Errorf("prepare deletion stage: %w", err)
+	}
+	if err := os.Remove(staged); err != nil {
+		return "", fmt.Errorf("prepare deletion stage: %w", err)
+	}
+	if err := os.Rename(path, staged); err != nil {
+		return "", fmt.Errorf("stage %q: %w", path, err)
+	}
+	stagedFingerprint, err := Fingerprint(OSFileSystem{}, staged)
+	if err != nil {
+		return staged, fmt.Errorf("verify staged %q: %w", path, err)
+	}
+	if stagedFingerprint != expected {
+		return staged, fmt.Errorf("path changed while staging: %q", path)
+	}
+	return staged, nil
+}
+
+// Restore puts a staged path back only when the original lexical name is
+// currently absent. It never overwrites a replacement installed by another
+// process.
+func (OSFileSystem) Restore(staged, path string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("cannot restore %q: pathname has been replaced", path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Rename(staged, path)
+}
 
 // Fingerprint returns a lexical-path identity used to detect replacement
 // between preflight and execution. Lstat intentionally never follows links.
@@ -195,7 +292,29 @@ func fingerprint(info os.FileInfo) string {
 	if info == nil {
 		return ""
 	}
-	return fmt.Sprintf("%s|%d|%d|%#v", info.Mode().String(), info.Size(), info.ModTime().UnixNano(), info.Sys())
+	// Sys() contains access timestamps on Unix, which can change merely by
+	// reading a directory during preflight. Keep stable inode/device fields
+	// while excluding those observation-only timestamps.
+	identity := []string{}
+	value := reflect.ValueOf(info.Sys())
+	if value.IsValid() {
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				value = reflect.Value{}
+			} else {
+				value = value.Elem()
+			}
+		}
+		if value.IsValid() && value.Kind() == reflect.Struct {
+			for _, name := range []string{"Dev", "Ino", "FileIndexHigh", "FileIndexLow", "VolumeSerialNumber"} {
+				field := value.FieldByName(name)
+				if field.IsValid() && field.CanInterface() {
+					identity = append(identity, fmt.Sprintf("%s=%v", name, field.Interface()))
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("%s|%d|%d|%s", info.Mode().String(), info.Size(), info.ModTime().UnixNano(), strings.Join(identity, ","))
 }
 
 // InspectFilesystem captures the path facts needed by Preflight. It uses
@@ -206,6 +325,9 @@ func InspectFilesystem(fs FileSystem, path string) (Observation, error) {
 	}
 	path = lexicalAbs(path)
 	observation := Observation{Path: path, Configured: true}
+	if ancestorErr := validateAncestors(fs, path); ancestorErr != nil && !errors.Is(ancestorErr, os.ErrNotExist) {
+		observation.AncestorCheckError = ancestorErr
+	}
 	info, err := fs.Lstat(path)
 	if err != nil {
 		observation.GitError = nil
@@ -227,6 +349,22 @@ func InspectFilesystem(fs FileSystem, path string) (Observation, error) {
 		observation.NonEmpty = len(entries) != 0
 	}
 	return observation, nil
+}
+
+func validateAncestors(fs FileSystem, path string) error {
+	for current := filepath.Dir(path); ; current = filepath.Dir(current) {
+		info, err := fs.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("ancestor %q is a symlink", current)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil
+		}
+	}
 }
 
 func lexicalAbs(path string) string {

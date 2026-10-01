@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	"github.com/vieitesss/nexo/internal/deletion"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -16,6 +18,7 @@ type formField struct {
 	Value      string
 	Error      string
 	Expandable bool
+	ReadOnly   bool
 }
 
 type formStage struct {
@@ -51,6 +54,12 @@ type stagedForm struct {
 	generation uint64
 	busyLabel  string
 	expanded   map[string]bool
+
+	deletePreflightEnabled bool
+	deletePreflightPending bool
+	deleteIdentity         string
+	deleteIdentityValid    bool
+	deletePlan             *deletion.Plan
 }
 
 func newStagedForm(ctx context.Context, stages []formStage, validate func(*stagedForm) formValidation, submit func(context.Context, map[string]string, uint64) tea.Cmd) *stagedForm {
@@ -172,21 +181,21 @@ func (f *stagedForm) key(msg tea.KeyMsg) formEffect {
 			return formEffect{Changed: true}
 		}
 	case tea.KeyRunes:
-		if field != nil && len(msg.Runes) > 0 {
+		if field != nil && !field.ReadOnly && len(msg.Runes) > 0 {
 			field.Value += string(msg.Runes)
 			field.Error = ""
 			f.stageError = ""
 			return formEffect{Changed: true}
 		}
 	case tea.KeySpace:
-		if field != nil {
+		if field != nil && !field.ReadOnly {
 			field.Value += " "
 			field.Error = ""
 			f.stageError = ""
 			return formEffect{Changed: true}
 		}
 	case tea.KeyBackspace, tea.KeyDelete:
-		if field != nil && field.Value != "" {
+		if field != nil && !field.ReadOnly && field.Value != "" {
 			runes := []rune(field.Value)
 			field.Value = string(runes[:len(runes)-1])
 			field.Error = ""
@@ -279,8 +288,8 @@ func (f stagedForm) renderLines() []string {
 				if !f.fieldShown(stageIndex, fieldIndex) {
 					continue
 				}
-				if value := strings.TrimSpace(field.Value); value != "" {
-					parts = append(parts, field.Label+": "+value)
+				if field.Value != "" {
+					parts = append(parts, field.Label+": "+field.Value)
 				}
 			}
 			lines = append(lines, "✓ "+stage.Title+summaryJoin(parts))
@@ -305,6 +314,17 @@ func (f stagedForm) renderLines() []string {
 			}
 		}
 		if stageIndex == f.stage {
+			if f.deletePlan != nil && f.deletePreflightEnabled && stage.ID == "preflight" {
+				for _, finding := range f.deletePlan.Warnings {
+					lines = append(lines, "  warning: "+finding.Message)
+				}
+				for _, finding := range f.deletePlan.Blockers {
+					lines = append(lines, "  blocker: "+finding.Message)
+				}
+				if len(f.deletePlan.Warnings) == 0 && len(f.deletePlan.Blockers) == 0 {
+					lines = append(lines, "  no warnings or blockers")
+				}
+			}
 			for _, field := range stage.Fields {
 				if field.Expandable && !f.expanded[field.ID] {
 					lines = append(lines, "  Ctrl-P edit "+field.Label)

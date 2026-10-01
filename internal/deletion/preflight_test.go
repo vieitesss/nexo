@@ -30,6 +30,26 @@ func TestPreflightSymlinkIsLinkAndNeverWorktree(t *testing.T) {
 	}
 }
 
+func TestInspectFilesystemRejectsSymlinkAncestors(t *testing.T) {
+	root := t.TempDir()
+	realRoot := filepath.Join(root, "real")
+	if err := os.MkdirAll(filepath.Join(realRoot, "candidate"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(realRoot, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	observation, err := InspectFilesystem(OSFileSystem{}, filepath.Join(alias, "candidate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := Preflight(observation)
+	if !hasCode(plan.Blockers, "ancestor-check-failed") {
+		t.Fatalf("plan = %#v, want ancestor safety blocker", plan)
+	}
+}
+
 func TestPreflightPrimaryDependentWorktreeIsHardBlocker(t *testing.T) {
 	plan := Preflight(Observation{Path: "/tmp/repo", Candidate: true, Configured: true, Exists: true, Directory: true,
 		Git: GitState{IsRepository: true, RemoteChecked: true, DependentWorktrees: []string{"/tmp/repo-wt"}}})

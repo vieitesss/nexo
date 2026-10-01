@@ -8,6 +8,8 @@ func TestPreflightHardBlockersCannotBeOverridden(t *testing.T) {
 		edit func(*Observation)
 		code string
 	}{
+		{"filesystem root", func(o *Observation) { o.Path = "/" }, "protected-path"},
+		{"protected infrastructure", func(o *Observation) { o.Protected = true }, "protected-path"},
 		{"not candidate", func(o *Observation) { o.Candidate = false }, "not-candidate"},
 		{"outside configured paths", func(o *Observation) { o.Configured = false }, "outside-configured-paths"},
 		{"active container", func(o *Observation) { o.ActiveContainer = true }, "active-container"},

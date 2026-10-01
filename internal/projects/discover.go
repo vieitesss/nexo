@@ -26,8 +26,8 @@ type Discovery struct {
 }
 
 // Discover expands configured paths and returns project candidates in stable
-// filesystem order. Warnings describe paths that could not be read; those
-// paths are skipped rather than failing discovery.
+// filesystem order. Lexical entries are preserved: discovery never resolves a
+// selected link or traverses through a linked configured parent.
 func Discover(cfg config.ProjectsConfig, home string) Discovery {
 	discovery := Discovery{Candidates: []Candidate{}}
 	for _, pattern := range cfg.Paths {
@@ -37,16 +37,25 @@ func Discover(cfg config.ProjectsConfig, home string) Discovery {
 			continue
 		}
 		if strings.HasSuffix(expanded, string(filepath.Separator)+"*") {
-			base := strings.TrimSuffix(expanded, string(filepath.Separator)+"*")
-			group, err := canonical(base)
-			if err != nil {
+			base := lexicalPath(strings.TrimSuffix(expanded, string(filepath.Separator)+"*"))
+			if err := validateDirectory(base); err != nil {
 				discovery.warnRead(base, err)
 				continue
 			}
-			for _, intermediate := range discovery.readDirectories(group) {
-				intermediatePath, err := canonical(filepath.Join(group, intermediate))
+			for _, intermediate := range discovery.readDirectories(base) {
+				intermediatePath := lexicalPath(filepath.Join(base, intermediate))
+				info, err := os.Lstat(intermediatePath)
 				if err != nil {
-					discovery.warnRead(filepath.Join(group, intermediate), err)
+					discovery.warnRead(intermediatePath, err)
+					continue
+				}
+				if info.Mode()&os.ModeSymlink != 0 {
+					// A link in the wildcard namespace is an ambiguous parent;
+					// never walk its target and manufacture target children.
+					discovery.Warnings = append(discovery.Warnings, fmt.Sprintf("skip %q: wildcard parent is a symlink", intermediatePath))
+					continue
+				}
+				if !info.IsDir() {
 					continue
 				}
 				discovery.addChildren(intermediatePath, intermediatePath)
@@ -54,9 +63,9 @@ func Discover(cfg config.ProjectsConfig, home string) Discovery {
 			continue
 		}
 
-		group, err := canonical(expanded)
-		if err != nil {
-			discovery.warnRead(expanded, err)
+		group := lexicalPath(expanded)
+		if err := validateDirectory(group); err != nil {
+			discovery.warnRead(group, err)
 			continue
 		}
 		discovery.addChildren(group, group)
@@ -67,20 +76,26 @@ func Discover(cfg config.ProjectsConfig, home string) Discovery {
 			discovery.Warnings = append(discovery.Warnings, "skip git-from-home: home directory is unavailable")
 			return discovery
 		}
-		homePath, err := canonical(home)
-		if err != nil {
-			discovery.warnRead(home, err)
-		} else {
-			for _, name := range discovery.readDirectories(homePath) {
-				lexical := lexicalPath(filepath.Join(homePath, name))
-				path, err := canonical(lexical)
-				if err != nil {
-					discovery.warnRead(filepath.Join(homePath, name), err)
-					continue
-				}
-				if git, linked := gitStatus(path); git {
-					discovery.add(lexical, homePath, git, linked)
-				}
+		homePath := lexicalPath(home)
+		if err := validateDirectory(homePath); err != nil {
+			discovery.warnRead(homePath, err)
+			return discovery
+		}
+		for _, name := range discovery.readDirectories(homePath) {
+			lexical := lexicalPath(filepath.Join(homePath, name))
+			info, err := os.Lstat(lexical)
+			if err != nil {
+				discovery.warnRead(lexical, err)
+				continue
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				// Keep the lexical link entry independent of its target so a
+				// target disappearing after discovery does not erase membership.
+				discovery.add(lexical, homePath)
+				continue
+			}
+			if git, linked := gitStatus(lexical); git {
+				discovery.add(lexical, homePath, git, linked)
 			}
 		}
 	}
@@ -108,15 +123,31 @@ func expandHome(pattern, home string) (string, bool) {
 	}
 }
 
-func canonical(path string) (string, error) {
+func validateDirectory(path string) error {
 	if path == "" {
-		return "", errors.New("path is empty")
+		return errors.New("path is empty")
 	}
-	absolute, err := filepath.Abs(path)
+	path = lexicalPath(path)
+	for current := path; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("path traverses a symlink")
+		}
+		if current == filepath.Dir(current) {
+			break
+		}
+	}
+	info, err := os.Lstat(path)
 	if err != nil {
-		return "", err
+		return err
 	}
-	return filepath.EvalSymlinks(absolute)
+	if !info.IsDir() {
+		return errors.New("path is not a directory")
+	}
+	return nil
 }
 
 func (d *Discovery) readDirectories(path string) []string {
@@ -130,23 +161,19 @@ func (d *Discovery) readDirectories(path string) []string {
 		if entry.Name() == ".git" {
 			continue
 		}
+		entryPath := filepath.Join(path, entry.Name())
+		if entry.Type()&os.ModeSymlink != 0 {
+			// Lstat is enough for link candidates, including dangling links.
+			names = append(names, entry.Name())
+			continue
+		}
 		info, err := entry.Info()
 		if err != nil {
-			d.warnRead(filepath.Join(path, entry.Name()), err)
+			d.warnRead(entryPath, err)
 			continue
 		}
 		if info.IsDir() {
 			names = append(names, entry.Name())
-			continue
-		}
-		// A symlink to a directory is itself a project candidate. Stat is used
-		// only to discover directory shape; Candidate.Path remains lexical so
-		// deletion can Lstat and remove the link rather than its target.
-		if entry.Type()&os.ModeSymlink != 0 {
-			target, statErr := os.Stat(filepath.Join(path, entry.Name()))
-			if statErr == nil && target.IsDir() {
-				names = append(names, entry.Name())
-			}
 		}
 	}
 	return names
@@ -155,15 +182,21 @@ func (d *Discovery) readDirectories(path string) []string {
 func (d *Discovery) addChildren(path, group string) {
 	for _, name := range d.readDirectories(path) {
 		lexical := lexicalPath(filepath.Join(path, name))
-		candidate, err := canonical(lexical)
+		info, err := os.Lstat(lexical)
 		if err != nil {
-			d.warnRead(filepath.Join(path, name), err)
+			d.warnRead(lexical, err)
 			continue
 		}
-		git, linked := gitStatus(candidate)
-		// Keep the directory entry's lexical spelling. In particular, a
-		// candidate that is itself a symlink must reach deletion preflight as a
-		// link rather than as its resolved target.
+		if info.Mode()&os.ModeSymlink != 0 {
+			// The link itself is the candidate. Its target is never needed for
+			// membership, so dangling links remain deletable candidates.
+			d.add(lexical, group)
+			continue
+		}
+		if !info.IsDir() {
+			continue
+		}
+		git, linked := gitStatus(lexical)
 		d.add(lexical, group, git, linked)
 	}
 }
@@ -193,9 +226,14 @@ func (d *Discovery) add(path, group string, status ...bool) {
 }
 
 func gitStatus(path string) (bool, bool) {
-	info, err := os.Stat(filepath.Join(path, ".git"))
+	info, err := os.Lstat(filepath.Join(path, ".git"))
 	if err != nil {
 		return false, false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		// Metadata reached through a link is ambiguous; treat it as Git so
+		// deletion preflight performs a conservative inspection.
+		return true, false
 	}
 	return true, !info.IsDir()
 }

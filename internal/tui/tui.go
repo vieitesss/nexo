@@ -21,6 +21,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/deletion"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/startup"
 )
@@ -92,15 +93,19 @@ type Deps struct {
 	// staged form. The backend owns preflight, creation, opening and rollback.
 	ExtractWorktree     func(context.Context, string, string, string) (capabilities.Worktree, error)
 	ExtractReturnBranch func(context.Context, string) (string, error)
-	// DeleteProject performs a preflight and then removes the exact lexical
-	// project path. Permanent and force are explicit choices in the form.
-	DeleteProject func(context.Context, string, bool, bool) error
-	AddProjectPath func(context.Context, string) error
-	CloneConfig    config.CloneConfig
-	ProjectPaths   []string
-	Home           string
-	KillContainers  func(context.Context, []picker.ContainerRef) error
-	RenameContainer func(context.Context, picker.ContainerRef, string) error
+	// DeleteFingerprint captures selection identity before the confirmation UI.
+	DeleteFingerprint func(context.Context, string) (string, error)
+	// DeletePreflight gathers the complete read-only plan before confirmation.
+	DeletePreflight func(context.Context, string, string) (deletion.Plan, error)
+	// DeleteProjectPlan executes a previously displayed plan without replacing
+	// its identity or silently re-running policy on a different pathname.
+	DeleteProjectPlan func(context.Context, deletion.Plan, bool, bool) error
+	AddProjectPath    func(context.Context, string) error
+	CloneConfig       config.CloneConfig
+	ProjectPaths      []string
+	Home              string
+	KillContainers    func(context.Context, []picker.ContainerRef) error
+	RenameContainer   func(context.Context, picker.ContainerRef, string) error
 
 	Input      io.Reader
 	Output     io.Writer
@@ -270,6 +275,7 @@ type actionMsg struct {
 	kind        string
 	destination string
 	generation  uint64
+	plan        *deletion.Plan
 	err         error
 }
 
@@ -504,6 +510,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SetSize(msg.Width, msg.Height)
 		return m, nil
 	case actionMsg:
+		if msg.kind == "delete-preflight" {
+			if msg.generation != 0 && msg.generation != m.input.actionGeneration {
+				return m, nil
+			}
+			if m.input.form != nil {
+				m.input.form.finishDeletePreflight(msg.plan, msg.err)
+			}
+			m.input.actionInFlight = false
+			m.rebuild(false)
+			return m, nil
+		}
 		if msg.kind == "clone" || msg.kind == "mkdir" || msg.kind == "extract" || msg.kind == "delete" {
 			if msg.generation != 0 && msg.generation != m.input.actionGeneration {
 				return m, nil
@@ -518,7 +535,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.form = nil
 			m.input.actionInFlight = false
 			m.input.setQuery("")
-			m.selectAfterRefresh = projectPathIdentity(msg.destination)
+			if msg.kind == "delete" {
+				m.selectAfterRefresh = ""
+			} else {
+				m.selectAfterRefresh = projectPathIdentity(msg.destination)
+			}
 			cmd := m.source.ReloadProjects()
 			if cmd == nil {
 				m.selectAfterRefresh = ""

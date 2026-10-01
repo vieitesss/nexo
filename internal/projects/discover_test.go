@@ -83,9 +83,9 @@ func TestDiscoverEmptyHomeSkipsHomeExpansionsAndGitDiscovery(t *testing.T) {
 	}
 }
 
-func TestCanonicalRejectsEmptyPath(t *testing.T) {
-	if _, err := canonical(""); err == nil {
-		t.Fatal("canonical(\"\") error = nil, want rejection")
+func TestValidateDirectoryRejectsEmptyPath(t *testing.T) {
+	if err := validateDirectory(""); err == nil {
+		t.Fatal("validateDirectory(\"\") error = nil, want rejection")
 	}
 }
 
@@ -101,7 +101,7 @@ func TestDiscoverCanonicalizesAndDeduplicatesCandidates(t *testing.T) {
 
 	got := Discover(config.ProjectsConfig{Paths: []string{root, link}}, home)
 	if len(got.Candidates) != 1 || got.Candidates[0].Path != candidate {
-		t.Fatalf("candidates = %#v, want one canonical candidate", got.Candidates)
+		t.Fatalf("candidates = %#v, want one lexical candidate", got.Candidates)
 	}
 }
 
@@ -131,6 +131,43 @@ func TestDiscoverPreservesSymlinkCandidatePath(t *testing.T) {
 	got := Discover(config.ProjectsConfig{Paths: []string{root}}, home)
 	if len(got.Candidates) != 1 || got.Candidates[0].Path != link {
 		t.Fatalf("candidates = %#v, want lexical symlink %q", got.Candidates, link)
+	}
+}
+
+func TestDiscoverDoesNotTraverseWildcardSymlinkParentsOrDropDanglingLinks(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "projects")
+	realGroup := filepath.Join(root, "real")
+	if err := os.MkdirAll(filepath.Join(realGroup, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realGroup, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	missing := filepath.Join(root, "missing")
+	if err := os.Symlink(filepath.Join(home, "gone"), missing); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	wildcard := Discover(config.ProjectsConfig{Paths: []string{root + string(filepath.Separator) + "*"}}, home)
+	for _, candidate := range wildcard.Candidates {
+		if candidate.Path == filepath.Join(alias, "child") {
+			t.Fatalf("wildcard followed symlink parent: %#v", wildcard.Candidates)
+		}
+	}
+	direct := Discover(config.ProjectsConfig{Paths: []string{root}}, home)
+	found := false
+	for _, candidate := range direct.Candidates {
+		if candidate.Path == missing {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("dangling link was not retained: %#v", direct.Candidates)
 	}
 }
 
