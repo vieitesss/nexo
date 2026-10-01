@@ -85,6 +85,44 @@ func TestLoadParsesAgentSettingsAndDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadParsesTUITheme(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[tui]\ntheme = \"light\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.TUI.Theme != ThemeLight {
+		t.Fatalf("TUI.Theme = %q, want %q", got.TUI.Theme, ThemeLight)
+	}
+}
+
+func TestLoadDefaultsTUIThemeToAuto(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.TUI.Theme != ThemeAuto {
+		t.Fatalf("TUI.Theme = %q, want %q", got.TUI.Theme, ThemeAuto)
+	}
+}
+
+func TestLoadRejectsInvalidTUITheme(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[tui]\ntheme = \"system\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "invalid tui theme") || !strings.Contains(err.Error(), "tui.theme") {
+		t.Fatalf("Load() error = %v, want tui.theme validation", err)
+	}
+}
+
 func TestLoadParsesAgentNotificationSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[agents]\nnotify = false\nsound = true\n"), 0o600); err != nil {

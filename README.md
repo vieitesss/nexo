@@ -306,6 +306,10 @@ notify = true
 sound = false
 working-pattern = { pi = "⠋" }
 
+[tui]
+# Theme selection: auto, dark, or light.
+theme = "auto"
+
 [remote]
 machines = ["devbox"]
 # Absolute path; "~" is not expanded here. Use "" for the normal SSH lookup.
@@ -338,6 +342,7 @@ machine and each remote machine need.
 | `agents.working-pattern` | `{}` | Per-harness literal screen substring used as the working indicator; configured patterns take precedence over built-ins. |
 | `agents.notify` | `true` | Queue tmux working-to-stopped desktop notifications. Herdr notifications are native and unaffected. |
 | `agents.sound` | `false` | Play a short sound with tmux notifications. |
+| `tui.theme` | `auto` | Select `auto`, `dark`, or `light`; auto queries the terminal background and falls back to `COLORFGBG`, then dark. |
 | `remote.machines` | `[]` | SSH aliases to list and open. `local`, the local hostname, and aliases beginning with `-` are rejected. |
 | `remote.backends` | `{}` | Optional per-machine backend table. Each key must be in `remote.machines`; values are `auto`, `tmux`, or `herdr`. Unlisted machines use `auto`. |
 | `remote.ssh-config` | `""` | Optional absolute SSH config path for listing and SSH attachment. `~` is not expanded, so use a full path such as `/home/you/.ssh/config`; empty uses the normal SSH lookup. |
