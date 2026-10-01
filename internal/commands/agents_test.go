@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	tmuxbackend "github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/runner"
 )
 
 type fakeAgentSource struct {
@@ -17,6 +19,33 @@ type fakeAgentSource struct {
 
 func (f fakeAgentSource) ListAgents(context.Context) ([]capabilities.Agent, error) {
 	return f.agents, nil
+}
+
+func TestAgentsSeenUnknownPaneIsSilent(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	adapter := tmuxbackend.New(runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "tmux" {
+			return []byte("/tmp/tmux-test\n"), nil
+		}
+		return nil, nil
+	}), false)
+	command, ok := NewRegistry().Lookup("agents")
+	if !ok {
+		t.Fatal("agents command is not registered")
+	}
+	var stdout, stderr strings.Builder
+	err := command.Run(context.Background(), Invocation{
+		Adapter: adapter,
+		Args:    []string{"seen", "%999"},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want silent success", err)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("output = %q / %q, want none", stdout.String(), stderr.String())
+	}
 }
 
 func TestAgentsPickIsRemoved(t *testing.T) {

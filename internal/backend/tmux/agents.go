@@ -546,7 +546,9 @@ func (s *Source) MarkSeen(ctx context.Context, paneID string) error {
 	return s.updateStates(func(states map[string]agentState) error {
 		state, ok := states[paneID]
 		if !ok {
-			return fmt.Errorf("unknown agent pane %q", paneID)
+			// The tmux focus hook fires for every pane, including panes that
+			// have no tracked agent state. Marking those is a silent no-op.
+			return nil
 		}
 		if state.State == "stopped" {
 			state.Seen = true
