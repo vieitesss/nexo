@@ -123,6 +123,40 @@ func TestLoadRejectsInvalidTUITheme(t *testing.T) {
 	}
 }
 
+// TestThemeFromConfigFollowsOnlyTheUITheme pins the loader seam the running
+// TUI uses to follow theme edits: it validates the theme exactly like a full
+// load, defaults an absent value to auto, and reports bad content as an error.
+func TestThemeFromConfigFollowsOnlyTheUITheme(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		contents string
+		want     string
+		wantErr  string
+	}{
+		{name: "explicit light", contents: "[tui]\ntheme = \"light\"\n", want: ThemeLight},
+		{name: "explicit dark", contents: "[tui]\ntheme = \"dark\"\n", want: ThemeDark},
+		{name: "absent defaults to auto", contents: "backend = \"tmux\"\n", want: ThemeAuto},
+		{name: "invalid value", contents: "[tui]\ntheme = \"system\"\n", wantErr: "invalid tui theme"},
+		{name: "broken toml", contents: "[tui", wantErr: "config"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ThemeFromConfig([]byte(test.contents), "config.toml")
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("ThemeFromConfig() error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ThemeFromConfig() error = %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("ThemeFromConfig() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadParsesAgentNotificationSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[agents]\nnotify = false\nsound = true\n"), 0o600); err != nil {

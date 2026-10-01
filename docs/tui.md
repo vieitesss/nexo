@@ -95,3 +95,16 @@ available. tmux versions older than 3.4 may not answer when the pane has its
 default background; set `theme = "light"` in that case. Set it to `"dark"` or
 `"light"` to force a variant. Semantic ANSI colours continue to follow the
 terminal in every mode.
+
+A running interface follows `[tui].theme` without a restart. It polls the
+config file about once a second and recolours when the file changes, whether it
+was rewritten in place or replaced with `mv`. This is what lets a remote
+appearance script rewrite `theme = "light"|"dark"` over SSH and have an
+already-open interface pick it up. Only the theme is reapplied; `paths`,
+`remote.*` and the other keys keep the values loaded at startup.
+
+`auto` is not re-probed mid-session: the OSC 11 probe is only safe before the
+interface takes over the terminal, so switching to `"auto"` keeps the current
+variant. A file that is missing, invalid, or not valid TOML keeps the current
+palette and never interrupts the interface; at most it shows one status line
+per distinct bad value.

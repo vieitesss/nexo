@@ -48,6 +48,15 @@ type Deps struct {
 	Projects   []picker.Place
 	Containers []capabilities.Container
 	Agents     []capabilities.Agent
+	// ConfigPath is the config file a running TUI watches for [tui].theme
+	// changes. An empty path disables the watch.
+	ConfigPath string
+	// ThemeReloadInterval overrides the ~1s theme poll. Zero uses the default.
+	ThemeReloadInterval time.Duration
+	// ThemeStat and ThemeRead are the file seams for the theme watch. Nil uses
+	// os.Stat and os.ReadFile.
+	ThemeStat func(string) (os.FileInfo, error)
+	ThemeRead func(string) ([]byte, error)
 	// ProjectSource is started after the first frame. A nil source means the
 	// Projects snapshot is already complete.
 	ProjectSource   func(context.Context) ([]picker.Place, error)
@@ -231,6 +240,7 @@ type Model struct {
 	input                   *inputState
 	now                     func() time.Time
 	toast                   string
+	theme                   *themeWatcher
 	autoTab                 bool
 	trace                   *startup.Trace
 	initialSelectionPending bool
@@ -275,6 +285,7 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 		deps: deps, catalog: catalog, source: source,
 		input:     newInputState(tab, deps, loadCtx),
 		gitErrors: make(map[string]string), now: now,
+		theme:   newThemeWatcher(deps.ConfigPath, deps.Theme, deps),
 		autoTab: deps.AutoTab, trace: deps.StartupTrace, initialSelectionPending: true,
 	}
 	m.rebuild(false)
@@ -387,12 +398,18 @@ func (m *Model) rebuildWithTabPolicy(force bool, allowQueryTab bool) {
 	m.input.reconcileSelection(oldRows, rows)
 }
 
-// Init starts source commands; all later source results cross source.Accept.
+// Init starts source and theme-watch commands; all later source results cross
+// source.Accept.
 func (m Model) Init() tea.Cmd {
-	if m.source == nil {
+	cmds := make([]tea.Cmd, 0, 2)
+	if m.source != nil {
+		cmds = append(cmds, m.source.Init(m.projection().projectPlaces()))
+	}
+	cmds = append(cmds, m.theme.Tick())
+	if len(cmds) == 0 {
 		return nil
 	}
-	return m.source.Init(m.projection().projectPlaces())
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) cancelBackgroundLoads() {
@@ -434,6 +451,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case refreshTickMsg:
 		return m, m.source.Tick()
+	case themeTickMsg:
+		return m, m.theme.Tick()
+	case themeReloadMsg:
+		if msg.theme != "" {
+			configureTheme(msg.theme)
+		}
+		if msg.toast != "" {
+			m.toast = msg.toast
+		}
+		return m, nil
 	case picker.GitContextMsg:
 		m.applyGit(msg)
 		return m, nil

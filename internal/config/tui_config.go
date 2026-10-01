@@ -27,6 +27,17 @@ func (c TUIConfig) EffectiveTheme() string {
 	return c.WithDefaults().Theme
 }
 
+// ThemeFromConfig returns the effective [tui] theme in config bytes. The
+// running TUI uses it to follow theme edits; it applies the same validation as
+// a full load so a bad value can never replace a working palette.
+func ThemeFromConfig(contents []byte, path string) (string, error) {
+	cfg, err := parse(contents, path)
+	if err != nil {
+		return "", err
+	}
+	return cfg.TUI.EffectiveTheme(), nil
+}
+
 func validateTUI(c TUIConfig) error {
 	switch c.Theme {
 	case "", ThemeAuto, ThemeDark, ThemeLight:
