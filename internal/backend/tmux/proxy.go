@@ -135,7 +135,9 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 	}
 	// A user-created session has no metadata. Match its exact display name and
 	// adopt it before returning, so opening it can never create a duplicate.
-	output, err = b.run(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}")
+	// A session already tagged with a different identity is never adopted: the
+	// tag is authoritative and the display name must not override it.
+	output, err = b.run(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{@nexo-proxy}")
 	if err != nil {
 		if isNoServer(err) {
 			return "", nil
@@ -143,8 +145,8 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 		return "", err
 	}
 	for _, line := range strings.Split(strings.TrimRight(string(output), "\r\n"), "\n") {
-		fields := strings.SplitN(line, "\t", 2)
-		if len(fields) != 2 || !proxySessionNameMatches(fields[1], machine, container) {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 || strings.TrimSpace(fields[2]) != "" || !proxySessionNameMatches(fields[1], machine, container) {
 			continue
 		}
 		if _, err := b.run(ctx, "set-option", "-t", fields[0], proxySessionOption, identity); err != nil {

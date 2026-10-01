@@ -96,6 +96,12 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 	}
 	if b.remoteMachines[config.NormalizeMachineName(machine)] {
 		for _, workspace := range workspaces {
+			// A workspace already tagged with a different identity is never
+			// adopted: the token is authoritative and the label must not
+			// override it.
+			if strings.TrimSpace(workspace.Tokens[proxyToken]) != "" {
+				continue
+			}
 			if !proxyIdentityMatches(workspace.Label, machine, container) {
 				continue
 			}

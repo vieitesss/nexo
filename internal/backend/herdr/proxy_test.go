@@ -81,6 +81,42 @@ func TestProxyStoresTokenAndStartsSharedAttachCommand(t *testing.T) {
 	}
 }
 
+func TestProxyDoesNotAdoptLabelTaggedWithAnotherIdentity(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"machine/container","tokens":{"nexo-proxy":"machine/other"}}]}}`),
+	}}
+	backend := New(runner)
+	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"machine"}}, "")
+	id, err := backend.ProxySessionID(context.Background(), "machine", "container")
+	if err != nil {
+		t.Fatalf("ProxySessionID() error = %v", err)
+	}
+	if id != "" {
+		t.Fatalf("ProxySessionID() = %q, want no adoption of a conflicting label", id)
+	}
+	for _, c := range runner.calls {
+		if strings.HasPrefix(strings.Join(c.args, " "), "workspace report-metadata") {
+			t.Fatalf("calls = %#v, want no metadata write", runner.calls)
+		}
+	}
+}
+
+func TestListContainersClassifiesConflictingTokenByTag(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list":           []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"machine/container","tokens":{"nexo-proxy":"machine/other"}}]}}`),
+		"pane list --workspace w1": []byte(`{"result":{"type":"pane_list","panes":[]}}`),
+	}}
+	backend := New(runner)
+	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"machine"}}, "")
+	containers, err := backend.ListContainers(context.Background())
+	if err != nil {
+		t.Fatalf("ListContainers() error = %v", err)
+	}
+	if len(containers) != 1 || !containers[0].Proxy || containers[0].Machine != "machine" || containers[0].Name != "other" {
+		t.Fatalf("containers = %#v, want the conflicting token classified as machine/other", containers)
+	}
+}
+
 func TestProxyClosesWorkspaceWhenMetadataFails(t *testing.T) {
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
