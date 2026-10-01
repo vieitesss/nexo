@@ -29,6 +29,11 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 	if configurable, ok := invocation.Adapter.(interface{ ConfigureAgents(config.AgentsConfig) }); ok {
 		configurable.ConfigureAgents(invocation.Config.Agents)
 	}
+	if configurable, ok := invocation.Adapter.(interface {
+		ConfigureGlance(config.GlanceConfig)
+	}); ok {
+		configurable.ConfigureGlance(invocation.Config.Glance)
+	}
 	if len(invocation.Args) > 0 {
 		switch invocation.Args[0] {
 		case "watch":

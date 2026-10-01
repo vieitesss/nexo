@@ -54,6 +54,7 @@ var errWatcherAlreadyRunning = errors.New("tmux agent watcher already running")
 type Source struct {
 	runner     runner.CommandRunner
 	config     config.AgentsConfig
+	glance     config.GlanceConfig
 	now        func() time.Time
 	stateDir   string
 	server     string
@@ -182,6 +183,11 @@ func (s *Source) listAgents(ctx context.Context, highlight bool) ([]capabilities
 			StoppedSince: state.StoppedSince,
 			Branch:       current.branch,
 		})
+	}
+	if highlight {
+		if err := s.reconcileGlanceLocked(ctx, agents); err != nil {
+			return nil, err
+		}
 	}
 	return agents, nil
 }

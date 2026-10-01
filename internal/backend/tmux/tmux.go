@@ -365,6 +365,19 @@ func (b *Backend) ConfigureAgents(cfg config.AgentsConfig) {
 	b.notifier.ConfigureSound(cfg.Sound)
 }
 
+// ConfigureGlance applies the shared glance configuration to this server.
+func (b *Backend) ConfigureGlance(cfg config.GlanceConfig) {
+	b.agents.ConfigureGlance(cfg)
+}
+
+// Glance implements the user-bound `nexo tmux glance` command.
+func (b *Backend) Glance(ctx context.Context, action GlanceAction) error {
+	if b == nil || b.agents == nil {
+		return errors.New("tmux glance requires an agent source")
+	}
+	return b.agents.Glance(ctx, action)
+}
+
 // ConfigureAgentCommand selects the executable and config file used by focus
 // hooks installed by the agent watcher.
 func (b *Backend) ConfigureAgentCommand(binary, configPath string) {
