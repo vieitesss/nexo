@@ -391,6 +391,12 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 			}
 		}
 		return inputEffect{}
+	case tea.KeyCtrlD:
+		if s.tab == ProjectsTab {
+			s.form = newDirectoryForm(s.deps, s.ctx)
+			return inputEffect{rebuild: true}
+		}
+		return inputEffect{}
 	case tea.KeyCtrlX:
 		refs := append([]picker.ContainerRef(nil), frame.markedTargets()...)
 		if len(refs) == 0 {
