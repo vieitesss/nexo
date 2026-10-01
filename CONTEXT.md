@@ -51,6 +51,14 @@ _Avoid_: using "session" generically
 The smallest multiplexer unit nexo tracks. Agents and Git worktrees are
 located through panes.
 
+### Lifecycle
+
+**Lifecycle**:
+The shared policy for opening a project container and creating a worktree:
+path preflight, result defaults, and cleanup sequencing. Native command
+construction, stable identity lookup, focus, and rollback primitives remain in
+backend adapters.
+
 ### Places
 
 **Place**:

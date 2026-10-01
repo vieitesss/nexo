@@ -82,17 +82,6 @@ func (worktreeCommand) Run(ctx context.Context, invocation Invocation) error {
 		return err
 	}
 
-	if result.Path == "" {
-		result.Path = parsed.Destination
-	}
-	if result.Branch == "" {
-		result.Branch = parsed.Branch
-	}
-	if result.Repo == "" {
-		result.Repo = parsed.Repo
-	}
-	result.NewBranch = parsed.NewBranch
-
 	var outputErr error
 	if invocation.JSON {
 		outputErr = json.NewEncoder(invocation.Stdout).Encode(worktreeJSON{

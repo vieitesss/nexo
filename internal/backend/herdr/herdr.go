@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/lifecycle"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/runner"
 )
@@ -95,21 +95,19 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 	if b == nil || b.Runner == nil {
 		return capabilities.Worktree{}, errors.New("herdr worktree creator requires a command runner")
 	}
-	path, err := filepath.Abs(options.Destination)
-	if err != nil {
-		return capabilities.Worktree{}, fmt.Errorf("resolve worktree destination: %w", err)
-	}
-	if _, err := os.Lstat(path); err == nil {
-		return capabilities.Worktree{}, fmt.Errorf("worktree destination %q already exists", path)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return capabilities.Worktree{}, fmt.Errorf("check worktree destination %q: %w", path, err)
-	}
+	return lifecycle.CreateWorktree(ctx, options, lifecycle.WorktreeAdapter{
+		Create:   b.createWorktree,
+		Open:     b.openProjectNative,
+		Rollback: b.removeWorktree,
+	})
+}
 
+func (b *Backend) createWorktree(ctx context.Context, options capabilities.WorktreeCreateOptions) (capabilities.Worktree, error) {
 	args := []string{"worktree", "create", "--cwd", options.Repo, "--branch", options.Branch}
 	if options.NewBranch {
 		args = append(args, "--base", "HEAD")
 	}
-	args = append(args, "--path", path)
+	args = append(args, "--path", options.Destination)
 	if !options.NoFocus {
 		args = append(args, "--focus")
 	}
@@ -123,15 +121,15 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 	}
 	name := workspace.Label
 	if name == "" {
-		name = projects.TargetName(path)
+		name = projects.TargetName(options.Destination)
 	}
 	return capabilities.Worktree{
-		Path:        path,
+		Path:        options.Destination,
 		Branch:      options.Branch,
 		Repo:        options.Repo,
 		NewBranch:   options.NewBranch,
 		ContainerID: workspace.ID,
-		Container:   capabilities.OpenedContainer{ID: workspace.ID, Name: name, Path: path, Created: true},
+		Container:   capabilities.OpenedContainer{ID: workspace.ID, Name: name, Path: options.Destination, Created: true},
 	}, nil
 }
 
@@ -140,6 +138,10 @@ func (b *Backend) RemoveWorktree(ctx context.Context, worktree capabilities.Work
 	if b == nil || b.Runner == nil {
 		return errors.New("herdr worktree remover requires a command runner")
 	}
+	return b.removeWorktree(ctx, worktree)
+}
+
+func (b *Backend) removeWorktree(ctx context.Context, worktree capabilities.Worktree) error {
 	if worktree.ContainerID == "" {
 		return errors.New("herdr worktree result does not include a workspace id")
 	}
@@ -175,8 +177,13 @@ func decodeWorktreeWorkspace(output []byte) (workspace, error) {
 
 // OpenProject focuses an existing Herdr workspace selected by label, or
 // creates a workspace for path when none is found. With NoFocus it reuses or
-// creates the workspace without moving the user's view to it.
+// creates the workspace without moving the user's view to it. Shared
+// lifecycle policy normalizes the result at this module's seam.
 func (b *Backend) OpenProject(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
+	return lifecycle.OpenProject(ctx, path, options, b.openProjectNative)
+}
+
+func (b *Backend) openProjectNative(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
 	if b == nil || b.Runner == nil {
 		return capabilities.OpenedContainer{}, errors.New("herdr project opener requires a command runner")
 	}
