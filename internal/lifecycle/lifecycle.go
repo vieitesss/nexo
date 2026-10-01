@@ -57,7 +57,13 @@ func CreateWorktree(ctx context.Context, options capabilities.WorktreeCreateOpti
 		return capabilities.Worktree{}, err
 	}
 	options.Destination = path
+	return createAndOpenWorktree(ctx, options, adapter)
+}
 
+// createAndOpenWorktree runs the native create and open steps with their
+// shared result normalization and rollback. Extraction shares it so both
+// transactions keep identical open and cleanup semantics.
+func createAndOpenWorktree(ctx context.Context, options capabilities.WorktreeCreateOptions, adapter WorktreeAdapter) (capabilities.Worktree, error) {
 	result, err := adapter.Create(ctx, options)
 	if err != nil {
 		return capabilities.Worktree{}, err
@@ -79,10 +85,10 @@ func CreateWorktree(ctx context.Context, options capabilities.WorktreeCreateOpti
 		return capabilities.Worktree{}, openErr
 	}
 
-	container, openErr := adapter.Open(ctx, path, capabilities.OpenOptions{NoFocus: options.NoFocus})
-	result.Container = normalizeContainer(path, container)
+	container, openErr := adapter.Open(ctx, options.Destination, capabilities.OpenOptions{NoFocus: options.NoFocus})
+	result.Container = normalizeContainer(options.Destination, container)
 	result = normalizeWorktree(options, result)
-	result.Container = normalizeContainer(path, result.Container)
+	result.Container = normalizeContainer(options.Destination, result.Container)
 	if openErr == nil {
 		return result, nil
 	}

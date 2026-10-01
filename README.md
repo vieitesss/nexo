@@ -222,6 +222,7 @@ nexo --help
 | `nexo open PATH` | Open a discovered project candidate; add `--no-focus` to create or reuse its container without switching to it. Herdr also accepts `--workspace-id ID`. |
 | `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, or `close [MACHINE/CONTAINER]`. |
 | `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch`, `--add-parent`, or `--no-focus`. |
+| `nexo worktree extract REPO DESTINATION` | Move the branch checked out in `REPO` into a new worktree and leave a return branch behind; add `--return-branch`, `--add-parent`, or `--no-focus`. |
 | `nexo tmux init` | Install tmux focus hooks and the agent watcher (tmux backend only). |
 
 Examples:
@@ -254,9 +255,14 @@ nexo --backend=tmux remote close devbox/api
 # Create a worktree and add its parent to project discovery.
 nexo --backend=tmux worktree create --new-branch --add-parent \
   ~/src/api feature/api ~/worktrees/api
+
+# Move a checkout's current branch into its own worktree.
+nexo --backend=tmux worktree extract --return-branch main \
+  ~/src/api ~/worktrees/api
 ```
 
-See [docs/list-json.md](docs/list-json.md) for JSON shapes and
+See [docs/list-json.md](docs/list-json.md) for JSON shapes,
+[docs/worktree.md](docs/worktree.md) for worktree creation and extraction, and
 [skills/nexo/SKILL.md](skills/nexo/SKILL.md) for automation recipes, exit
 statuses, and safe verification.
 
@@ -363,8 +369,8 @@ config key, and an empty or `auto` selection detects the inner multiplexer.
 
 | Backend | v1 status | Implemented or checked capabilities |
 | --- | --- | --- |
-| **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, focuses panes, creates Git worktrees, detects agents by process and screen polling, watches and notifies, and proxies remote tmux containers over SSH/mosh/et. |
-| **Herdr** | Implemented | Opens and manages native workspaces, reads pane screens, focuses panes, creates Git worktrees, consumes Herdr's native agent state and notifications, registers Herdr remote machines for its native sidebar, and fills the tmux-remote gap with a workspace proxy. The plugin manifest supplies the popup surface. |
+| **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, focuses panes, creates and extracts Git worktrees, detects agents by process and screen polling, watches and notifies, and proxies remote tmux containers over SSH/mosh/et. |
+| **Herdr** | Implemented | Opens and manages native workspaces, reads pane screens, focuses panes, creates and extracts Git worktrees, consumes Herdr's native agent state and notifications, registers Herdr remote machines for its native sidebar, and fills the tmux-remote gap with a workspace proxy. The plugin manifest supplies the popup surface. |
 | **Zellij** | Planned | Capability interfaces checked on paper: native project/session actions, pane listing, screen reads, focus, and floating panes; nexo would fill agent, notification, and remote-proxy gaps. |
 | **WezTerm** | Planned | Capability interfaces checked on paper: native spawn/list/read/focus; no popup CLI operation, and workspace switching needs a Lua/user action. |
 | **Kitty** | Planned | Capability interfaces checked on paper: native tab launch, pane listing, screen reads, focus, and overlays; agent state, notifications, and remote proxies would be nexo gaps. |
@@ -386,7 +392,8 @@ just lint
 Please keep capability interfaces small, adapters thin, and behavior native to
 the selected backend where possible. Start with [CONTEXT.md](CONTEXT.md), then
 read the relevant decision records in [docs/adr](docs/adr),
-[docs/agents.md](docs/agents.md), and [docs/remote.md](docs/remote.md).
+[docs/agents.md](docs/agents.md), [docs/remote.md](docs/remote.md), and
+[docs/worktree.md](docs/worktree.md).
 
 ## License
 

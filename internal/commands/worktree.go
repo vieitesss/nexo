@@ -24,6 +24,14 @@ type worktreeCreateArgs struct {
 	NoFocus     bool
 }
 
+type worktreeExtractArgs struct {
+	Repo         string
+	Destination  string
+	ReturnBranch string
+	AddParent    bool
+	NoFocus      bool
+}
+
 func init() {
 	registerBuiltin(func() Command { return worktreeCommand{} })
 }
@@ -31,6 +39,20 @@ func init() {
 func (worktreeCommand) Name() string { return "worktree" }
 
 func (worktreeCommand) Run(ctx context.Context, invocation Invocation) error {
+	if len(invocation.Args) == 0 {
+		return errors.New("worktree requires the create or extract subcommand")
+	}
+	switch invocation.Args[0] {
+	case "create":
+		return runWorktreeCreate(ctx, invocation)
+	case "extract":
+		return runWorktreeExtract(ctx, invocation)
+	default:
+		return fmt.Errorf("unknown worktree subcommand %q", invocation.Args[0])
+	}
+}
+
+func runWorktreeCreate(ctx context.Context, invocation Invocation) error {
 	parsed, err := parseWorktreeCreateArgs(invocation.Args)
 	if err != nil {
 		return err
@@ -48,21 +70,9 @@ func (worktreeCommand) Run(ctx context.Context, invocation Invocation) error {
 
 	var restore func() error
 	if parsed.AddParent {
-		configPath := invocation.ConfigPath
-		if configPath == "" {
-			configPath = config.DefaultPath()
-		}
-		parent := filepath.Dir(parsed.Destination)
-		if absolute, err := filepath.Abs(parent); err == nil {
-			parent = absolute
-		}
-		var changed bool
-		restore, changed, err = config.AddProjectPath(configPath, parent, os.Getenv("HOME"))
+		restore, err = addParentToConfig(invocation, parsed.Destination)
 		if err != nil {
 			return err
-		}
-		if !changed {
-			restore = nil
 		}
 	}
 
@@ -74,12 +84,7 @@ func (worktreeCommand) Run(ctx context.Context, invocation Invocation) error {
 		NoFocus:     parsed.NoFocus,
 	})
 	if err != nil {
-		if restore != nil {
-			if restoreErr := restore(); restoreErr != nil {
-				return errors.Join(err, fmt.Errorf("restore config after worktree failure: %w", restoreErr))
-			}
-		}
-		return err
+		return restoreConfigOnFailure(err, restore, "worktree")
 	}
 
 	var outputErr error
@@ -113,12 +118,110 @@ func (worktreeCommand) Run(ctx context.Context, invocation Invocation) error {
 	return outputErr
 }
 
+func runWorktreeExtract(ctx context.Context, invocation Invocation) error {
+	parsed, err := parseWorktreeExtractArgs(invocation.Args)
+	if err != nil {
+		return err
+	}
+	if err := invocation.Selection.Require(); err != nil {
+		return err
+	}
+	extractor, ok := invocation.Adapter.(capabilities.WorktreeExtractor)
+	if !ok {
+		return fmt.Errorf("backend %q does not support extracting worktrees", invocation.Selection.Kind)
+	}
+	if invocation.Stdout == nil {
+		return errors.New("worktree extract requires stdout")
+	}
+
+	var restore func() error
+	if parsed.AddParent {
+		restore, err = addParentToConfig(invocation, parsed.Destination)
+		if err != nil {
+			return err
+		}
+	}
+
+	result, err := extractor.ExtractWorktree(ctx, capabilities.WorktreeExtractOptions{
+		Repo:         parsed.Repo,
+		Destination:  parsed.Destination,
+		ReturnBranch: parsed.ReturnBranch,
+		NoFocus:      parsed.NoFocus,
+	})
+	if err != nil {
+		return restoreConfigOnFailure(err, restore, "worktree extraction")
+	}
+
+	var outputErr error
+	if invocation.JSON {
+		outputErr = json.NewEncoder(invocation.Stdout).Encode(worktreeJSON{
+			Path:         result.Path,
+			Branch:       result.Branch,
+			ReturnBranch: result.ReturnBranch,
+			Container:    newOpenedContainerJSON(string(invocation.Selection.Kind), result.Container),
+		})
+	} else {
+		_, outputErr = fmt.Fprintf(invocation.Stdout, "extracted worktree %s on %s\n", result.Path, result.Branch)
+	}
+	if outputErr == nil {
+		return nil
+	}
+
+	var rollbackErr error
+	if remover, ok := invocation.Adapter.(capabilities.WorktreeRemover); ok {
+		rollbackErr = remover.RemoveWorktree(ctx, result)
+	} else {
+		rollbackErr = errors.New("backend cannot roll back an extracted worktree")
+	}
+	if restore != nil {
+		if configErr := restore(); configErr != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore config after output failure: %w", configErr))
+		}
+	}
+	if rollbackErr != nil {
+		return errors.Join(outputErr, rollbackErr)
+	}
+	return outputErr
+}
+
+// addParentToConfig adds the destination's parent directory to project
+// discovery. The returned restore function is nil when nothing changed.
+func addParentToConfig(invocation Invocation, destination string) (func() error, error) {
+	configPath := invocation.ConfigPath
+	if configPath == "" {
+		configPath = config.DefaultPath()
+	}
+	parent := filepath.Dir(destination)
+	if absolute, err := filepath.Abs(parent); err == nil {
+		parent = absolute
+	}
+	restore, changed, err := config.AddProjectPath(configPath, parent, os.Getenv("HOME"))
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return nil, nil
+	}
+	return restore, nil
+}
+
+func restoreConfigOnFailure(err error, restore func() error, action string) error {
+	if restore == nil {
+		return err
+	}
+	if restoreErr := restore(); restoreErr != nil {
+		return errors.Join(err, fmt.Errorf("restore config after %s failure: %w", action, restoreErr))
+	}
+	return err
+}
+
 // worktreeJSON is the documented worktree result plus the container the
-// creator opened for it.
+// creator opened for it. ReturnBranch is set only for extraction.
 type worktreeJSON struct {
-	Path      string              `json:"path"`
-	Branch    string              `json:"branch"`
-	Container openedContainerJSON `json:"container"`
+	Path         string              `json:"path"`
+	Branch       string              `json:"branch"`
+	ReturnBranch string              `json:"return_branch,omitempty"`
+	Container    openedContainerJSON `json:"container"`
 }
 
 func parseWorktreeCreateArgs(args []string) (worktreeCreateArgs, error) {
@@ -158,5 +261,57 @@ func parseWorktreeCreateArgs(args []string) (worktreeCreateArgs, error) {
 		return worktreeCreateArgs{}, fmt.Errorf("worktree create requires <repo> <branch> <destination>, got %d arguments", len(positionals))
 	}
 	parsed.Repo, parsed.Branch, parsed.Destination = positionals[0], positionals[1], positionals[2]
+	return parsed, nil
+}
+
+func parseWorktreeExtractArgs(args []string) (worktreeExtractArgs, error) {
+	if len(args) == 0 || args[0] != "extract" {
+		return worktreeExtractArgs{}, errors.New("worktree requires the extract subcommand")
+	}
+	args = args[1:]
+	var parsed worktreeExtractArgs
+	positionals := make([]string, 0, 2)
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--return-branch":
+			if parsed.ReturnBranch != "" {
+				return worktreeExtractArgs{}, errors.New("--return-branch may be provided only once")
+			}
+			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
+				return worktreeExtractArgs{}, errors.New("--return-branch requires a value")
+			}
+			i++
+			parsed.ReturnBranch = args[i]
+		case strings.HasPrefix(args[i], "--return-branch="):
+			if parsed.ReturnBranch != "" {
+				return worktreeExtractArgs{}, errors.New("--return-branch may be provided only once")
+			}
+			value := strings.TrimPrefix(args[i], "--return-branch=")
+			if value == "" {
+				return worktreeExtractArgs{}, errors.New("--return-branch requires a value")
+			}
+			parsed.ReturnBranch = value
+		case args[i] == "--add-parent":
+			if parsed.AddParent {
+				return worktreeExtractArgs{}, errors.New("--add-parent may be provided only once")
+			}
+			parsed.AddParent = true
+		case args[i] == "--no-focus":
+			if parsed.NoFocus {
+				return worktreeExtractArgs{}, errors.New("--no-focus may be provided only once")
+			}
+			parsed.NoFocus = true
+		case args[i] == "":
+			return worktreeExtractArgs{}, errors.New("worktree extract arguments may not be empty")
+		case strings.HasPrefix(args[i], "-"):
+			return worktreeExtractArgs{}, fmt.Errorf("unknown worktree option %q", args[i])
+		default:
+			positionals = append(positionals, args[i])
+		}
+	}
+	if len(positionals) != 2 {
+		return worktreeExtractArgs{}, fmt.Errorf("worktree extract requires <repo> <destination>, got %d arguments", len(positionals))
+	}
+	parsed.Repo, parsed.Destination = positionals[0], positionals[1]
 	return parsed, nil
 }

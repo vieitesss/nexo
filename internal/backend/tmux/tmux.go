@@ -12,6 +12,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/git"
 	"github.com/vieitesss/nexo/internal/lifecycle"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
@@ -89,6 +90,20 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 		Create:   b.createWorktree,
 		Open:     b.openProjectNative,
 		Rollback: b.rollbackCreatedWorktree,
+	})
+}
+
+func (b *Backend) ExtractWorktree(ctx context.Context, options capabilities.WorktreeExtractOptions) (capabilities.Worktree, error) {
+	if b == nil || b.Runner == nil {
+		return capabilities.Worktree{}, errors.New("tmux worktree extractor requires a command runner")
+	}
+	return lifecycle.ExtractWorktree(ctx, options, lifecycle.ExtractAdapter{
+		WorktreeAdapter: lifecycle.WorktreeAdapter{
+			Create:   b.createWorktree,
+			Open:     b.openProjectNative,
+			Rollback: b.rollbackCreatedWorktree,
+		},
+		Git: git.New(b.Runner),
 	})
 }
 

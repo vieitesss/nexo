@@ -66,7 +66,8 @@ interfaces on that backend (empty for `none`).
     "ProjectOpener",
     "RemoteProxy",
     "ScreenReader",
-    "WorktreeCreator"
+    "WorktreeCreator",
+    "WorktreeExtractor"
   ]
 }
 ```
@@ -275,7 +276,7 @@ prints one line and a plain open prints nothing.
 }
 ```
 
-### Git worktrees: `worktree create`
+### Git worktrees: `worktree create` and `worktree extract`
 
 Use this when creating a worktree and handing its canonical result to the next
 step. The positional arguments are `<repo> <branch> <destination>`;
@@ -305,6 +306,34 @@ session name fields that the container now carries.
 {
   "path": "/home/me/worktrees/example",
   "branch": "feature/example",
+  "container": {
+    "backend": "tmux",
+    "id": "$12",
+    "name": "worktrees_example",
+    "path": "/home/me/worktrees/example",
+    "created": true
+  }
+}
+```
+
+`worktree extract <repo> <destination>` is the inverse: it moves the branch
+currently checked out in `<repo>` into a new worktree at `<destination>` and
+leaves a return branch checked out in `<repo>`. It preflights a clean
+`<repo>`, a non-existing destination, branch ownership, and an eligible
+return branch before mutating anything. `--return-branch` chooses that branch
+explicitly; otherwise nexo prefers the previous named branch and then the
+repository default. The output adds `return_branch`:
+
+```console
+nexo --backend=tmux --json worktree extract --return-branch main \
+  /home/me/repo /home/me/worktrees/example
+```
+
+```json
+{
+  "path": "/home/me/worktrees/example",
+  "branch": "feature/example",
+  "return_branch": "main",
   "container": {
     "backend": "tmux",
     "id": "$12",
