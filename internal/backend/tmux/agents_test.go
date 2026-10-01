@@ -1,8 +1,12 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +16,109 @@ import (
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
 )
+
+func TestFindHarnessMatchesProcessArgs(t *testing.T) {
+	allow := map[string]struct{}{"pi": {}, "claude": {}}
+	for _, test := range []struct {
+		name string
+		args string
+		want string
+	}{
+		{name: "node script", args: "node /opt/homebrew/bin/pi", want: "pi"},
+		{name: "node flags", args: "node --no-warnings /x/pi", want: "pi"},
+		{name: "claude resume", args: "/Users/x/.local/bin/claude --resume", want: "claude"},
+		{name: "vim pi", args: "vim pi", want: ""},
+		{name: "bash command string", args: `bash -c "claude --resume"`, want: ""},
+		{name: "markdown file", args: "vim notes/claude.md", want: ""},
+		{name: "bare interpreter", args: "node", want: ""},
+		{name: "login shell", args: "-zsh", want: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := findHarness(test.args, allow); got != test.want {
+				t.Fatalf("findHarness(%q) = %q, want %q", test.args, got, test.want)
+			}
+		})
+	}
+}
+
+func TestFindPaneHarnessIsDepthFirstAndLowestPID(t *testing.T) {
+	allow := map[string]struct{}{"pi": {}, "claude": {}}
+	t.Run("bash child matches", func(t *testing.T) {
+		tree := parseProcessTree([]byte(
+			"  100     1 -zsh\n" +
+				"  101   100 bash -c \"claude --resume\"\n" +
+				"  102   101 claude --resume\n"))
+		if got := findPaneHarness("100", tree, allow); got != "claude" {
+			t.Fatalf("findPaneHarness() = %q, want claude", got)
+		}
+	})
+	t.Run("lowest pid wins at same depth", func(t *testing.T) {
+		tree := parseProcessTree([]byte(
+			"  100     1 -zsh\n" +
+				"  102   100 /x/claude\n" +
+				"  101   100 /x/pi\n"))
+		if got := findPaneHarness("100", tree, allow); got != "pi" {
+			t.Fatalf("findPaneHarness() = %q, want lowest-pid pi", got)
+		}
+	})
+}
+
+func TestAgentPanesFindsHarnessInPaneDescendants(t *testing.T) {
+	processes := "  100     1 -zsh\n" +
+		"  101   100 node /opt/homebrew/bin/pi\n" +
+		"  102   101 sleep 30\n" +
+		"  200     1 -zsh\n" +
+		"  201   200 /Users/x/.local/bin/claude --resume\n" +
+		"  202   200 vim notes/claude.md\n" +
+		"  300     1 -bash\n"
+	panes := []string{
+		"%1\t100\tnode\t$1\twork\teditor\t1\t0\t/tmp/work",
+		"%2\t200\t2.1.30\t$2\tdev\tshell\t1\t0\t/tmp/dev",
+		"%3\t300\tpi\t$3\tover\tmain\t0\t0\t/tmp/over",
+		"%4\t202\tvim\t$4\tnotes\tmain\t0\t0\t/tmp/notes",
+	}
+	psCalls := 0
+	r := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "tmux":
+			return []byte(strings.Join(panes, "\n") + "\n"), nil
+		case "ps":
+			psCalls++
+			for i, arg := range args {
+				if arg != "-p" || i+1 >= len(args) {
+					continue
+				}
+				for _, line := range strings.Split(processes, "\n") {
+					fields := strings.Fields(line)
+					if len(fields) > 2 && fields[0] == args[i+1] {
+						return []byte(strings.Join(fields[2:], " ") + "\n"), nil
+					}
+				}
+				return nil, nil
+			}
+			return []byte(processes), nil
+		case "git":
+			return []byte("\n"), nil
+		default:
+			return nil, nil
+		}
+	})
+	source := NewAgentSource(r)
+	got, err := source.agentPanes(context.Background(), config.AgentsConfig{Processes: []string{"pi", "claude"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	harnesses := make([]string, 0, len(got))
+	for _, current := range got {
+		harnesses = append(harnesses, current.harness)
+	}
+	if !reflect.DeepEqual(harnesses, []string{"pi", "claude", "pi"}) {
+		t.Fatalf("harnesses = %#v, want descendant and fast-path detection", harnesses)
+	}
+	if psCalls != 1 {
+		t.Fatalf("ps calls = %d, want one snapshot per listing", psCalls)
+	}
+}
 
 func TestOnlyOneWatcherLockPerServer(t *testing.T) {
 	path := t.TempDir() + "/server.lock"
@@ -124,5 +231,55 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 	}
 	if len(watcherAgents) != 1 || !watcherAgents[0].Seen {
 		t.Fatalf("watcher poll clobbered focus hook state: %#v", watcherAgents)
+	}
+}
+
+func TestMarkSeenUnknownPaneCreatesNoState(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	r := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "tmux" {
+			return []byte("/tmp/tmux-test\n"), nil
+		}
+		return nil, nil
+	})
+	source := NewAgentSource(r)
+	source.SetStateDir(stateDir)
+	if err := source.MarkSeen(context.Background(), "%999"); err != nil {
+		t.Fatalf("MarkSeen() error = %v", err)
+	}
+	if _, err := os.Stat(stateDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state dir = %v, want no artifacts", err)
+	}
+}
+
+func TestMarkSeenUnknownPaneLeavesExistingStateByteIdentical(t *testing.T) {
+	r := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "tmux" {
+			return []byte("/tmp/tmux-test\n"), nil
+		}
+		return nil, nil
+	})
+	source := NewAgentSource(r)
+	source.SetStateDir(t.TempDir())
+	source.server = "/tmp/tmux-test"
+	if err := source.updateStates(func(states map[string]agentState) error {
+		states["%1"] = agentState{State: "stopped"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(source.statePath("json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.MarkSeen(context.Background(), "%999"); err != nil {
+		t.Fatalf("MarkSeen() error = %v", err)
+	}
+	after, err := os.ReadFile(source.statePath("json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("state changed:\nbefore %q\nafter  %q", before, after)
 	}
 }

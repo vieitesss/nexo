@@ -255,6 +255,8 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		allow[strings.ToLower(filepath.Base(strings.TrimSpace(process)))] = struct{}{}
 	}
 	var result []pane
+	var tree processTree
+	haveTree := false
 	for _, line := range strings.Split(strings.TrimRight(string(output), "\n"), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -269,18 +271,17 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		paneIndexField := 7
 		pathField := 8
 		current := strings.TrimSpace(fields[2])
-		args := current
-		if !isHarness(current, allow) {
-			if fields[1] == "" {
-				continue
+		harness := findHarness(current, allow)
+		if harness == "" {
+			// macOS reports a foreground comm such as "node" or a version
+			// string, and pane_pid is the pane's shell. The agent is usually a
+			// descendant of that shell, so inspect one shared process snapshot.
+			if !haveTree {
+				tree = s.processTree(ctx)
+				haveTree = true
 			}
-			ps, psErr := s.runner.Run(ctx, "ps", "-o", "args=", "-p", fields[1])
-			if psErr != nil {
-				continue
-			}
-			args = string(ps)
+			harness = findPaneHarness(fields[1], tree, allow)
 		}
-		harness := findHarness(args, allow)
 		if harness == "" {
 			continue
 		}
@@ -302,18 +303,143 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 	return result, nil
 }
 
-func isHarness(command string, allow map[string]struct{}) bool {
-	_, ok := allow[strings.ToLower(filepath.Base(strings.TrimSpace(command)))]
-	return ok
+// interpreters are runtimes whose own name never identifies an agent; the
+// harness is the script they execute instead.
+var interpreters = map[string]struct{}{
+	"node":    {},
+	"bun":     {},
+	"deno":    {},
+	"python":  {},
+	"python3": {},
 }
 
+// findHarness returns the allowed harness named by a process's command line.
+// Only the process identity counts: the basename of argv[0], or, when argv[0]
+// is an interpreter, the basename of the script it runs.
 func findHarness(args string, allow map[string]struct{}) string {
-	for _, field := range strings.Fields(args) {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		return ""
+	}
+	name := commandBase(fields[0])
+	if _, ok := interpreters[name]; ok {
+		name = scriptBase(fields[1:])
+	}
+	if name == "" {
+		return ""
+	}
+	if _, ok := allow[name]; ok {
+		return name
+	}
+	return ""
+}
+
+func commandBase(field string) string {
+	field = strings.Trim(field, "\"'(),[]{}")
+	if field == "" {
+		return ""
+	}
+	return strings.ToLower(filepath.Base(field))
+}
+
+// scriptBase returns the basename of the first non-flag argument, the script
+// passed to an interpreter.
+func scriptBase(args []string) string {
+	for _, field := range args {
 		field = strings.Trim(field, "\"'(),[]{}")
-		base := strings.ToLower(filepath.Base(field))
-		if _, ok := allow[base]; ok {
-			return base
+		if field == "" || strings.HasPrefix(field, "-") {
+			continue
 		}
+		return strings.ToLower(filepath.Base(field))
+	}
+	return ""
+}
+
+// processTree is one point-in-time view of the process table. Both BSD/macOS
+// ps and procps accept the "ps -A -o pid=,ppid=,args=" snapshot used to build
+// it.
+type processTree struct {
+	args     map[int]string
+	children map[int][]int
+}
+
+func (s *Source) processTree(ctx context.Context) processTree {
+	output, err := s.runner.Run(ctx, "ps", "-A", "-o", "pid=,ppid=,args=")
+	if err != nil {
+		return processTree{}
+	}
+	return parseProcessTree(output)
+}
+
+func parseProcessTree(output []byte) processTree {
+	tree := processTree{args: make(map[int]string), children: make(map[int][]int)}
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimLeft(line, " \t")
+		if line == "" {
+			continue
+		}
+		pidEnd := strings.IndexAny(line, " \t")
+		if pidEnd < 0 {
+			continue
+		}
+		pid, err := strconv.Atoi(line[:pidEnd])
+		if err != nil {
+			continue
+		}
+		line = strings.TrimLeft(line[pidEnd:], " \t")
+		ppidEnd := strings.IndexAny(line, " \t")
+		if ppidEnd < 0 {
+			continue
+		}
+		ppid, err := strconv.Atoi(line[:ppidEnd])
+		if err != nil {
+			continue
+		}
+		tree.args[pid] = strings.TrimSpace(line[ppidEnd:])
+		tree.children[ppid] = append(tree.children[ppid], pid)
+	}
+	return tree
+}
+
+// findPaneHarness walks a pane's process tree breadth-first and returns the
+// shallowest harness named by a process command line. Ties at the same depth
+// resolve to the lowest pid so discovery is deterministic. The pane process
+// itself is included because a pane can run the agent as its main process
+// while tmux still reports a non-harness current command.
+func findPaneHarness(panePID string, tree processTree, allow map[string]struct{}) string {
+	start, err := strconv.Atoi(strings.TrimSpace(panePID))
+	if err != nil {
+		return ""
+	}
+	frontier := []int{start}
+	visited := map[int]struct{}{start: {}}
+	for len(frontier) > 0 {
+		bestPID := -1
+		bestHarness := ""
+		for _, pid := range frontier {
+			harness := findHarness(tree.args[pid], allow)
+			if harness == "" {
+				continue
+			}
+			if bestPID == -1 || pid < bestPID {
+				bestPID = pid
+				bestHarness = harness
+			}
+		}
+		if bestHarness != "" {
+			return bestHarness
+		}
+		var next []int
+		for _, pid := range frontier {
+			for _, child := range tree.children[pid] {
+				if _, ok := visited[child]; ok {
+					continue
+				}
+				visited[child] = struct{}{}
+				next = append(next, child)
+			}
+		}
+		frontier = next
 	}
 	return ""
 }
@@ -473,15 +599,24 @@ func (s *Source) MarkSeen(ctx context.Context, paneID string) error {
 	if s.server == "" {
 		s.server = s.serverName(ctx)
 	}
+	// The tmux focus hook fires for every pane, including panes that have no
+	// tracked agent state. Read first so an unknown or already-visible pane is
+	// a silent no-op that creates no state artifacts.
+	saved, err := s.readPersistedStates()
+	if err != nil {
+		return fmt.Errorf("read agent state: %w", err)
+	}
+	state, ok := saved.Agents[paneID]
+	if !ok || state.State != "stopped" {
+		return nil
+	}
 	return s.updateStates(func(states map[string]agentState) error {
-		state, ok := states[paneID]
-		if !ok {
-			return fmt.Errorf("unknown agent pane %q", paneID)
+		current, ok := states[paneID]
+		if !ok || current.State != "stopped" {
+			return nil
 		}
-		if state.State == "stopped" {
-			state.Seen = true
-			states[paneID] = state
-		}
+		current.Seen = true
+		states[paneID] = current
 		return nil
 	})
 }

@@ -14,6 +14,22 @@ import (
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
+// fakeHarness creates an executable named pi whose argv[0] basename is the
+// harness name, the way a real agent starts. A symlink avoids a shell script,
+// whose argv[0] would be the interpreter rather than the harness.
+func fakeHarness(t *testing.T) string {
+	t.Helper()
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("sleep is not installed")
+	}
+	pi := filepath.Join(t.TempDir(), "pi")
+	if err := os.Symlink(sleep, pi); err != nil {
+		t.Fatal(err)
+	}
+	return pi
+}
+
 func TestTmuxAgentPathWithTab(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")
@@ -33,11 +49,8 @@ func TestTmuxAgentPathWithTab(t *testing.T) {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	pi := filepath.Join(t.TempDir(), "pi")
-	if err := os.WriteFile(pi, []byte("#!/bin/sh\nprintf '⠋ working\\n'\nsleep 30\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if output, err := runTmux("new-session", "-d", "-s", "work", "-c", path, pi); err != nil {
+	pi := fakeHarness(t)
+	if output, err := runTmux("new-session", "-d", "-s", "work", "-c", path, pi+" 600"); err != nil {
 		t.Fatalf("create session: %v: %s", err, output)
 	}
 
@@ -75,10 +88,7 @@ func TestTmuxAgentIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pi := filepath.Join(t.TempDir(), "pi")
-	if err := os.WriteFile(pi, []byte("#!/bin/sh\nprintf '⠋ working\\n'\nsleep 1\nprintf '\\033[2J\\033[Hprompt> \\n'\nsleep 30\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	pi := fakeHarness(t)
 	binary := filepath.Join(t.TempDir(), "nexo")
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
@@ -95,7 +105,7 @@ func TestTmuxAgentIntegration(t *testing.T) {
 		commandArgs := append([]string{"-L", server, "-f", "/dev/null"}, args...)
 		return exec.CommandContext(ctx, "tmux", commandArgs...).CombinedOutput()
 	}
-	if _, err := runTmux("new-session", "-d", "-s", "work", pi); err != nil {
+	if _, err := runTmux("new-session", "-d", "-s", "work", pi+" 600"); err != nil {
 		t.Fatal(err)
 	}
 	control := exec.Command("tmux", "-C", "-L", server, "-f", "/dev/null", "attach-session", "-t", "work")
@@ -172,5 +182,53 @@ func TestTmuxAgentIntegration(t *testing.T) {
 	}
 	if len(agents) != 1 || !agents[0].Seen {
 		t.Fatalf("focus result = %#v, want seen agent", agents)
+	}
+}
+
+func TestTmuxAgentFindsHarnessInDescendantProcess(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	for _, name := range []string{"TMUX", "TMUX_PANE", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"} {
+		t.Setenv(name, "")
+	}
+	ctx := context.Background()
+	server := "nexo-test-descendant-" + strings.ReplaceAll(t.Name(), "/", "-")
+	runTmux := func(args ...string) ([]byte, error) {
+		commandArgs := append([]string{"-L", server, "-f", "/dev/null"}, args...)
+		return exec.CommandContext(ctx, "tmux", commandArgs...).CombinedOutput()
+	}
+	t.Cleanup(func() { _, _ = runTmux("kill-server") })
+
+	if output, err := runTmux("new-session", "-d", "-s", "work", "bash"); err != nil {
+		t.Fatalf("create session: %v: %s", err, output)
+	}
+	// The interactive shell stays the pane's main process while the harness
+	// runs as a descendant, the way a user starts an agent from a prompt.
+	if output, err := runTmux("send-keys", "-t", "work:0.0", "bash -c 'exec -a pi sleep 30' & wait", "Enter"); err != nil {
+		t.Fatalf("start descendant: %v: %s", err, output)
+	}
+
+	source := NewAgentSource(runner.Func(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "tmux" {
+			args = append([]string{"-L", server, "-f", "/dev/null"}, args...)
+		}
+		return runner.ExecRunner{}.Run(ctx, name, args...)
+	}))
+	source.SetStateDir(t.TempDir())
+	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 1, PollInterval: 1})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		agents, err := source.ListAgents(ctx)
+		if err != nil {
+			t.Fatalf("ListAgents() error = %v", err)
+		}
+		if len(agents) == 1 && agents[0].Harness == "pi" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("discovery = %#v, want descendant pi process", agents)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
