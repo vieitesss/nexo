@@ -587,7 +587,7 @@ func (s *Source) MarkSeen(ctx context.Context, paneID string) error {
 	// tracked agent state. The ledger makes unknown or already-visible panes a
 	// silent no-op without creating state artifacts.
 	if err := s.ledger().MarkSeen(paneID); err != nil {
-		return fmt.Errorf("mark agent seen: %w", err)
+		return err
 	}
 	return nil
 }

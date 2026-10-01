@@ -220,7 +220,7 @@ func (l *Ledger) Observe(batch Batch, policy Policy, mutation func(*Document, []
 func (l *Ledger) MarkSeen(id string) error {
 	document, err := l.Read()
 	if err != nil {
-		return err
+		return fmt.Errorf("read agent state: %w", err)
 	}
 	state, ok := document.Agents[id]
 	if !ok || state.State != "stopped" {

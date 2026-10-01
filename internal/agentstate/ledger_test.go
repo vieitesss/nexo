@@ -155,6 +155,42 @@ func TestMarkSeenUnknownDoesNotCreateArtifacts(t *testing.T) {
 	}
 }
 
+func TestMarkSeenMalformedStateReportsReadError(t *testing.T) {
+	stateDir := t.TempDir()
+	ledger := New(stateDir, "server", time.Now)
+	if err := os.WriteFile(ledger.Path("json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := ledger.MarkSeen("one")
+	const want = "read agent state: unexpected end of JSON input"
+	if err == nil || err.Error() != want {
+		t.Fatalf("MarkSeen() error = %v, want %q", err, want)
+	}
+}
+
+func TestMarkSeenUpdateFailureReportsLockError(t *testing.T) {
+	stateDir := t.TempDir()
+	ledger := New(stateDir, "server", time.Now)
+	if err := ledger.Update(func(document *Document) error {
+		document.Agents["one"] = State{State: "stopped"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := ledger.Path("state.lock")
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lockPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := ledger.MarkSeen("one")
+	want := "lock agent state: open state lock: open " + lockPath + ": is a directory"
+	if err == nil || err.Error() != want {
+		t.Fatalf("MarkSeen() error = %v, want %q", err, want)
+	}
+}
+
 func TestMalformedStateIsReportedThroughRead(t *testing.T) {
 	stateDir := t.TempDir()
 	ledger := New(stateDir, "server", time.Now)

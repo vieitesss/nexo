@@ -284,3 +284,45 @@ func TestMarkSeenUnknownPaneLeavesExistingStateByteIdentical(t *testing.T) {
 		t.Fatalf("state changed:\nbefore %q\nafter  %q", before, after)
 	}
 }
+
+func TestMarkSeenMalformedStatePreservesReadError(t *testing.T) {
+	source := NewAgentSource(runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+		return nil, nil
+	}))
+	source.SetStateDir(t.TempDir())
+	source.server = "/tmp/tmux-test"
+	if err := os.WriteFile(source.ledger().Path("json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := source.MarkSeen(context.Background(), "%1")
+	const want = "read agent state: unexpected end of JSON input"
+	if err == nil || err.Error() != want {
+		t.Fatalf("MarkSeen() error = %v, want %q", err, want)
+	}
+}
+
+func TestMarkSeenUpdateFailurePreservesLockError(t *testing.T) {
+	source := NewAgentSource(runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+		return nil, nil
+	}))
+	source.SetStateDir(t.TempDir())
+	source.server = "/tmp/tmux-test"
+	if err := source.ledger().Update(func(document *agentstate.Document) error {
+		document.Agents["%1"] = agentstate.State{State: "stopped"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := source.ledger().Path("state.lock")
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lockPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := source.MarkSeen(context.Background(), "%1")
+	want := "lock agent state: open state lock: open " + lockPath + ": is a directory"
+	if err == nil || err.Error() != want {
+		t.Fatalf("MarkSeen() error = %v, want %q", err, want)
+	}
+}
