@@ -33,12 +33,6 @@ func (s *pullRequestScript) setBranch(branch, upstreamRemote, upstreamRef string
 	s.branch, s.upstreamRemote, s.upstreamRef = branch, upstreamRemote, upstreamRef
 }
 
-func (s *pullRequestScript) setRemoteURL(remoteURL string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.remoteURL = remoteURL
-}
-
 func (s *pullRequestScript) answer(call string) ([]byte, error) {
 	s.mu.Lock()
 	branch, upstreamRemote, upstreamRef, remoteURL := s.branch, s.upstreamRemote, s.upstreamRef, s.remoteURL
@@ -207,7 +201,7 @@ func TestPullRequestLoaderSkipsNonGitHubAndDetachedCheckouts(t *testing.T) {
 	}
 
 	local := githubRepoScript()
-	local.remoteURL = "/srv/git/widgets.git"
+	local.remoteURL = "/srv/git:archive@backup/widgets.git"
 	commandRunner = &pullRequestRunner{script: local}
 	if value, err = newTestPullRequestLoader(commandRunner).Load(context.Background(), pullRequestRepo); err != nil || value.Number != 0 {
 		t.Fatalf("local remote = %#v, %v", value, err)
@@ -217,18 +211,55 @@ func TestPullRequestLoaderSkipsNonGitHubAndDetachedCheckouts(t *testing.T) {
 	}
 }
 
-func TestPullRequestLoaderFallsBackToOriginWithoutUpstream(t *testing.T) {
+func TestPullRequestLoaderRefusesGuessedUpstreams(t *testing.T) {
+	// An upstream-less branch whose only candidate is somebody else's
+	// same-named branch on origin must show nothing.
+	missing := githubRepoScript()
+	missing.upstreamRemote = ""
+	missing.upstreamRef = ""
+	missing.ghResponse = []byte(`[{"number":7,"state":"OPEN","headRefName":"feature","headRepositoryOwner":{"login":"acme"}}]`)
+	commandRunner := &pullRequestRunner{script: missing}
+	value, err := newTestPullRequestLoader(commandRunner).Load(context.Background(), pullRequestRepo)
+	if err != nil || value.Number != 0 {
+		t.Fatalf("missing upstream = %#v, %v", value, err)
+	}
+	if got := commandRunner.ghCalls(); len(got) != 0 {
+		t.Fatalf("gh ran for a missing upstream: %#v", got)
+	}
+
+	// A failed upstream lookup is the same silent absence, not a fallback.
+	failing := &pullRequestRunner{script: githubRepoScript(), run: func(call string, _ context.Context) ([]byte, error) {
+		if strings.HasPrefix(call, "git -C "+pullRequestRepo+" for-each-ref ") {
+			return nil, errors.New("fatal: bad object refs/heads/feature")
+		}
+		return nil, errors.New("unexpected command: " + call)
+	}}
+	if value, err = newTestPullRequestLoader(failing).Load(context.Background(), pullRequestRepo); err != nil || value.Number != 0 {
+		t.Fatalf("failed upstream lookup = %#v, %v", value, err)
+	}
+	if got := failing.ghCalls(); len(got) != 0 {
+		t.Fatalf("gh ran after a failed upstream lookup: %#v", got)
+	}
+}
+
+func TestPullRequestLoaderQueriesTheUpstreamBranchName(t *testing.T) {
 	script := githubRepoScript()
-	script.upstreamRemote = ""
-	script.upstreamRef = ""
-	script.ghResponse = []byte(`[{"number":7,"state":"OPEN","headRefName":"feature","headRepositoryOwner":{"login":"acme"}}]`)
+	script.setBranch("local-name", "origin", "refs/heads/remote-name")
+	script.ghResponse = []byte(`[
+		{"number":1,"state":"OPEN","headRefName":"local-name","headRepositoryOwner":{"login":"acme"}},
+		{"number":2,"state":"OPEN","headRefName":"remote-name","headRepositoryOwner":{"login":"acme"}}
+	]`)
 	commandRunner := &pullRequestRunner{script: script}
 	value, err := newTestPullRequestLoader(commandRunner).Load(context.Background(), pullRequestRepo)
-	if err != nil || value.Number != 7 {
-		t.Fatalf("upstream fallback = %#v, %v", value, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := commandRunner.ghCalls(); len(got) != 1 || !strings.Contains(got[0], "--head feature") {
-		t.Fatalf("gh calls = %#v", got)
+	if value.Number != 2 || value.State != PullRequestOpen {
+		t.Fatalf("upstream branch request = %#v, want #2 open", value)
+	}
+	calls := commandRunner.ghCalls()
+	if len(calls) != 1 || !strings.Contains(calls[0], "--head remote-name") {
+		t.Fatalf("gh calls = %#v, want the upstream branch name", calls)
 	}
 }
 
@@ -267,60 +298,99 @@ func TestPullRequestLoaderSkipsMissingGhAndFailedCommandsSilently(t *testing.T) 
 	}
 }
 
-func TestPullRequestLoaderCachesByUpstreamIdentity(t *testing.T) {
-	script := githubRepoScript()
-	script.ghResponse = []byte(`[{"number":11,"state":"OPEN","headRefName":"feature","headRepositoryOwner":{"login":"acme"}}]`)
-	commandRunner := &pullRequestRunner{script: script}
-	loader := newTestPullRequestLoader(commandRunner)
+func TestPullRequestLoaderRevalidatesAfterFreshness(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		before     string
+		after      string
+		wantBefore PullRequest
+		wantAfter  PullRequest
+	}{
+		{
+			"state change",
+			`[{"number":11,"state":"OPEN","headRefName":"feature","headRepositoryOwner":{"login":"acme"}}]`,
+			`[{"number":11,"state":"MERGED","headRefName":"feature","headRepositoryOwner":{"login":"acme"}}]`,
+			PullRequest{Number: 11, State: PullRequestOpen},
+			PullRequest{Number: 11, State: PullRequestMerged},
+		},
+		{
+			"absence to present",
+			`[]`,
+			`[{"number":22,"state":"CLOSED","headRefName":"feature","headRepositoryOwner":{"login":"acme"}}]`,
+			PullRequest{},
+			PullRequest{Number: 22, State: PullRequestClosed},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := githubRepoScript()
+			script.ghResponse = []byte(test.before)
+			commandRunner := &pullRequestRunner{script: script}
+			now := time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC)
+			loader := newTestPullRequestLoader(commandRunner)
+			loader.Now = func() time.Time { return now }
 
-	first, err := loader.Load(context.Background(), pullRequestRepo)
-	if err != nil || first.Number != 11 {
-		t.Fatalf("first load = %#v, %v", first, err)
-	}
-	second, err := loader.Load(context.Background(), pullRequestRepo)
-	if err != nil || second.Number != 11 {
-		t.Fatalf("cached load = %#v, %v", second, err)
-	}
-	if got := len(commandRunner.ghCalls()); got != 1 {
-		t.Fatalf("gh calls after a cache hit = %d, want 1", got)
-	}
-
-	// A different upstream identity is a different cache key.
-	script.setBranch("other", "origin", "refs/heads/other")
-	script.ghResponse = []byte(`[{"number":22,"state":"MERGED","headRefName":"other","headRepositoryOwner":{"login":"acme"}}]`)
-	third, err := loader.Load(context.Background(), pullRequestRepo)
-	if err != nil || third.Number != 22 {
-		t.Fatalf("new branch load = %#v, %v", third, err)
-	}
-	if got := len(commandRunner.ghCalls()); got != 2 {
-		t.Fatalf("gh calls after a branch change = %d, want 2", got)
-	}
-
-	// The same branch on a different remote is a different identity too.
-	script.setRemoteURL("git@github.com:other/widgets.git")
-	script.ghResponse = []byte(`[{"number":33,"state":"CLOSED","headRefName":"other","headRepositoryOwner":{"login":"other"}}]`)
-	fourth, err := loader.Load(context.Background(), pullRequestRepo)
-	if err != nil || fourth.Number != 33 {
-		t.Fatalf("new remote load = %#v, %v", fourth, err)
-	}
-	if got := len(commandRunner.ghCalls()); got != 3 {
-		t.Fatalf("gh calls after a remote change = %d, want 3", got)
+			value, err := loader.Load(context.Background(), pullRequestRepo)
+			if err != nil || value != test.wantBefore {
+				t.Fatalf("first load = %#v, %v, want %#v", value, err, test.wantBefore)
+			}
+			now = now.Add(loader.PullRequestFreshness())
+			script.ghResponse = []byte(test.after)
+			if value, err = loader.Load(context.Background(), pullRequestRepo); err != nil || value != test.wantAfter {
+				t.Fatalf("revalidated load = %#v, %v, want %#v", value, err, test.wantAfter)
+			}
+			if got := len(commandRunner.ghCalls()); got != 2 {
+				t.Fatalf("gh calls = %d, want 2 after freshness elapsed", got)
+			}
+		})
 	}
 }
 
-func TestPullRequestLoaderCachesAbsenceWithoutRerunningGh(t *testing.T) {
+func TestPullRequestLoaderReusesAFreshAnswer(t *testing.T) {
 	script := githubRepoScript()
-	script.ghResponse = []byte(`[]`)
+	script.ghResponse = []byte(`[{"number":11,"state":"OPEN","headRefName":"feature","headRepositoryOwner":{"login":"acme"}}]`)
 	commandRunner := &pullRequestRunner{script: script}
+	now := time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC)
 	loader := newTestPullRequestLoader(commandRunner)
+	loader.Now = func() time.Time { return now }
+
 	for i := 0; i < 3; i++ {
 		value, err := loader.Load(context.Background(), pullRequestRepo)
-		if err != nil || value.Number != 0 {
+		if err != nil || value.Number != 11 {
 			t.Fatalf("load %d = %#v, %v", i, value, err)
 		}
+		now = now.Add(loader.PullRequestFreshness() / 4)
 	}
 	if got := len(commandRunner.ghCalls()); got != 1 {
-		t.Fatalf("gh calls for an absent pull request = %d, want 1", got)
+		t.Fatalf("gh calls inside the freshness window = %d, want 1", got)
+	}
+}
+
+func TestParseGitHubRemoteAcceptsAndRejects(t *testing.T) {
+	for _, raw := range []string{
+		"/srv/git:archive@backup/widgets.git",
+		"/srv/git/widgets.git",
+		"git@:widgets.git",
+		"@github.com:acme/widgets.git",
+		"git@github.com:",
+		"git@github.com",
+		"/srv/git@github.com:acme/widgets.git",
+		"github.com:acme/widgets.git",
+		"git://gitlab.com/acme/widgets.git",
+	} {
+		if owner, repo, ok := parseGitHubRemote(raw); ok {
+			t.Fatalf("remote %q parsed as %s/%s", raw, owner, repo)
+		}
+	}
+	for _, test := range []struct{ raw, owner, repo string }{
+		{"git@github.com:acme/widgets.git", "acme", "widgets"},
+		{"ssh://git@github.com/acme/widgets.git", "acme", "widgets"},
+		{"https://github.com/acme/widgets", "acme", "widgets"},
+		{" git@github.com:acme/widgets.git\n", "acme", "widgets"},
+	} {
+		owner, repo, ok := parseGitHubRemote(test.raw)
+		if !ok || owner != test.owner || repo != test.repo {
+			t.Fatalf("remote %q = %s/%s, %t, want %s/%s", test.raw, owner, repo, ok, test.owner, test.repo)
+		}
 	}
 }
 
@@ -360,5 +430,12 @@ func TestPullRequestLoaderReportsConfiguredBounds(t *testing.T) {
 	configured.PerRepoTimeout = time.Second
 	if got := configured.PullRequestTimeout(); got != time.Second {
 		t.Fatalf("configured timeout = %v, want 1s", got)
+	}
+	if got := configured.PullRequestFreshness(); got != DefaultPullRequestFreshness {
+		t.Fatalf("default freshness = %v, want %v", got, DefaultPullRequestFreshness)
+	}
+	configured.Freshness = time.Minute
+	if got := configured.PullRequestFreshness(); got != time.Minute {
+		t.Fatalf("configured freshness = %v, want 1m", got)
 	}
 }

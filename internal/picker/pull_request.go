@@ -41,28 +41,44 @@ type PullRequestLoader interface {
 const (
 	DefaultPullRequestConcurrency = 2
 	DefaultPullRequestTimeout     = 2 * time.Second
+	// DefaultPullRequestFreshness bounds how long a completed answer, the
+	// absence of a request included, may be reused before the loader asks
+	// again.
+	DefaultPullRequestFreshness = 30 * time.Second
 )
 
 // GitHubPullRequestLoader asks gh for the pull request of a checkout's
-// upstream branch. It runs only when gh is on PATH and the checkout's remote
-// is GitHub, and it caches the answer by checkout and upstream identity so a
-// refresh does not re-query. Local Git metadata is derived with short-lived
-// commands; gh itself is never run against another forge.
+// upstream branch. It runs only when gh is on PATH and the branch tracks a
+// GitHub upstream ref exactly, and it caches each checkout's answer, absence
+// included, for a bounded freshness window so refresh and rendering paths do
+// not re-query. Local Git metadata is derived with short-lived commands; gh
+// itself is never run against another forge.
 type GitHubPullRequestLoader struct {
-	Runner         runner.CommandRunner
-	LookPath       func(string) (string, error)
+	Runner   runner.CommandRunner
+	LookPath func(string) (string, error)
+	Now      func() time.Time
+
 	MaxConcurrency int
 	PerRepoTimeout time.Duration
+	// Freshness overrides DefaultPullRequestFreshness.
+	Freshness time.Duration
 
 	mu    sync.Mutex
-	cache map[string]PullRequest
+	cache map[string]pullRequestCacheEntry
+}
+
+// pullRequestCacheEntry is one checkout's last completed answer and when it
+// was received.
+type pullRequestCacheEntry struct {
+	value     PullRequest
+	fetchedAt time.Time
 }
 
 // NewGitHubPullRequestLoader constructs a loader with bounded, short-lived
 // operations. A nil runner produces an error instead of falling back to
 // direct process execution; a nil LookPath uses exec.LookPath.
 func NewGitHubPullRequestLoader(commandRunner runner.CommandRunner) *GitHubPullRequestLoader {
-	return &GitHubPullRequestLoader{Runner: commandRunner, cache: make(map[string]PullRequest)}
+	return &GitHubPullRequestLoader{Runner: commandRunner, cache: make(map[string]pullRequestCacheEntry)}
 }
 
 func (l *GitHubPullRequestLoader) PullRequestConcurrency() int {
@@ -79,15 +95,29 @@ func (l *GitHubPullRequestLoader) PullRequestTimeout() time.Duration {
 	return l.PerRepoTimeout
 }
 
+// PullRequestFreshness reports how long a completed answer may be reused.
+func (l *GitHubPullRequestLoader) PullRequestFreshness() time.Duration {
+	if l == nil || l.Freshness <= 0 {
+		return DefaultPullRequestFreshness
+	}
+	return l.Freshness
+}
+
 // Load resolves the pull request for path. It never guesses: a detached
-// branch, a non-GitHub remote, a fork-owned head, a missing gh, an
-// unauthenticated gh, or a failed command all resolve to the zero value.
+// branch, a branch without an upstream, a non-GitHub remote, a fork-owned
+// head, a missing gh, an unauthenticated gh, or a failed command all resolve
+// to the zero value. A completed answer, absence included, is cached for the
+// freshness window; after it expires the next Load asks again.
 func (l *GitHubPullRequestLoader) Load(parent context.Context, path string) (PullRequest, error) {
 	if l == nil || l.Runner == nil {
 		return PullRequest{}, errors.New("pull request has no command runner")
 	}
 	if !l.ghAvailable() {
 		return PullRequest{}, nil
+	}
+	now := l.now()
+	if value, cached := l.fresh(path, now); cached {
+		return value, nil
 	}
 	ctx := parent
 	if ctx == nil {
@@ -102,22 +132,27 @@ func (l *GitHubPullRequestLoader) Load(parent context.Context, path string) (Pul
 	upstream, ok := loadCheckoutUpstream(ctx, l.Runner, path)
 	if !ok {
 		// A deadline or cancellation is not a silent absence: the command was
-		// interrupted, not answered. Everything else is.
+		// interrupted, not answered, so nothing is cached. Everything else is
+		// an absence, and is cached like any other answer.
 		if err := ctx.Err(); err != nil {
 			return PullRequest{}, err
 		}
+		l.store(path, PullRequest{}, now)
 		return PullRequest{}, nil
-	}
-	key := upstream.key(path)
-	if value, cached := l.cached(key); cached {
-		return value, nil
 	}
 	value, err := loadGitHubPullRequest(ctx, l.Runner, upstream)
 	if err != nil {
 		return PullRequest{}, err
 	}
-	l.store(key, value)
+	l.store(path, value, now)
 	return value, nil
+}
+
+func (l *GitHubPullRequestLoader) now() time.Time {
+	if l.Now != nil {
+		return l.Now()
+	}
+	return time.Now()
 }
 
 func (l *GitHubPullRequestLoader) ghAvailable() bool {
@@ -129,33 +164,31 @@ func (l *GitHubPullRequestLoader) ghAvailable() bool {
 	return err == nil
 }
 
-func (l *GitHubPullRequestLoader) cached(key string) (PullRequest, bool) {
+func (l *GitHubPullRequestLoader) fresh(path string, now time.Time) (PullRequest, bool) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	value, ok := l.cache[key]
-	return value, ok
+	entry, ok := l.cache[path]
+	l.mu.Unlock()
+	if !ok || now.Sub(entry.fetchedAt) >= l.PullRequestFreshness() {
+		return PullRequest{}, false
+	}
+	return entry.value, true
 }
 
-func (l *GitHubPullRequestLoader) store(key string, value PullRequest) {
+func (l *GitHubPullRequestLoader) store(path string, value PullRequest, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.cache == nil {
-		l.cache = make(map[string]PullRequest)
+		l.cache = make(map[string]pullRequestCacheEntry)
 	}
-	l.cache[key] = value
+	l.cache[path] = pullRequestCacheEntry{value: value, fetchedAt: now}
 }
 
-// checkoutUpstream is the identity the cache and the gh query are keyed on:
-// the GitHub repository a checkout pushes to and the branch its upstream
-// points at.
+// checkoutUpstream is the GitHub repository and head branch a checkout
+// resolves to. It is only built from an exact upstream lookup.
 type checkoutUpstream struct {
 	owner  string
 	repo   string
 	branch string
-}
-
-func (u checkoutUpstream) key(path string) string {
-	return path + "\x00" + u.owner + "\x00" + u.repo + "\x00" + u.branch
 }
 
 func loadCheckoutUpstream(ctx context.Context, commandRunner runner.CommandRunner, path string) (checkoutUpstream, bool) {
@@ -167,18 +200,21 @@ func loadCheckoutUpstream(ctx context.Context, commandRunner runner.CommandRunne
 	if branch == "" {
 		return checkoutUpstream{}, false
 	}
-	remote := "origin"
 	// for-each-ref reports the configured upstream remote and branch exactly,
 	// which avoids guessing where a remote name ends and a branch name
-	// begins in "origin/feature/something".
+	// begins in "origin/feature/something". A missing upstream or a failed
+	// lookup is not a reason to fall back to origin or to the local branch
+	// name: that could show somebody else's request.
 	upstreamOutput, err := commandRunner.Run(ctx, "git", "-C", path,
 		"for-each-ref",
 		"--format=%(refname)%09%(upstream:remotename)%09%(upstream:remoteref)",
 		"--", "refs/heads/"+branch)
-	if err == nil {
-		if name, ref, ok := parseUpstreamRef(string(upstreamOutput), branch); ok {
-			remote, branch = name, ref
-		}
+	if err != nil {
+		return checkoutUpstream{}, false
+	}
+	remote, upstreamBranch, ok := parseUpstreamRef(string(upstreamOutput), branch)
+	if !ok {
+		return checkoutUpstream{}, false
 	}
 	remoteOutput, err := commandRunner.Run(ctx, "git", "-C", path, "remote", "get-url", remote)
 	if err != nil {
@@ -188,7 +224,7 @@ func loadCheckoutUpstream(ctx context.Context, commandRunner runner.CommandRunne
 	if !ok {
 		return checkoutUpstream{}, false
 	}
-	return checkoutUpstream{owner: owner, repo: repo, branch: branch}, true
+	return checkoutUpstream{owner: owner, repo: repo, branch: upstreamBranch}, true
 }
 
 // parseUpstreamRef extracts the remote name and head branch from one
@@ -211,9 +247,11 @@ func parseUpstreamRef(output, branch string) (remote, ref string, ok bool) {
 }
 
 // parseGitHubRemote extracts the owner and repository from a github.com
-// remote URL, in scp-like, ssh, git, or https form. Any other host, and any
-// URL without an owner and repository, is not a GitHub upstream.
+// remote URL, in scp-like, ssh, git, or https form. Any other host, any local
+// pathname, and any URL without an owner and repository is not a GitHub
+// upstream.
 func parseGitHubRemote(raw string) (owner, repo string, ok bool) {
+	raw = strings.TrimSpace(raw)
 	var host, path string
 	switch {
 	case strings.Contains(raw, "://"):
@@ -222,9 +260,16 @@ func parseGitHubRemote(raw string) (owner, repo string, ok bool) {
 			return "", "", false
 		}
 		host, path = parsed.Hostname(), parsed.Path
-	case strings.Contains(raw, "@") && strings.Contains(raw, ":"):
-		rest := raw[strings.IndexByte(raw, '@')+1:]
+	case strings.Contains(raw, "@"):
+		// scp syntax is user@host:path. A local pathname may contain both the
+		// colon and the at sign, so the colon has to follow the user and host
+		// and neither may look like a path.
+		at := strings.IndexByte(raw, '@')
+		user, rest := raw[:at], raw[at+1:]
 		colon := strings.IndexByte(rest, ':')
+		if user == "" || strings.ContainsAny(user, "/:") || colon <= 0 {
+			return "", "", false
+		}
 		host, path = rest[:colon], rest[colon+1:]
 	default:
 		return "", "", false
