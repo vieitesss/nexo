@@ -15,6 +15,7 @@ import (
 	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/git"
 	"github.com/vieitesss/nexo/internal/lifecycle"
+	"github.com/vieitesss/nexo/internal/pathpolicy"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 	"github.com/vieitesss/nexo/internal/runner"
@@ -76,8 +77,147 @@ func (b *Backend) FocusPane(ctx context.Context, paneID string) error {
 	return err
 }
 
+// ProjectActive performs a read-only workspace inspection. Herdr workspace
+// metadata must include a project path for every live workspace; missing path
+// metadata is an unknown safety state, not proof that the project is unused.
+func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) {
+	if b == nil || b.Runner == nil {
+		return false, errors.New("herdr active-project check requires a command runner")
+	}
+	output, err := b.run(ctx, "workspace", "list")
+	if err != nil {
+		return false, err
+	}
+	workspaces, err := decodeWorkspaceList(output)
+	if err != nil {
+		return false, err
+	}
+	path = filepath.Clean(path)
+	for _, workspace := range workspaces {
+		usagePaths, usageErr := b.workspaceUsagePaths(ctx, workspace)
+		if usageErr != nil {
+			return false, usageErr
+		}
+		if len(usagePaths) == 0 {
+			return false, fmt.Errorf("workspace %q has no project or pane path", workspace.ID)
+		}
+		for _, workspacePath := range usagePaths {
+			if herdrPathContains(path, workspacePath) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (b *Backend) workspaceUsagePaths(ctx context.Context, value workspace) ([]string, error) {
+	paths := value.ProjectPaths()
+	inlinePanes := append(append([]workspacePane(nil), value.Panes...), panesFromTabs(value.Tabs)...)
+	paneCount := len(inlinePanes)
+	unknownPanePath := false
+	for _, pane := range inlinePanes {
+		if firstNonEmpty(pane.Path, pane.CWD, pane.WorkingDirectory) == "" {
+			unknownPanePath = true
+			break
+		}
+	}
+	// Workspace summaries from older Herdr versions expose only the root. Ask
+	// the pane service for the authoritative live cwd set whenever the summary
+	// does not account for every pane or leaves one pane's cwd unknown.
+	if value.ID == "" && (unknownPanePath || value.PaneCount > paneCount) {
+		return nil, errors.New("herdr workspace has uninspectable pane usage")
+	}
+	if value.ID != "" && (value.PaneCount == 0 || paneCount < value.PaneCount || unknownPanePath) {
+		output, err := b.run(ctx, "pane", "list", "--workspace", value.ID)
+		if err != nil {
+			return nil, err
+		}
+		panePaths, decodeErr := decodePanePaths(output)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if value.PaneCount > 0 && len(panePaths) < value.PaneCount {
+			return nil, fmt.Errorf("herdr workspace %q returned only %d of %d pane paths", value.ID, len(panePaths), value.PaneCount)
+		}
+		paths = append(paths, panePaths...)
+	}
+	return uniquePaths(paths), nil
+}
+
+func decodePanePaths(output []byte) ([]string, error) {
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(output, &envelope); err != nil {
+		return nil, fmt.Errorf("decode herdr pane list: %w", err)
+	}
+	raw := output
+	if len(envelope.Result) != 0 && string(envelope.Result) != "null" {
+		raw = envelope.Result
+	}
+	var result struct {
+		Type  string          `json:"type"`
+		Panes json.RawMessage `json:"panes"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("decode herdr pane list: %w", err)
+	}
+	if result.Type != "" && result.Type != "pane_list" {
+		return nil, fmt.Errorf("decode herdr pane list: unexpected result type %q", result.Type)
+	}
+	if len(result.Panes) == 0 || string(result.Panes) == "null" {
+		return nil, errors.New("herdr pane list omitted pane paths")
+	}
+	var panes []struct {
+		Path             string `json:"path"`
+		CWD              string `json:"cwd"`
+		WorkingDirectory string `json:"working_directory"`
+	}
+	if err := json.Unmarshal(result.Panes, &panes); err != nil {
+		return nil, fmt.Errorf("decode herdr pane list: %w", err)
+	}
+	paths := make([]string, 0, len(panes))
+	for _, pane := range panes {
+		panePath := firstNonEmpty(pane.Path, pane.CWD, pane.WorkingDirectory)
+		if panePath == "" {
+			return nil, errors.New("herdr pane list contains a pane without a path")
+		}
+		paths = append(paths, panePath)
+	}
+	return paths, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func uniquePaths(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func herdrPathContains(project, candidate string) bool {
+	info, err := os.Lstat(project)
+	selectedIsSymlink := err == nil && info.Mode()&os.ModeSymlink != 0
+	return pathpolicy.Contains(project, candidate, selectedIsSymlink, pathpolicy.OSResolver{})
+}
+
 var _ capabilities.AgentSource = (*Backend)(nil)
 var _ capabilities.PaneFocuser = (*Backend)(nil)
+var _ capabilities.ProjectUseChecker = (*Backend)(nil)
 
 // Error reports a failed Herdr operation and preserves Herdr's stderr.
 type Error struct {
@@ -485,6 +625,38 @@ type workspace struct {
 	Focused     bool              `json:"focused"`
 	ActiveTabID string            `json:"active_tab_id"`
 	PaneCount   int               `json:"pane_count"`
+	Path        string            `json:"path"`
+	CWD         string            `json:"cwd"`
+	Root        string            `json:"root"`
+	Worktree    string            `json:"worktree_path"`
+	Panes       []workspacePane   `json:"panes"`
+	Tabs        []workspaceTab    `json:"tabs"`
+}
+
+type workspaceTab struct {
+	Panes []workspacePane `json:"panes"`
+}
+
+type workspacePane struct {
+	Path             string `json:"path"`
+	CWD              string `json:"cwd"`
+	WorkingDirectory string `json:"working_directory"`
+}
+
+func (w workspace) ProjectPaths() []string {
+	paths := []string{w.Path, w.CWD, w.Root, w.Worktree}
+	for _, pane := range append(append([]workspacePane(nil), w.Panes...), panesFromTabs(w.Tabs)...) {
+		paths = append(paths, pane.Path, pane.CWD, pane.WorkingDirectory)
+	}
+	return uniquePaths(paths)
+}
+
+func panesFromTabs(tabs []workspaceTab) []workspacePane {
+	var panes []workspacePane
+	for _, tab := range tabs {
+		panes = append(panes, tab.Panes...)
+	}
+	return panes
 }
 
 // decodeWorkspaceList accepts the JSON envelope emitted by the Herdr CLI and

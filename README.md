@@ -224,6 +224,7 @@ nexo --help
 | `nexo previous` | Open the last non-proxy container on this machine other than the current one; it skips proxies, stale containers, and the current container, and is a no-op when nothing else is live. |
 | `nexo open PATH` | Open a discovered project candidate; add `--no-focus` to create or reuse its container without switching to it. Herdr also accepts `--workspace-id ID`. |
 | `nexo clone [--add-parent] SOURCE [DESTINATION]` | Clone a repository with Git; the optional flag adds the destination parent to project paths. Add `--json` for structured output. |
+| `nexo delete [--dry-run] [--permanent] [--force] PATH` | Preflight and delete one project candidate. Trash is the default; `--permanent` is explicit, `--force` accepts warnings, and `--dry-run` performs no mutation. Add `--json` for structured preflight output. |
 | `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, `close [MACHINE/CONTAINER]`, `previous`, `paste [KEY...]`, or `passthrough KEY...`. |
 | `nexo focus` | Record the container named by a backend focus event; it is the command declared by the Herdr plugin's `[[events]]` hook. |
 | `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch`, `--add-parent`, or `--no-focus`. |
@@ -254,6 +255,10 @@ nexo --backend=tmux --json open ~/src/api --no-focus
 
 # Clone a repository without opening its container.
 nexo --json clone git@github.com:owner/repo.git ~/src/repo
+
+# Inspect a candidate without changing it, then explicitly trash it.
+nexo --json delete --dry-run ~/src/repo
+nexo delete --force ~/src/repo
 
 # List and open configured remote containers.
 nexo --backend=tmux remote list --json
@@ -290,6 +295,8 @@ nexo --backend=tmux worktree extract --return-branch main \
   ~/src/api ~/worktrees/api
 ```
 
+Deletion always preflights the exact selected lexical path with `Lstat`: symlinks are removed as links, linked worktrees use non-force Git removal, and blockers (including active containers, path changes, dependent worktrees, remote failures, and Git refusals) cannot be overridden. Non-empty directories and local-only Git data require `--force`; trash failures never fall back to permanent deletion.
+
 See [docs/list-json.md](docs/list-json.md) for JSON shapes,
 [docs/worktree.md](docs/worktree.md) for worktree creation and extraction, and
 [skills/nexo/SKILL.md](skills/nexo/SKILL.md) for automation recipes, exit
@@ -308,6 +315,7 @@ statuses, and safe verification.
 | `Ctrl-O` | Open the clone form for the selected Projects row |
 | `Ctrl-D` | Open the new-directory form in the Projects tab |
 | `Ctrl-E` | Open the branch-extraction form for the selected Git checkout or worktree |
+| `Ctrl-Y` | Open the delete preflight and confirmation form for the selected Projects row |
 | `Ctrl-X` | Kill marked or selected containers after confirmation |
 | `Ctrl-R` | Rename the selected container |
 | `Esc` / `Ctrl-C` | Clear search, then close / close |

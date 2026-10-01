@@ -83,9 +83,9 @@ func TestDiscoverEmptyHomeSkipsHomeExpansionsAndGitDiscovery(t *testing.T) {
 	}
 }
 
-func TestCanonicalRejectsEmptyPath(t *testing.T) {
-	if _, err := canonical(""); err == nil {
-		t.Fatal("canonical(\"\") error = nil, want rejection")
+func TestValidateDirectoryRejectsEmptyPath(t *testing.T) {
+	if err := validateDirectory(""); err == nil {
+		t.Fatal("validateDirectory(\"\") error = nil, want rejection")
 	}
 }
 
@@ -100,8 +100,41 @@ func TestDiscoverCanonicalizesAndDeduplicatesCandidates(t *testing.T) {
 	}
 
 	got := Discover(config.ProjectsConfig{Paths: []string{root, link}}, home)
-	if len(got.Candidates) != 1 || got.Candidates[0].Path != candidate {
-		t.Fatalf("candidates = %#v, want one canonical candidate", got.Candidates)
+	want := []Candidate{
+		{Path: candidate, Group: root},
+		{Path: filepath.Join(link, "one"), Group: link},
+	}
+	if !reflect.DeepEqual(got.Candidates, want) {
+		t.Fatalf("candidates = %#v, want lexical aliases %#v", got.Candidates, want)
+	}
+}
+
+func TestDiscoverPreservesLinkedParentAndHomeGitAssociation(t *testing.T) {
+	home := t.TempDir()
+	realParent := filepath.Join(home, "real-parent")
+	if err := os.MkdirAll(filepath.Join(realParent, "repo", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkedParent := filepath.Join(home, "linked-parent")
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	configured := Discover(config.ProjectsConfig{Paths: []string{linkedParent}}, home)
+	if len(configured.Candidates) != 1 || configured.Candidates[0].Path != filepath.Join(linkedParent, "repo") || !configured.Candidates[0].Git || configured.Candidates[0].Group != linkedParent {
+		t.Fatalf("linked parent discovery = %#v, want lexical Git candidate", configured.Candidates)
+	}
+
+	realHome := filepath.Join(home, "real-home")
+	if err := os.MkdirAll(filepath.Join(realHome, "home-repo", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkedHome := filepath.Join(home, "linked-home")
+	if err := os.Symlink(realHome, linkedHome); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	fromHome := Discover(config.ProjectsConfig{GitFromHome: true}, linkedHome)
+	if len(fromHome.Candidates) != 1 || fromHome.Candidates[0].Path != filepath.Join(linkedHome, "home-repo") || !fromHome.Candidates[0].Git {
+		t.Fatalf("linked HOME discovery = %#v, want lexical Git candidate", fromHome.Candidates)
 	}
 }
 
@@ -115,6 +148,61 @@ func TestDiscoverWarnsAndSkipsMissingOrUnreadablePaths(t *testing.T) {
 	}
 	if len(got.Warnings) != 2 || got.Warnings[0] == "" || got.Warnings[1] == "" {
 		t.Fatalf("warnings = %#v, want warnings for both paths", got.Warnings)
+	}
+}
+
+func TestDiscoverPreservesSymlinkCandidatePath(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "projects")
+	target := filepath.Join(home, "target")
+	mustMkdir(t, root)
+	mustMkdir(t, filepath.Join(target, ".git"))
+	link := filepath.Join(root, "alias")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	got := Discover(config.ProjectsConfig{Paths: []string{root}}, home)
+	if len(got.Candidates) != 1 || got.Candidates[0].Path != link {
+		t.Fatalf("candidates = %#v, want lexical symlink %q", got.Candidates, link)
+	}
+}
+
+func TestDiscoverDoesNotTraverseWildcardSymlinkParentsOrDropDanglingLinks(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "projects")
+	realGroup := filepath.Join(root, "real")
+	if err := os.MkdirAll(filepath.Join(realGroup, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realGroup, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	missing := filepath.Join(root, "missing")
+	if err := os.Symlink(filepath.Join(home, "gone"), missing); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	wildcard := Discover(config.ProjectsConfig{Paths: []string{root + string(filepath.Separator) + "*"}}, home)
+	wantWildcard := []Candidate{
+		{Path: filepath.Join(alias, "child"), Group: alias},
+		{Path: filepath.Join(realGroup, "child"), Group: realGroup},
+	}
+	if !reflect.DeepEqual(wildcard.Candidates, wantWildcard) {
+		t.Fatalf("wildcard candidates = %#v, want lexical alias and real rows %#v", wildcard.Candidates, wantWildcard)
+	}
+	direct := Discover(config.ProjectsConfig{Paths: []string{root}}, home)
+	found := false
+	for _, candidate := range direct.Candidates {
+		if candidate.Path == missing {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("dangling link was not retained: %#v", direct.Candidates)
 	}
 }
 

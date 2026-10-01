@@ -9,6 +9,9 @@ func Names(backend any) []string {
 	if _, ok := backend.(ProjectOpener); ok {
 		names = append(names, "ProjectOpener")
 	}
+	if _, ok := backend.(ProjectUseChecker); ok {
+		names = append(names, "ProjectUseChecker")
+	}
 	if _, ok := backend.(WorktreeCreator); ok {
 		names = append(names, "WorktreeCreator")
 	}

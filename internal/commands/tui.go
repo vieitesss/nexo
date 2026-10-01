@@ -12,6 +12,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/deletion"
 	"github.com/vieitesss/nexo/internal/destination"
 	gitops "github.com/vieitesss/nexo/internal/git"
 	"github.com/vieitesss/nexo/internal/lifecycle"
@@ -165,6 +166,22 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 			Repo: repo, Destination: destination, ReturnBranch: returnBranch,
 		})
 	}
+	deps.DeleteFingerprint = func(_ context.Context, path string) (string, error) {
+		return deletion.Fingerprint(deletion.OSFileSystem{}, path)
+	}
+	deps.DeletePreflight = func(deleteCtx context.Context, path, identity string) (deletion.Plan, error) {
+		return preflightDelete(deleteCtx, invocation, lexicalAbs(path), identity)
+	}
+	deps.DeleteProjectPlan = func(deleteCtx context.Context, plan deletion.Plan, permanent, force bool) error {
+		if len(plan.Blockers) > 0 {
+			return fmt.Errorf("delete blocked: %s", findingText(plan.Blockers))
+		}
+		if plan.HasWarnings() && !force {
+			return fmt.Errorf("delete requires --force: %s", findingText(plan.Warnings))
+		}
+		return executeDelete(deleteCtx, invocation, plan, force, permanent)
+	}
+
 	deps.OpenProject = func(openCtx context.Context, place picker.Place) error {
 		opener, ok := invocation.Adapter.(capabilities.ProjectOpener)
 		if !ok {
