@@ -1786,7 +1786,7 @@ func (m Model) rowText(row row) (string, string) {
 		if row.remoteErr != "" {
 			value += muted().Render("  " + sanitize(row.remoteErr))
 		} else if row.remoteWarn != "" {
-			value += muted().Faint(true).Render("  " + sanitize(row.remoteWarn))
+			value += yellow().Render("  " + sanitize(row.remoteWarn))
 		} else if row.loading {
 			value += muted().Render("  loading…")
 		}
