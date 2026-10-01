@@ -156,7 +156,7 @@ func TestOpenProjectFocusesWorkspaceWithExactTargetLabel(t *testing.T) {
 	}}
 	backend := New(runner)
 
-	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
+	if _, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
 
@@ -175,7 +175,7 @@ func TestOpenProjectFocusesWorkspaceWhoseLabelContainsDirectoryName(t *testing.T
 	}}
 	backend := New(runner)
 
-	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
+	if _, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
 
@@ -194,7 +194,7 @@ func TestOpenProjectFocusesFirstWorkspaceWhenLabelsBothContainDirectoryName(t *t
 	}}
 	backend := New(runner)
 
-	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
+	if _, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
 
@@ -213,7 +213,7 @@ func TestOpenProjectCreatesWorkspaceWhenNoLabelMatches(t *testing.T) {
 	}}
 	backend := New(runner)
 
-	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
+	if _, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
 
@@ -232,7 +232,7 @@ func TestOpenProjectDoesNotUseOtherWorkspaceTabPath(t *testing.T) {
 	}}
 	backend := New(runner)
 
-	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
+	if _, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
 
@@ -257,12 +257,87 @@ func TestOpenProjectWorkspaceIDForcesFocus(t *testing.T) {
 	runner := &fakeRunner{}
 	backend := New(runner)
 
-	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{ContainerID: "workspace-forced"}); err != nil {
+	if _, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{ContainerID: "workspace-forced"}); err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
 
 	want := []call{{name: "herdr", args: []string{"workspace", "focus", "workspace-forced"}}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestOpenProjectNoFocusReusesWorkspaceWithoutFocus(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-exact","label":"acme_app"}]}}`),
+	}}
+	backend := New(runner)
+
+	container, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{NoFocus: true})
+	if err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+
+	want := []call{{name: "herdr", args: []string{"workspace", "list"}}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want no workspace focus: %#v", runner.calls, want)
+	}
+	if container.ID != "workspace-exact" || container.Name != "acme_app" || container.Path != "/work/acme/app" || container.Created {
+		t.Fatalf("container = %#v, want reused workspace", container)
+	}
+}
+
+func TestOpenProjectNoFocusCreatesWorkspaceWithoutFocusFlag(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-other","label":"other"}]}}`),
+		"workspace create --cwd /work/acme/app --label acme_app": []byte(`{"result":{"type":"workspace_created","workspace":{"workspace_id":"workspace-new","label":"acme_app"}}}`),
+	}}
+	backend := New(runner)
+
+	container, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{NoFocus: true})
+	if err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+
+	want := []call{
+		{name: "herdr", args: []string{"workspace", "list"}},
+		{name: "herdr", args: []string{"workspace", "create", "--cwd", "/work/acme/app", "--label", "acme_app"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want create without --focus: %#v", runner.calls, want)
+	}
+	if container.ID != "workspace-new" || container.Name != "acme_app" || !container.Created {
+		t.Fatalf("container = %#v, want created workspace", container)
+	}
+}
+
+func TestOpenProjectNoFocusWorkspaceIDVerifiesExisting(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-1","label":"renamed"}]}}`),
+	}}
+	backend := New(runner)
+
+	container, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{ContainerID: "workspace-1", NoFocus: true})
+	if err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+
+	want := []call{{name: "herdr", args: []string{"workspace", "list"}}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want verification only: %#v", runner.calls, want)
+	}
+	if container.ID != "workspace-1" || container.Name != "renamed" || container.Created {
+		t.Fatalf("container = %#v, want existing workspace", container)
+	}
+}
+
+func TestOpenProjectNoFocusWorkspaceIDRejectsMissing(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[]}}`),
+	}}
+	backend := New(runner)
+
+	if _, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{ContainerID: "missing", NoFocus: true}); err == nil {
+		t.Fatal("OpenProject() error = nil, want missing workspace error")
 	}
 }

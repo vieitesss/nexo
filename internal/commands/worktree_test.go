@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -134,15 +135,56 @@ func TestWorktreeCreateCommandAcceptsDocumentedInvocation(t *testing.T) {
 	}
 }
 
+func TestWorktreeCreateCommandJSONIncludesContainer(t *testing.T) {
+	creator := &fakeWorktreeCreator{result: capabilities.Worktree{
+		Path:   "/tmp/created",
+		Branch: "feature",
+		Container: capabilities.OpenedContainer{
+			ID: "$12", Name: "repo_feature", Path: "/tmp/created", Created: true,
+		},
+	}}
+	command, _ := NewRegistry().Lookup("worktree")
+	var output strings.Builder
+	if err := command.Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Adapter:   creator,
+		Args:      []string{"create", "--no-focus", "/repo", "feature", "/tmp/created"},
+		Stdout:    &output,
+		JSON:      true,
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	var got struct {
+		Path      string `json:"path"`
+		Branch    string `json:"branch"`
+		Container struct {
+			Backend string `json:"backend"`
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Path    string `json:"path"`
+			Created bool   `json:"created"`
+		} `json:"container"`
+	}
+	if err := json.Unmarshal([]byte(output.String()), &got); err != nil {
+		t.Fatalf("decode output %q: %v", output.String(), err)
+	}
+	if got.Path != "/tmp/created" || got.Branch != "feature" || got.Container.Backend != "tmux" || got.Container.ID != "$12" || got.Container.Name != "repo_feature" || !got.Container.Created {
+		t.Fatalf("output = %#v", got)
+	}
+	if !creator.options.NoFocus {
+		t.Fatalf("options = %#v, want NoFocus", creator.options)
+	}
+}
+
 func TestParseWorktreeCreateArgs(t *testing.T) {
-	parsed, err := parseWorktreeCreateArgs([]string{"create", "--add-parent", "/repo", "branch", "/tmp/destination", "--new-branch"})
+	parsed, err := parseWorktreeCreateArgs([]string{"create", "--add-parent", "--no-focus", "/repo", "branch", "/tmp/destination", "--new-branch"})
 	if err != nil {
 		t.Fatalf("parseWorktreeCreateArgs() error = %v", err)
 	}
-	if !parsed.AddParent || !parsed.NewBranch || parsed.Repo != "/repo" || parsed.Branch != "branch" || parsed.Destination != "/tmp/destination" {
+	if !parsed.AddParent || !parsed.NewBranch || !parsed.NoFocus || parsed.Repo != "/repo" || parsed.Branch != "branch" || parsed.Destination != "/tmp/destination" {
 		t.Fatalf("parsed = %#v", parsed)
 	}
-	for _, args := range [][]string{{"create", "/repo", "branch"}, {"create", "--unknown", "/repo", "branch", "/tmp/destination"}} {
+	for _, args := range [][]string{{"create", "/repo", "branch"}, {"create", "--unknown", "/repo", "branch", "/tmp/destination"}, {"create", "--no-focus", "--no-focus", "/repo", "branch", "/tmp/destination"}} {
 		if _, err := parseWorktreeCreateArgs(args); err == nil {
 			t.Fatalf("parseWorktreeCreateArgs(%v) error = nil", args)
 		}

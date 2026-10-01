@@ -21,6 +21,7 @@ type worktreeCreateArgs struct {
 	Destination string
 	NewBranch   bool
 	AddParent   bool
+	NoFocus     bool
 }
 
 func init() {
@@ -70,6 +71,7 @@ func (worktreeCommand) Run(ctx context.Context, invocation Invocation) error {
 		Branch:      parsed.Branch,
 		Destination: parsed.Destination,
 		NewBranch:   parsed.NewBranch,
+		NoFocus:     parsed.NoFocus,
 	})
 	if err != nil {
 		if restore != nil {
@@ -93,7 +95,11 @@ func (worktreeCommand) Run(ctx context.Context, invocation Invocation) error {
 
 	var outputErr error
 	if invocation.JSON {
-		outputErr = json.NewEncoder(invocation.Stdout).Encode(result)
+		outputErr = json.NewEncoder(invocation.Stdout).Encode(worktreeJSON{
+			Path:      result.Path,
+			Branch:    result.Branch,
+			Container: newOpenedContainerJSON(string(invocation.Selection.Kind), result.Container),
+		})
 	} else {
 		_, outputErr = fmt.Fprintf(invocation.Stdout, "created worktree %s on %s\n", result.Path, result.Branch)
 	}
@@ -118,6 +124,14 @@ func (worktreeCommand) Run(ctx context.Context, invocation Invocation) error {
 	return outputErr
 }
 
+// worktreeJSON is the documented worktree result plus the container the
+// creator opened for it.
+type worktreeJSON struct {
+	Path      string              `json:"path"`
+	Branch    string              `json:"branch"`
+	Container openedContainerJSON `json:"container"`
+}
+
 func parseWorktreeCreateArgs(args []string) (worktreeCreateArgs, error) {
 	if len(args) == 0 || args[0] != "create" {
 		return worktreeCreateArgs{}, errors.New("worktree requires the create subcommand")
@@ -137,6 +151,11 @@ func parseWorktreeCreateArgs(args []string) (worktreeCreateArgs, error) {
 				return worktreeCreateArgs{}, errors.New("--add-parent may be provided only once")
 			}
 			parsed.AddParent = true
+		case "--no-focus":
+			if parsed.NoFocus {
+				return worktreeCreateArgs{}, errors.New("--no-focus may be provided only once")
+			}
+			parsed.NoFocus = true
 		case "":
 			return worktreeCreateArgs{}, errors.New("worktree create arguments may not be empty")
 		default:

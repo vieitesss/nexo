@@ -131,7 +131,8 @@ func (a localContainerActions) OpenContainer(ctx context.Context, id string) err
 	// Keep the existing project-opener seam usable for adapters that model an
 	// existing container as an OpenOptions selection.
 	if opener, ok := a.adapter.(capabilities.ProjectOpener); ok {
-		return opener.OpenProject(ctx, "", capabilities.OpenOptions{ContainerID: id})
+		_, err := opener.OpenProject(ctx, "", capabilities.OpenOptions{ContainerID: id})
+		return err
 	}
 	return errors.New("local backend does not support opening containers")
 }

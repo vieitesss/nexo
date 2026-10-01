@@ -45,6 +45,28 @@ func TestCreateWorktreeUsesExistingHerdrBranch(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeNoFocusOmitsFocusFlag(t *testing.T) {
+	runner := &fakeRunner{}
+	destination := filepath.Join(t.TempDir(), "feature")
+	got, err := New(runner).CreateWorktree(context.Background(), capabilities.WorktreeCreateOptions{
+		Repo:        "/repo",
+		Branch:      "feature",
+		Destination: destination,
+		NewBranch:   true,
+		NoFocus:     true,
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree() error = %v", err)
+	}
+	want := []call{{name: "herdr", args: []string{"worktree", "create", "--cwd", "/repo", "--branch", "feature", "--base", "HEAD", "--path", destination}}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want no --focus: %#v", runner.calls, want)
+	}
+	if !got.Container.Created || got.Container.Path != destination {
+		t.Fatalf("container = %#v, want created worktree container", got.Container)
+	}
+}
+
 func TestCreateExistingWorktreeDestinationFailsBeforeRunner(t *testing.T) {
 	runner := &fakeRunner{}
 	destination := filepath.Join(t.TempDir(), "existing")

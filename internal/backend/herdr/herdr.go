@@ -109,17 +109,26 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 	if options.NewBranch {
 		args = append(args, "--base", "HEAD")
 	}
-	args = append(args, "--path", path, "--focus")
+	args = append(args, "--path", path)
+	if !options.NoFocus {
+		args = append(args, "--focus")
+	}
 	output, err := b.run(ctx, args[0], args[1:]...)
 	if err != nil {
 		return capabilities.Worktree{}, err
+	}
+	workspace := decodeWorktreeWorkspace(output)
+	name := workspace.Label
+	if name == "" {
+		name = projects.TargetName(path)
 	}
 	return capabilities.Worktree{
 		Path:        path,
 		Branch:      options.Branch,
 		Repo:        options.Repo,
 		NewBranch:   options.NewBranch,
-		ContainerID: decodeWorktreeWorkspaceID(output),
+		ContainerID: workspace.ID,
+		Container:   capabilities.OpenedContainer{ID: workspace.ID, Name: name, Path: path, Created: true},
 	}, nil
 }
 
@@ -135,69 +144,111 @@ func (b *Backend) RemoveWorktree(ctx context.Context, worktree capabilities.Work
 	return err
 }
 
-func decodeWorktreeWorkspaceID(output []byte) string {
+func decodeWorktreeWorkspace(output []byte) workspace {
 	if len(output) == 0 {
-		return ""
+		return workspace{}
 	}
 	var envelope struct {
 		Result json.RawMessage `json:"result"`
 	}
 	if json.Unmarshal(output, &envelope) != nil {
-		return ""
+		return workspace{}
 	}
 	raw := output
 	if len(envelope.Result) != 0 && string(envelope.Result) != "null" {
 		raw = envelope.Result
 	}
 	var result struct {
-		Workspace struct {
-			ID string `json:"workspace_id"`
-		} `json:"workspace"`
+		Workspace workspace `json:"workspace"`
 	}
 	if json.Unmarshal(raw, &result) != nil {
-		return ""
+		return workspace{}
 	}
-	return result.Workspace.ID
+	return result.Workspace
 }
 
 // OpenProject focuses an existing Herdr workspace selected by label, or
-// creates and focuses a workspace for path when none is found.
-func (b *Backend) OpenProject(ctx context.Context, path string, options capabilities.OpenOptions) error {
+// creates a workspace for path when none is found. With NoFocus it reuses or
+// creates the workspace without moving the user's view to it.
+func (b *Backend) OpenProject(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
 	if b == nil || b.Runner == nil {
-		return errors.New("herdr project opener requires a command runner")
+		return capabilities.OpenedContainer{}, errors.New("herdr project opener requires a command runner")
 	}
 	if options.ContainerID != "" {
-		_, err := b.run(ctx, "workspace", "focus", options.ContainerID)
-		return err
+		return b.openWorkspaceByID(ctx, path, options)
 	}
 
 	output, err := b.run(ctx, "workspace", "list")
 	if err != nil {
-		return err
+		return capabilities.OpenedContainer{}, err
 	}
 	workspaces, err := decodeWorkspaceList(output)
 	if err != nil {
-		return err
+		return capabilities.OpenedContainer{}, err
 	}
 
 	target := projects.TargetName(path)
+	directory := filepath.Base(filepath.Clean(path))
+	if workspace, ok := matchWorkspace(workspaces, target, directory); ok {
+		if !options.NoFocus {
+			if _, err := b.run(ctx, "workspace", "focus", workspace.ID); err != nil {
+				return capabilities.OpenedContainer{}, err
+			}
+		}
+		return capabilities.OpenedContainer{ID: workspace.ID, Name: workspace.Label, Path: path}, nil
+	}
+
+	args := []string{"workspace", "create", "--cwd", path, "--label", target}
+	if !options.NoFocus {
+		args = append(args, "--focus")
+	}
+	createdOutput, err := b.run(ctx, args[0], args[1:]...)
+	if err != nil {
+		return capabilities.OpenedContainer{}, err
+	}
+	created := decodeWorktreeWorkspace(createdOutput)
+	name := created.Label
+	if name == "" {
+		name = target
+	}
+	return capabilities.OpenedContainer{ID: created.ID, Name: name, Path: path, Created: true}, nil
+}
+
+func (b *Backend) openWorkspaceByID(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
+	if !options.NoFocus {
+		_, err := b.run(ctx, "workspace", "focus", options.ContainerID)
+		return capabilities.OpenedContainer{ID: options.ContainerID, Path: path}, err
+	}
+	output, err := b.run(ctx, "workspace", "list")
+	if err != nil {
+		return capabilities.OpenedContainer{}, err
+	}
+	workspaces, err := decodeWorkspaceList(output)
+	if err != nil {
+		return capabilities.OpenedContainer{}, err
+	}
+	for _, workspace := range workspaces {
+		if workspace.ID == options.ContainerID {
+			return capabilities.OpenedContainer{ID: workspace.ID, Name: workspace.Label, Path: path}, nil
+		}
+	}
+	return capabilities.OpenedContainer{}, fmt.Errorf("herdr workspace %q not found", options.ContainerID)
+}
+
+// matchWorkspace prefers an exact label match and falls back to a workspace
+// whose label contains the project directory name.
+func matchWorkspace(workspaces []workspace, target, directory string) (workspace, bool) {
 	for _, workspace := range workspaces {
 		if workspace.Label == target {
-			_, err := b.run(ctx, "workspace", "focus", workspace.ID)
-			return err
+			return workspace, true
 		}
 	}
-
-	directory := filepath.Base(filepath.Clean(path))
 	for _, workspace := range workspaces {
 		if strings.Contains(workspace.Label, directory) {
-			_, err := b.run(ctx, "workspace", "focus", workspace.ID)
-			return err
+			return workspace, true
 		}
 	}
-
-	_, err = b.run(ctx, "workspace", "create", "--cwd", path, "--label", target, "--focus")
-	return err
+	return workspace{}, false
 }
 
 type workspace struct {

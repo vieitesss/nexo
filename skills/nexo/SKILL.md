@@ -247,6 +247,35 @@ An empty successful listing omits `containers`; a failed machine reports
 ]
 ```
 
+### Open a project: `nexo open`
+
+Use this when an agent launcher must create or reuse a project's container
+without moving the user's view, and needs the container id back to open windows
+or tabs inside it. `--no-focus` creates the tmux session or Herdr workspace
+when it is missing, reuses it when it exists, and never switches the client or
+focuses the workspace. Herdr also accepts `--workspace-id ID`, which with
+`--no-focus` only verifies that the workspace exists.
+
+```console
+nexo --backend=tmux --json open /home/me/src/api --no-focus
+```
+
+With `--json` the command writes one object. `backend` is the selected backend,
+`id` is the tmux session id or the Herdr workspace id, `name` is the session
+name or workspace label, `path` is the project path, and `created` reports
+whether this call created the container. Without `--json`, a `--no-focus` open
+prints one line and a plain open prints nothing.
+
+```json
+{
+  "backend": "tmux",
+  "id": "$12",
+  "name": "src_api",
+  "path": "/home/me/src/api",
+  "created": true
+}
+```
+
 ### Git worktrees: `worktree create`
 
 Use this when creating a worktree and handing its canonical result to the next
@@ -259,21 +288,30 @@ nexo --backend=tmux --json worktree create --new-branch \
   /home/me/repo feature/example /home/me/worktrees/example
 ```
 
-`--json` changes only the output: creation still opens the new worktree as a
-container and focuses it. On Herdr, Herdr creates the worktree workspace and
-focuses it. On tmux, a client inside tmux switches to the new session; outside
-tmux, the command attaches to it interactively and inherits the process stdout,
-so run it from a real terminal. A piped invocation outside tmux fails the
-attach, rolls back the worktree, and returns status `1` with no JSON.
+`--no-focus` creates and opens the worktree container without moving the
+user's view: on tmux it skips the switch or attach, and on Herdr it omits
+`--focus`. Without `--no-focus`, creation still opens the container and focuses
+it. On tmux, a client inside tmux switches to the new session; outside tmux,
+the command attaches to it interactively and inherits the process stdout, so
+run it from a real terminal. A piped invocation outside tmux fails the attach,
+rolls back the worktree, and returns status `1` with no JSON.
 
-The output is one object with only `path` and `branch`. The encoder deliberately
-omits the input repository, the `--new-branch` choice, backend container ID,
-and session name.
+The output is one object with `path`, `branch`, and the `container` the creator
+opened. The container uses the same shape as `nexo open --json`: `backend`,
+`id`, `name`, `path`, and `created`. The encoder deliberately omits the input
+repository, the `--new-branch` choice, backend container ID, and session name.
 
 ```json
 {
   "path": "/home/me/worktrees/example",
-  "branch": "feature/example"
+  "branch": "feature/example",
+  "container": {
+    "backend": "tmux",
+    "id": "$12",
+    "name": "worktrees_example",
+    "path": "/home/me/worktrees/example",
+    "created": true
+  }
 }
 ```
 
