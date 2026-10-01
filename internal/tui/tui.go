@@ -70,6 +70,7 @@ type Deps struct {
 	AgentSource          capabilities.AgentSource
 	AgentRefreshInterval time.Duration
 	GitLoader            picker.GitLoader
+	PullRequestLoader    picker.PullRequestLoader
 	RemoteCommands       []tea.Cmd
 	RemoteMachines       []string
 
@@ -132,6 +133,13 @@ func gitConcurrency(loader picker.GitLoader) int {
 		return configured.GitConcurrency()
 	}
 	return 4
+}
+
+func pullRequestConcurrency(loader picker.PullRequestLoader) int {
+	if configured, ok := loader.(interface{ PullRequestConcurrency() int }); ok && configured.PullRequestConcurrency() > 0 {
+		return configured.PullRequestConcurrency()
+	}
+	return picker.DefaultPullRequestConcurrency
 }
 
 func validTab(tab Tab) bool {
@@ -208,6 +216,13 @@ type containersMsg struct {
 type remoteMsg struct {
 	generation int
 	batch      picker.RemoteBatch
+}
+
+type pullRequestMsg struct {
+	generation  int
+	path        string
+	pullRequest picker.PullRequest
+	err         error
 }
 
 type actionMsg struct {
@@ -463,7 +478,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case picker.GitContextMsg:
 		m.applyGit(msg)
-		return m, nil
+		if msg.Err != nil {
+			return m, nil
+		}
+		return m, m.source.pullRequestCommand(msg.Path)
 	case tea.KeyMsg:
 		m.autoTab = false
 		m.userInteracted = true
@@ -520,6 +538,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if update.projectsUpdated {
 			m.deps.Projects = append([]picker.Place(nil), update.projects...)
 		}
+		if update.pullRequest != nil {
+			m.applyPullRequest(*update.pullRequest)
+		}
 		if update.changed || tabChanged {
 			m.rebuildSource()
 		}
@@ -543,6 +564,26 @@ func (m Model) keyFrame() inputFrame {
 // The layout is built once, only for a click that reaches hit testing.
 func (m Model) mouseFrame() inputFrame {
 	return inputFrame{rows: m.rows, render: m.frame}
+}
+
+// applyPullRequest decorates one project place with the accepted pull
+// request result. A zero request, a failed command, and a missing candidate
+// all clear the badge; failures never reach the footer.
+func (m *Model) applyPullRequest(msg pullRequestMsg) {
+	for i := range m.deps.Projects {
+		if m.deps.Projects[i].Path != msg.path {
+			continue
+		}
+		if msg.pullRequest.Number <= 0 || msg.pullRequest.State == "" {
+			m.deps.Projects[i].PullRequest = nil
+			continue
+		}
+		value := msg.pullRequest
+		m.deps.Projects[i].PullRequest = &value
+	}
+	if m.catalog != nil {
+		m.catalog.SetProjects(m.deps.Projects)
+	}
 }
 
 func (m *Model) applyGit(msg picker.GitContextMsg) {

@@ -44,10 +44,23 @@ terminal is too narrow, the name column is capped proportionally before lower
 priority columns are reduced or removed. In search results the containing folder
 is shown to the left of the name as a path (`~/work/prefapp/gitops-k8s`),
 right-aligned and ending in `/` so names stay aligned. The branch and its Git
-summary (`⎇ main  +12 −3 * ↑1 ↓2`) share the column after the name; the branch
-truncates before the summary. The folder truncates from the left with `…` and is
-dropped before the name loses characters. Matched characters in names, branches,
-and visible folders are highlighted independently within their cells.
+summary (`⎇ main  #12  +12 −3 * ↑1 ↓2`) share the column after the name; the
+branch truncates before the summary and the pull request badge. The folder
+truncates from the left with `…` and is dropped before the name loses
+characters. Matched characters in names, branches, and visible folders are
+highlighted independently within their cells.
+
+## Pull request state
+
+The Projects tab shows `#123` beside the branch when the checkout's upstream
+branch has a pull request: green for open, magenta for merged, and red for
+closed, as terminal ANSI colours. The badge loads asynchronously after the
+local Git context and is cached by checkout and upstream identity, so it never
+delays the first frame, a search keystroke, or a refresh. The badge appears
+only when `gh` is on `PATH`, the checkout's remote is on github.com, and the
+request's head owner and branch match the upstream. No request, a fork-owned or
+mismatched head, missing authentication, a network failure, and a missing `gh`
+all leave the row unchanged and show no error.
 
 ## Keys
 

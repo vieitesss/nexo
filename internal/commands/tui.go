@@ -122,6 +122,7 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 	}
 	if invocation.Runner != nil {
 		deps.GitLoader = picker.NewGitContextLoader(invocation.Runner)
+		deps.PullRequestLoader = picker.NewGitHubPullRequestLoader(invocation.Runner)
 	}
 	deps.RemoteCommands = remotePlaceCommands(ctx, invocation)
 	deps.RemoteMachines = append([]string(nil), invocation.Config.Remote.ConfiguredMachines()...)

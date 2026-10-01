@@ -43,7 +43,7 @@ agent navigator are built with Bubble Tea and use nexo's own fuzzy ranking.
   </tr>
   <tr>
     <td valign="top" width="33%"><h4>🔔 Notifications</h4><p>The tmux watcher sends durable working-to-stopped desktop notifications with optional sound. Herdr's native agent state and notification settings remain authoritative.</p></td>
-    <td valign="top" width="33%"><h4>🌿 Git context</h4><p>Project rows can show branch or short SHA identity, additions and deletions, dirty state, and cached local ahead/behind divergence without fetching.</p></td>
+    <td valign="top" width="33%"><h4>🌿 Git context</h4><p>Project rows can show branch or short SHA identity, additions and deletions, dirty state, cached local ahead/behind divergence without fetching, and a colour-coded pull request number when <code>gh</code> and a GitHub upstream are available.</p></td>
     <td valign="top" width="33%"><h4>⚙️ Two backends</h4><p>Use tmux or Herdr through one backend-neutral CLI and one TOML configuration. Thin adapters call the binary while each multiplexer keeps its native capabilities.</p></td>
   </tr>
 </table>
@@ -295,7 +295,10 @@ parent and moves the selection there, with a hidden-worktree count retained on a
 folded project. Search is flat and ranked across project names, branches, and
 folders, and shows the containing folder before the name as a path. Name matches
 rank ahead of branch matches, then folder matches; ties are ordered by shorter
-name, checkout before worktree, and finally name.
+name, checkout before worktree, and finally name. A branch with a pull request
+shows `#123` in green, magenta, or red for open, merged, and closed; the badge
+loads in the background and is shown only when `gh` and the checkout's GitHub
+upstream agree on the head owner and branch.
 
 See [docs/tui.md](docs/tui.md) for the complete row and search behavior.
 

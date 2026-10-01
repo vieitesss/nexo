@@ -41,6 +41,7 @@ type sourceUpdate struct {
 	cmd             tea.Cmd
 	projects        []picker.Place
 	projectsUpdated bool
+	pullRequest     *pullRequestMsg
 }
 
 // sourceState owns all asynchronous source state. It deliberately keeps the
@@ -57,6 +58,7 @@ type sourceState struct {
 	containerSource      capabilities.ContainerLister
 	agentRefreshInterval time.Duration
 	gitLoader            picker.GitLoader
+	pullRequestLoader    picker.PullRequestLoader
 	remoteCommands       []tea.Cmd
 
 	remoteMachines []string
@@ -70,6 +72,7 @@ type sourceState struct {
 	pendingReload   reloadState
 	cancelLoads     context.CancelFunc
 	gitSlots        chan struct{}
+	prSlots         chan struct{}
 	trace           *startup.Trace
 	projectWarnings func() []string
 }
@@ -82,11 +85,13 @@ func newSource(ctx context.Context, catalog *picker.Catalog, deps Deps, cancel c
 		ctx: ctx, catalog: catalog, agents: newAgentRecords(deps.Agents, ""),
 		projectSource: deps.ProjectSource, agentSource: deps.AgentSource, containerSource: deps.ContainerSource,
 		agentRefreshInterval: deps.AgentRefreshInterval, gitLoader: deps.GitLoader,
-		remoteCommands: append([]tea.Cmd(nil), deps.RemoteCommands...),
-		remoteMachines: append([]string(nil), remoteMachines...),
-		remoteLoaded:   make(map[string]bool), groupErrors: make(map[string]string),
+		pullRequestLoader: deps.PullRequestLoader,
+		remoteCommands:    append([]tea.Cmd(nil), deps.RemoteCommands...),
+		remoteMachines:    append([]string(nil), remoteMachines...),
+		remoteLoaded:      make(map[string]bool), groupErrors: make(map[string]string),
 		groupWarnings: make(map[string]string), refreshErr: deps.AgentError,
-		cancelLoads: cancel, gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)), trace: deps.StartupTrace,
+		cancelLoads: cancel, gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
+		prSlots: make(chan struct{}, pullRequestConcurrency(deps.PullRequestLoader)), trace: deps.StartupTrace,
 		projectWarnings: deps.ProjectWarnings,
 	}
 }
@@ -305,6 +310,13 @@ func (s *sourceState) Accept(msg tea.Msg) (sourceUpdate, bool) {
 		s.applyRemote(msg.batch)
 		s.finishReload("remotes")
 		return sourceUpdate{changed: true, reloadDone: pendingBefore && !s.pending()}, true
+	case pullRequestMsg:
+		if msg.generation != s.generations.projects {
+			return sourceUpdate{}, false
+		}
+		// A zero request and a failed command are both silent: the accepted
+		// update clears any badge the row still carries.
+		return sourceUpdate{pullRequest: &msg, changed: true}, true
 	case picker.RemoteBatch:
 		pendingBefore := s.pending()
 		s.applyRemote(msg)
@@ -354,6 +366,33 @@ func (s *sourceState) syncCatalog() {
 		s.remoteLoaded[machine] = status.Loaded
 		s.groupErrors[machine] = sanitize(status.Error)
 		s.groupWarnings[machine] = sanitize(status.Warning)
+	}
+}
+
+// pullRequestCommand loads the pull request decoration for one checkout. It
+// is scheduled only after that checkout's Git context was accepted, runs
+// within its own bounded slot pool, and carries the project generation so a
+// stale answer cannot decorate a replaced project snapshot.
+func (s *sourceState) pullRequestCommand(path string) tea.Cmd {
+	if s.pullRequestLoader == nil || path == "" {
+		return nil
+	}
+	generation := s.generations.projects
+	return func() tea.Msg {
+		s.trace.Mark("pull-request-start")
+		select {
+		case s.prSlots <- struct{}{}:
+			if s.ctx.Err() != nil {
+				<-s.prSlots
+				return nil
+			}
+		case <-s.ctx.Done():
+			return nil
+		}
+		defer func() { <-s.prSlots }()
+		value, err := s.pullRequestLoader.Load(s.ctx, path)
+		s.trace.Mark("pull-request-done")
+		return pullRequestMsg{generation: generation, path: path, pullRequest: value, err: err}
 	}
 }
 
