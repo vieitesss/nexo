@@ -1,7 +1,7 @@
 # Future backend capability check
 
-This note checks the v1 capability interfaces against the three candidate
-backends, in priority order. It is a design check only: it does not add
+This note checks the retained v1 capability interfaces against the three
+candidate backends, in priority order. It is a design check only: it does not add
 backend code or change backend selection. A single nexo invocation still
 selects exactly one backend.
 
@@ -23,18 +23,20 @@ reachable. They are not a promise that a backend is installed.
 | Interface | Zellij 0.44+ | WezTerm | Kitty |
 | --- | --- | --- | --- |
 | `ProjectOpener` | **Native** — `attach --create-background` and `action switch-session` provide a project container and switching. | **nexo fills gap** — `wezterm cli spawn --new-window --workspace <name> --cwd <dir>` creates a workspace in a new window; `--workspace` requires `--new-window` and applies only to that newly created window. The CLI cannot switch the GUI to an existing workspace, so selecting one needs a Lua-side/user action. | **Native** for opening a project tab — `@ launch --type=tab --cwd`. Kitty has no live daemon persistence, but explicit session files can recreate tabs and layouts after exit. |
-| `PaneLister` | **Native** — `action list-panes --all --json`. | **Native** — `cli list --format json`. | **Native** — `@ ls`, including `foreground_processes`. |
 | `ScreenReader` | **Native** — `action dump-screen` (targeted with `--pane-id`). | **Native** — `cli get-text`. | **Native** — `@ get-text`. |
 | `PaneFocuser` | **Native** — `action focus-pane-id`. | **Native** — `cli activate-pane --pane-id`. This focuses a pane, not an arbitrary workspace. | **Native** — `@ focus-window --match id:N`. |
-| `Popup` | **Native** — `run`/`new-pane --floating` provides a floating pane. | **Unsupported** — there is no popup/floating-pane CLI operation. | **Native** with a limitation — `@ launch --type=overlay` is an overlay rather than a persistent pane. |
 | `AgentSource` | **nexo fills gap** — pane JSON has command/title data but no PID or agent working state. Combine pane listing and screen reads with nexo's agent detection. | **nexo fills gap** — `cli list --format json` does not expose a foreground process or agent state; use screen reads and nexo's detection. | **nexo fills gap** — `foreground_processes` makes process identification native, but working/stopped and seen-stopped state still needs nexo polling and screen inspection. |
 | `Notifier` | **nexo fills gap** — `zellij pipe` can feed a status plugin, but the status bridge and notification semantics belong to nexo. | **nexo fills gap** — Lua `set_right_status` is a status surface, not a CLI notification API; a Lua bridge is required. | **nexo fills gap** — `tab_bar.py` can render status, but requires a nexo status bridge. |
 | `RemoteProxy` | **nexo fills gap** — launch an `ssh` attach command in a native pane; Zellij has no remote-container primitive. | **nexo fills gap** — launch an `ssh` attach command with `cli spawn`; this does not solve the separate GUI-workspace switching limitation. | **nexo fills gap** — launch an `ssh` attach command in a tab; Kitty has no native remote-container primitive. |
 
 No interface change is required. The gaps are implementation work behind the
-existing small interfaces; the only truly absent operation is WezTerm's
-`Popup`. In particular, no capability requires aggregating backends or
-rebuilding a host-native feature.
+retained small interfaces; no retained capability requires aggregating
+backends or rebuilding a host-native feature.
+
+Pane listing (`ListPanes`) and popups (`ShowPopup`) are candidate future
+operations, not v1 Go capability interfaces. WezTerm has no popup or
+floating-pane CLI operation to back a future `ShowPopup`. The nexo popup
+surface ships through each backend's manifest entry point instead.
 
 ## Backend facts checked
 
