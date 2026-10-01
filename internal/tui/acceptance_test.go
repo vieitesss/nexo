@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -550,6 +551,84 @@ func selectionDeps() Deps {
 	}
 }
 
+func contrastRatioHex(foreground, background string) float64 {
+	luminance := func(value string) float64 {
+		value = strings.TrimPrefix(value, "#")
+		channels := [3]float64{}
+		for index := range channels {
+			channel, err := strconv.ParseUint(value[index*2:index*2+2], 16, 8)
+			if err != nil {
+				panic(err)
+			}
+			linear := float64(channel) / 255
+			if linear <= 0.04045 {
+				channels[index] = linear / 12.92
+			} else {
+				channels[index] = math.Pow((linear+0.055)/1.055, 2.4)
+			}
+		}
+		return 0.2126*channels[0] + 0.7152*channels[1] + 0.0722*channels[2]
+	}
+	light, dark := luminance(foreground), luminance(background)
+	if light < dark {
+		light, dark = dark, light
+	}
+	return (light + 0.05) / (dark + 0.05)
+}
+
+func TestSelectedStateColoursContrastWithSelection(t *testing.T) {
+	selection := selectionBackground()
+	states := []capabilities.Agent{{State: "stopped"}, {State: "stopped", Seen: true}, {State: "working"}}
+	for _, dark := range []bool{true, false} {
+		background := selection.Dark
+		if !dark {
+			background = selection.Light
+		}
+		for _, agent := range states {
+			foreground := selectedStateForeground(agent)
+			value := foreground.Dark
+			if !dark {
+				value = foreground.Light
+			}
+			if ratio := contrastRatioHex(value, background); ratio < 4.5 {
+				t.Fatalf("dark=%t state=%q contrast=%0.2f, want at least 4.5", dark, agent.State, ratio)
+			}
+		}
+	}
+}
+
+func selectedStateCells(model Model, tab Tab, row row, plain string) map[int]bool {
+	allowed := map[int]bool{}
+	runes := []rune(plain)
+	if tab == ContainersTab {
+		for index, value := range runes {
+			if value == '●' {
+				allowed[index] = true
+			}
+		}
+		return allowed
+	}
+	if tab != AgentsTab {
+		return allowed
+	}
+	state := strings.ToLower(strings.TrimSpace(sanitize(row.agent.State)))
+	label := "● " + state
+	if state == "stopped" && row.agent.StoppedSince != nil {
+		label += " " + stoppedAge(model.now(), *row.agent.StoppedSince)
+	}
+	labelRunes := []rune(label)
+	for index := 0; index+len(labelRunes) <= len(runes); index++ {
+		if string(runes[index:index+len(labelRunes)]) != label {
+			continue
+		}
+		for offset := range labelRunes {
+			allowed[index+offset] = true
+		}
+		break
+	}
+	return allowed
+}
+
 // TestSelectedRowForegrounds checks that selection text uses one foreground,
 // while agent state cues keep their explicit adaptive colours. The fixture
 // carries a search query, a marked item, a Git summary and every agent state,
@@ -589,12 +668,16 @@ func TestSelectedRowHasOnlySelectionForeground(t *testing.T) {
 						continue
 					}
 					painted++
+					plain := shell.Plain(line)
+					stateCells := selectedStateCells(model, tab, row, plain)
 					for cell, token := range foregroundTokens(line) {
 						if token != expected && !stateTokens[token] {
 							t.Fatalf("dark=%v tab %q row %q cell %d: foreground %q, want selection or state: %q", dark, tab, row.id, cell, token, line)
 						}
+						if stateTokens[token] && !stateCells[cell] {
+							t.Fatalf("dark=%v tab %q row %q cell %d: state foreground %q outside state cue: %q", dark, tab, row.id, cell, token, line)
+						}
 					}
-					plain := shell.Plain(line)
 					for _, cue := range []string{"+2", "−1", "*", "↑1", "↓1", "◆", "●"} {
 						if strings.Contains(plain, cue) {
 							cues[cue] = true

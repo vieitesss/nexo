@@ -107,6 +107,118 @@ func TestGitDiscoveryRevealsSelectedWorktreeAndRendersStates(t *testing.T) {
 	}
 }
 
+func TestReloadDropsOlderSourceResults(t *testing.T) {
+	local := picker.LocalMachine()
+	model := NewModel(context.Background(), Deps{
+		Containers:     []capabilities.Container{{ID: "old", Name: "old", Machine: local}},
+		Agents:         []capabilities.Agent{{PaneID: "old", Target: "old", Harness: "pi", State: "working"}},
+		RemoteMachines: []string{"dev"},
+	}, ContainersTab)
+	model.generations.containers = 1
+	model = updateModel(t, model, containersMsg{generation: 1, containers: []capabilities.Container{{ID: "new", Name: "new", Machine: local}}})
+	model = updateModel(t, model, containersMsg{generation: 0, containers: []capabilities.Container{{ID: "old", Name: "old", Machine: local}}})
+	if !strings.Contains(strings.Join(model.Rows(), "\x00"), "new") || strings.Contains(strings.Join(model.Rows(), "\x00"), "old") {
+		t.Fatalf("stale container result replaced newer snapshot: %v", model.Rows())
+	}
+
+	model.generations.agents = 1
+	model = updateModel(t, model, agentsMsg{generation: 1, agents: []capabilities.Agent{{PaneID: "new", Target: "new", Harness: "pi", State: "working"}}})
+	model = updateModel(t, model, agentsMsg{generation: 0, agents: []capabilities.Agent{{PaneID: "old", Target: "old", Harness: "pi", State: "working"}}})
+	if len(model.agents) != 1 || model.agents[0].agent.Target != "new" {
+		t.Fatalf("stale agent result replaced newer snapshot: %#v", model.agents)
+	}
+
+	model.generations.remotes = 1
+	model = updateModel(t, model, remoteMsg{generation: 1, batch: picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "new", Target: "new", State: "working"}}}})
+	model = updateModel(t, model, remoteMsg{generation: 0, batch: picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "old", Target: "old", State: "working"}}}})
+	if len(model.remoteAgents) != 1 || model.remoteAgents[0].agent.Target != "new" {
+		t.Fatalf("stale remote result replaced newer snapshot: %#v", model.remoteAgents)
+	}
+}
+
+type fixedContainerSource struct {
+	containers []capabilities.Container
+	err        error
+}
+
+func (source fixedContainerSource) ListContainers(context.Context) ([]capabilities.Container, error) {
+	return source.containers, source.err
+}
+
+func TestContainerRefreshErrorAfterKillIsRetryable(t *testing.T) {
+	local := picker.LocalMachine()
+	deps := Deps{
+		Containers:      []capabilities.Container{{ID: "one", Name: "one", Machine: local}},
+		ContainerSource: fixedContainerSource{},
+		KillContainers: func(context.Context, []picker.ContainerRef) error {
+			return nil
+		},
+	}
+	model := NewModel(context.Background(), deps, ContainersTab)
+	updated, _ := model.Update(keyMsg(tea.KeyCtrlX))
+	model = updated.(Model)
+	updated, action := model.Update(keyMsg(tea.KeyRunes, 'y'))
+	model = updated.(Model)
+	if action == nil {
+		t.Fatal("kill command missing")
+	}
+	updated, reload := model.Update(action())
+	model = updated.(Model)
+	if reload == nil || !model.actionInFlight {
+		t.Fatalf("post-kill reload not in flight: action=%t command=%v", model.actionInFlight, reload)
+	}
+	model = updateModel(t, model, containersMsg{generation: model.containersGeneration(), err: errors.New("backend unavailable")})
+	if model.actionInFlight {
+		t.Fatal("action stayed blocked after refresh error")
+	}
+	if !strings.Contains(model.toast, "container refresh: backend unavailable") {
+		t.Fatalf("refresh error toast = %q", model.toast)
+	}
+	model = updateModel(t, model, keyMsg(tea.KeyCtrlX))
+	if !model.confirmKill {
+		t.Fatal("kill was not retryable after refresh error")
+	}
+}
+
+func TestBulkKillAtBottomKeepsNearestRemainingCursor(t *testing.T) {
+	local := picker.LocalMachine()
+	deps := Deps{
+		Containers: []capabilities.Container{
+			{ID: "one", Name: "one", Machine: local},
+			{ID: "two", Name: "two", Machine: local},
+			{ID: "three", Name: "three", Machine: local},
+		},
+		ContainerSource: fixedContainerSource{},
+		KillContainers:  func(context.Context, []picker.ContainerRef) error { return nil },
+	}
+	model := NewModel(context.Background(), deps, ContainersTab)
+	model.cursor = containerIdentity(picker.Place{Machine: local, ContainerID: "three"})
+	updated, _ := model.Update(keyMsg(tea.KeyCtrlX))
+	model = updated.(Model)
+	updated, action := model.Update(keyMsg(tea.KeyRunes, 'y'))
+	model = updated.(Model)
+	updated, _ = model.Update(action())
+	model = updated.(Model)
+	model = updateModel(t, model, containersMsg{generation: model.containersGeneration(), containers: deps.Containers[:2]})
+	want := containerIdentity(picker.Place{Machine: local, ContainerID: "two"})
+	if model.Cursor() != want {
+		t.Fatalf("cursor after bottom bulk kill = %q, want %q; rows=%v", model.Cursor(), want, model.Rows())
+	}
+}
+
+func TestRemoteReloadShowsLoadingHeader(t *testing.T) {
+	model := NewModel(context.Background(), Deps{RemoteMachines: []string{"dev"}}, ContainersTab)
+	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Places: picker.ContainerPlaces([]capabilities.Container{{ID: "one", Name: "one", Machine: "dev"}})})
+	model.deps.RemoteCommands = []tea.Cmd{func() tea.Msg {
+		return picker.RemoteBatch{Machine: "dev"}
+	}}
+	model.SetSize(100, 10)
+	model = updateModel(t, model, actionMsg{kind: "kill"})
+	if !strings.Contains(shell.Plain(model.View()), "loading…") {
+		t.Fatalf("remote reload header did not show loading: %q", model.View())
+	}
+}
+
 func TestRemoteSnapshotsReplaceOpaqueAgentRecords(t *testing.T) {
 	model := NewModel(context.Background(), Deps{}, AgentsTab)
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%7", Target: "opaque-a", State: "working"}}})

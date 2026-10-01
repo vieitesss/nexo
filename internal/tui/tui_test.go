@@ -34,6 +34,13 @@ func testContainerDeps() Deps {
 	}}
 }
 
+func TestNearestCursorableClampsRemovedRows(t *testing.T) {
+	rows := []row{{id: "first", cursorable: true}, {id: "second", cursorable: true}, {id: "third", cursorable: true}}
+	if got, ok := nearestCursorable(rows, 10); !ok || got != "third" {
+		t.Fatalf("nearest row for removed bottom selection = %q, %t; want third", got, ok)
+	}
+}
+
 func TestPrintableKeysAlwaysSearch(t *testing.T) {
 	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
 	for _, value := range []rune{'d', 'x', 'r', 'q'} {

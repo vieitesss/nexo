@@ -164,18 +164,41 @@ type row struct {
 }
 
 type agentsMsg struct {
-	agents []capabilities.Agent
-	err    error
+	generation int
+	agents     []capabilities.Agent
+	err        error
 }
 
 type containersMsg struct {
+	generation int
 	containers []capabilities.Container
 	err        error
+}
+
+type remoteMsg struct {
+	generation int
+	batch      picker.RemoteBatch
 }
 
 type actionMsg struct {
 	kind string
 	err  error
+}
+
+type sourceGenerations struct {
+	containers int
+	agents     int
+	remotes    int
+}
+
+type reloadState struct {
+	containers int
+	agents     int
+	remotes    int
+}
+
+func (state reloadState) done() bool {
+	return state.containers == 0 && state.agents == 0 && state.remotes == 0
 }
 
 type agentRecord struct {
@@ -215,6 +238,8 @@ type Model struct {
 	gitErrors       map[string]string
 	refreshInFlight *bool
 	refreshErr      error
+	generations     *sourceGenerations
+	pendingReload   *reloadState
 	gitSlots        chan struct{}
 	cancelLoads     context.CancelFunc
 
@@ -266,7 +291,7 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 		ctx: loadCtx, cancelLoads: cancelLoads, deps: deps, tab: tab, agents: newAgentRecords(deps.Agents, ""),
 		folded: make(map[string]bool), expanded: make(map[string]bool), marked: make(map[picker.ContainerRef]bool),
 		groupErrors: make(map[string]string), groupWarnings: make(map[string]string), gitErrors: make(map[string]string), now: now, refreshErr: deps.AgentError,
-		remoteMachines: append([]string(nil), deps.RemoteMachines...), remoteLoaded: make(map[string]bool), refreshInFlight: new(bool), gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
+		remoteMachines: append([]string(nil), deps.RemoteMachines...), remoteLoaded: make(map[string]bool), refreshInFlight: new(bool), generations: &sourceGenerations{}, gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
 	}
 	for _, machine := range remoteMachines {
 		m.remoteLoaded[machine] = false
@@ -286,7 +311,9 @@ func (m Model) Init() tea.Cmd {
 		*m.refreshInFlight = true
 		cmds = append(cmds, m.refreshAgents(), m.tick())
 	}
-	cmds = append(cmds, m.deps.RemoteCommands...)
+	for _, command := range m.deps.RemoteCommands {
+		cmds = append(cmds, m.remoteCommand(command, m.remoteGeneration()))
+	}
 	if m.deps.GitLoader != nil {
 		seenGit := map[string]bool{}
 		for _, place := range m.projectPlaces() {
@@ -324,33 +351,107 @@ func (m *Model) cancelBackgroundLoads() {
 	}
 }
 
+func (m Model) generationState() *sourceGenerations {
+	if m.generations == nil {
+		return &sourceGenerations{}
+	}
+	return m.generations
+}
+
+func (m Model) agentsGeneration() int     { return m.generationState().agents }
+func (m Model) containersGeneration() int { return m.generationState().containers }
+func (m Model) remoteGeneration() int     { return m.generationState().remotes }
+
 func (m Model) refreshAgents() tea.Cmd {
+	return m.refreshAgentsAt(m.agentsGeneration())
+}
+
+func (m Model) refreshAgentsAt(generation int) tea.Cmd {
 	return func() tea.Msg {
 		agents, err := m.deps.AgentSource.ListAgents(m.ctx)
-		return agentsMsg{agents: agents, err: err}
+		return agentsMsg{generation: generation, agents: agents, err: err}
 	}
 }
 
-func (m Model) refreshContainers() tea.Cmd {
+func (m Model) refreshContainersAt(generation int) tea.Cmd {
 	return func() tea.Msg {
 		containers, err := m.deps.ContainerSource.ListContainers(m.ctx)
-		return containersMsg{containers: containers, err: err}
+		return containersMsg{generation: generation, containers: containers, err: err}
 	}
 }
 
-func (m Model) reload() tea.Cmd {
+func (m Model) remoteCommand(command tea.Cmd, generation int) tea.Cmd {
+	return func() tea.Msg {
+		msg := command()
+		batch, ok := msg.(picker.RemoteBatch)
+		if !ok {
+			return msg
+		}
+		return remoteMsg{generation: generation, batch: batch}
+	}
+}
+
+func (m *Model) reload() tea.Cmd {
+	state := sourceGenerations{}
+	if m.generations == nil {
+		m.generations = &state
+	}
+	pending := &reloadState{}
 	cmds := make([]tea.Cmd, 0, 2+len(m.deps.RemoteCommands))
 	if m.deps.ContainerSource != nil {
-		cmds = append(cmds, m.refreshContainers())
+		m.generations.containers++
+		pending.containers = 1
+		cmds = append(cmds, m.refreshContainersAt(m.generations.containers))
 	}
 	if m.deps.AgentSource != nil {
-		cmds = append(cmds, m.refreshAgents())
+		m.generations.agents++
+		pending.agents = 1
+		if m.refreshInFlight == nil {
+			m.refreshInFlight = new(bool)
+		}
+		*m.refreshInFlight = true
+		cmds = append(cmds, m.refreshAgentsAt(m.generations.agents))
 	}
-	cmds = append(cmds, m.deps.RemoteCommands...)
-	if len(cmds) == 0 {
+	if len(m.deps.RemoteCommands) > 0 {
+		m.generations.remotes++
+		pending.remotes = len(m.deps.RemoteCommands)
+		for machine := range m.remoteLoaded {
+			m.remoteLoaded[machine] = false
+			delete(m.groupErrors, machine)
+			delete(m.groupWarnings, machine)
+		}
+		m.rebuild(false)
+		for _, command := range m.deps.RemoteCommands {
+			cmds = append(cmds, m.remoteCommand(command, m.generations.remotes))
+		}
+	}
+	if pending.done() {
+		m.pendingReload = nil
+		m.actionInFlight = false
 		return nil
 	}
+	m.pendingReload = pending
 	return tea.Batch(cmds...)
+}
+
+func (m *Model) finishReload(source string) {
+	if m.pendingReload == nil {
+		return
+	}
+	switch source {
+	case "containers":
+		m.pendingReload.containers = 0
+	case "agents":
+		m.pendingReload.agents = 0
+	case "remotes":
+		if m.pendingReload.remotes > 0 {
+			m.pendingReload.remotes--
+		}
+	}
+	if m.pendingReload.done() {
+		m.pendingReload = nil
+		m.actionInFlight = false
+	}
 }
 
 func (m Model) tick() tea.Cmd {
@@ -512,6 +613,15 @@ func (m *Model) rebuild(force bool) {
 }
 
 func nearestCursorable(rows []row, index int) (string, bool) {
+	if len(rows) == 0 {
+		return "", false
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(rows) {
+		index = len(rows) - 1
+	}
 	for distance := 0; distance < len(rows); distance++ {
 		for _, candidate := range []int{index + distance, index - distance} {
 			if candidate < 0 || candidate >= len(rows) || !rows[candidate].cursorable {
@@ -1071,6 +1181,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SetSize(msg.Width, msg.Height)
 		return m, nil
 	case agentsMsg:
+		if msg.generation != m.agentsGeneration() {
+			return m, nil
+		}
 		if m.refreshInFlight != nil {
 			*m.refreshInFlight = false
 		}
@@ -1081,15 +1194,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.agents = newAgentRecords(msg.agents, "")
 			m.rebuild(false)
 		}
+		m.finishReload("agents")
 		return m, nil
 	case containersMsg:
-		if msg.err == nil {
+		if msg.generation != m.containersGeneration() {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.toast = "container refresh: " + msg.err.Error()
+		} else {
 			m.deps.Containers = append([]capabilities.Container(nil), msg.containers...)
 			m.rebuild(false)
 		}
+		m.finishReload("containers")
 		return m, nil
 	case actionMsg:
-		m.actionInFlight = false
 		if msg.err != nil {
 			m.toast = msg.err.Error()
 			return m, m.reload()
@@ -1113,19 +1232,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.deps.AgentSource == nil {
 			return m, nil
 		}
-		if m.refreshInFlight != nil && *m.refreshInFlight {
+		if m.pendingReload != nil || (m.refreshInFlight != nil && *m.refreshInFlight) {
 			return m, m.tick()
 		}
 		if m.refreshInFlight == nil {
 			m.refreshInFlight = new(bool)
 		}
+		if m.generations == nil {
+			m.generations = &sourceGenerations{}
+		}
+		m.generations.agents++
 		*m.refreshInFlight = true
-		return m, tea.Batch(m.refreshAgents(), m.tick())
+		return m, tea.Batch(m.refreshAgentsAt(m.generations.agents), m.tick())
 	case picker.GitContextMsg:
 		m.applyGit(msg)
 		return m, nil
+	case remoteMsg:
+		if msg.generation != m.remoteGeneration() {
+			return m, nil
+		}
+		m.applyRemote(msg.batch)
+		m.finishReload("remotes")
+		return m, nil
 	case picker.RemoteBatch:
 		m.applyRemote(msg)
+		m.finishReload("remotes")
 		return m, nil
 	case tea.KeyMsg:
 		return m.key(msg)
@@ -1247,7 +1378,7 @@ func (m *Model) applyRemote(msg picker.RemoteBatch) {
 func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Modal footer actions own input until they are confirmed or cancelled.
 	// Mouse clicks and wheel events are ignored rather than cancelling them.
-	if m.confirmKill || m.renameMode {
+	if m.actionInFlight || m.confirmKill || m.renameMode {
 		return m, nil
 	}
 	event := tea.MouseEvent(msg)
@@ -1897,7 +2028,7 @@ func (m Model) rowText(row row) (string, string) {
 
 func (m Model) agentText(row row, marker string, selected bool) (string, string) {
 	a := row.agent
-	container := displayContainer(a)
+	container := a.Container
 	nameStyle := bold()
 	if selected {
 		nameStyle = normal()
@@ -1929,10 +2060,6 @@ func (m Model) agentText(row row, marker string, selected bool) (string, string)
 	secondary := marker + indent + left + strings.Repeat(" ", gap) + target
 	return marker + indent + primary, secondary
 }
-func displayContainer(a capabilities.Agent) string {
-	return a.Container
-}
-
 func stateText(agent capabilities.Agent, text string, selected bool) string {
 	if !selected {
 		return stateColor(agent).Render(text)
@@ -2469,15 +2596,19 @@ func stateColor(agent capabilities.Agent) lipgloss.Style {
 	}
 }
 
-func selectedStateColor(agent capabilities.Agent) lipgloss.Style {
+func selectedStateForeground(agent capabilities.Agent) lipgloss.AdaptiveColor {
 	switch {
 	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && !agent.Seen:
-		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#9b1c1c", Dark: "#ff8a8a"})
+		return lipgloss.AdaptiveColor{Light: "#9b1c1c", Dark: "#ffb3ba"}
 	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped"):
-		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#166534", Dark: "#86efac"})
+		return lipgloss.AdaptiveColor{Light: "#166534", Dark: "#86efac"}
 	default:
-		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#8a4b08", Dark: "#fbbf24"})
+		return lipgloss.AdaptiveColor{Light: "#8a4b08", Dark: "#fbbf24"}
 	}
+}
+
+func selectedStateColor(agent capabilities.Agent) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(selectedStateForeground(agent))
 }
 
 const (
