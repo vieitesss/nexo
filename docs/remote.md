@@ -179,26 +179,31 @@ Commands:
 ### Clipboard image paste
 
 `nexo remote paste [KEY...]` is a user-bound helper for pasting a clipboard PNG
-into a proxy. It reads the local clipboard, uploads the image over SSH to a
-mode-0600 `nexo-paste-*.png` temporary file, and types that remote path into the
-attached pane. Outside a proxy, or when the clipboard has no image, it sends the
-original `KEY...` through unchanged. A missing local clipboard tool prints one
-notice before the key is passed through.
+into a proxy. It reads the local clipboard, uploads the image over SSH into a
+mode-0700 `mktemp -d` directory as a mode-0600 `nexo-paste-*.png` file, and
+types the shell-quoted remote path into the attached pane. Outside a proxy, or
+when the clipboard has no image, it sends the original `KEY...` through
+unchanged. A missing local clipboard tool prints one notice before the key is
+passed through.
 
-nexo never installs this binding. In tmux, add a binding such as:
+nexo never installs this binding. In tmux, `run-shell` does not inherit
+`TMUX_PANE`, so the binding captures the current pane explicitly:
 
 ```tmux
-bind-key -T root C-v run-shell 'nexo --backend=tmux remote paste C-v'
+bind-key -T root C-v run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote paste C-v'
 ```
 
 In Herdr, add a key action in the user's Herdr key/action configuration that
 runs:
 
 ```sh
-nexo --backend=herdr remote paste C-v
+nexo --backend=herdr remote paste ctrl+v
 ```
 
-Use the key token expected by the binding in place of `C-v`. The platform
-clipboard readers are `pngpaste` (or the macOS AppleScript fallback),
-`wl-paste` on Wayland, and `xclip` on X11. End-to-end verification with a real
-SSH proxy and a real macOS clipboard reader is still needed.
+Pass the key using the syntax of the binding that invoked the command. tmux
+key names such as `C-v`, `M-v`, and `Enter` are forwarded to `tmux send-keys`;
+Herdr key names such as `ctrl+v`, `alt+v`, and `enter` are forwarded to
+`herdr pane send-keys`. The platform clipboard readers are `pngpaste` (or the
+macOS AppleScript fallback), `wl-paste` on Wayland, and `xclip` on X11.
+End-to-end verification with a real SSH proxy and a real macOS clipboard reader
+is still needed.

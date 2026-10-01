@@ -253,8 +253,9 @@ nexo --backend=herdr remote new devbox feature-api
 nexo --backend=tmux remote close devbox/api
 
 # Bind an image paste key in tmux; the key argument is replayed on pass-through.
+# run-shell does not inherit TMUX_PANE, so the binding passes it explicitly.
 # nexo does not install this binding.
-# bind-key -T root C-v run-shell 'nexo --backend=tmux remote paste C-v'
+# bind-key -T root C-v run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote paste C-v'
 
 # Create a worktree and add its parent to project discovery.
 nexo --backend=tmux worktree create --new-branch --add-parent \
