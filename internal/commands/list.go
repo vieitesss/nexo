@@ -26,8 +26,11 @@ func init() {
 func (listCommand) Name() string { return "list" }
 
 func (listCommand) Run(ctx context.Context, invocation Invocation) error {
-	trace := startup.New("list", invocation.Stderr)
-	trace.Mark("start")
+	trace := invocation.StartupTrace
+	if trace == nil {
+		trace = startup.New("list", invocation.Stderr)
+	}
+	trace.Mark("list-start")
 	if invocation.Stdout == nil {
 		return errors.New("list command requires stdout")
 	}
@@ -36,7 +39,7 @@ func (listCommand) Run(ctx context.Context, invocation Invocation) error {
 		return err
 	}
 	if placesOnly {
-		return listPlaces(ctx, invocation)
+		return listPlaces(ctx, invocation, trace)
 	}
 	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
 	trace.Mark("projects-discovered")
@@ -71,9 +74,10 @@ func parseListArgs(args []string) (bool, error) {
 	return places, nil
 }
 
-func listPlaces(ctx context.Context, invocation Invocation) error {
-	trace := startup.New("list-places", invocation.Stderr)
-	trace.Mark("start")
+func listPlaces(ctx context.Context, invocation Invocation, trace *startup.Trace) error {
+	listCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	trace.Mark("places-start")
 	if err := invocation.Selection.Require(); err != nil {
 		return err
 	}
@@ -84,7 +88,7 @@ func listPlaces(ctx context.Context, invocation Invocation) error {
 	trace.Mark("remote-start")
 	remoteResultsCh := make(chan []remote.MachineResult, 1)
 	go func() {
-		remoteResultsCh <- newRemoteOrchestrator(invocation, nil).List(ctx, invocation.Config.Remote.ConfiguredMachines())
+		remoteResultsCh <- newRemoteOrchestrator(invocation, nil).List(listCtx, invocation.Config.Remote.ConfiguredMachines())
 		trace.Mark("remote-done")
 	}()
 	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
@@ -96,7 +100,7 @@ func listPlaces(ctx context.Context, invocation Invocation) error {
 			}
 		}
 	}
-	containers, err := lister.ListContainers(ctx)
+	containers, err := lister.ListContainers(listCtx)
 	if err != nil {
 		return fmt.Errorf("list containers: %w", err)
 	}
@@ -110,7 +114,7 @@ func listPlaces(ctx context.Context, invocation Invocation) error {
 			screens.Add(1)
 			go func(index int, paneID string) {
 				defer screens.Done()
-				preview, readErr := reader.ReadScreen(ctx, paneID)
+				preview, readErr := reader.ReadScreen(listCtx, paneID)
 				if readErr == nil {
 					containers[index].Preview = preview
 				}

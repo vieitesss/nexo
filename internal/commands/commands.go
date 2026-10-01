@@ -16,6 +16,7 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
+	"github.com/vieitesss/nexo/internal/startup"
 )
 
 // Invocation is the public seam shared by registered subcommands.
@@ -32,6 +33,7 @@ type Invocation struct {
 	Stdout            io.Writer
 	Stderr            io.Writer
 	Stdin             io.Reader
+	StartupTrace      *startup.Trace
 	JSON              bool
 	Args              []string
 }

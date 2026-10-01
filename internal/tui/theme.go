@@ -4,44 +4,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-
-	"github.com/charmbracelet/x/term"
-	"github.com/vieitesss/nexo/internal/startup"
-	"golang.org/x/sys/unix"
 )
 
-const (
-	backgroundQueryTimeout = 150 * time.Millisecond
-	tmuxThemeTimeout       = 500 * time.Millisecond
-)
-
-const (
-	osc11Query = "\x1b]11;?\x07"
-	da1Query   = "\x1b[c"
-)
-
-type terminalQuery interface {
-	io.ReadWriter
-	Fd() uintptr
-}
-
-func detectThemeCmd(trace *startup.Trace) tea.Cmd {
-	return func() tea.Msg {
-		trace.Mark("theme-start")
-		dark := detectDarkBackground()
-		trace.Mark("theme-done")
-		return themeMsg{dark: dark}
-	}
-}
+const tmuxThemeTimeout = 500 * time.Millisecond
 
 // tmuxClientTheme reports tmux's view of the client terminal, "light" or
 // "dark", or an empty string when tmux does not know.
@@ -56,8 +28,8 @@ var tmuxClientTheme = func() string {
 }
 
 // configureTheme selects the adaptive colour variant used by lipgloss. An
-// explicit choice never touches the terminal; auto asks the controlling tty
-// and falls back to tmux's client theme, COLORFGBG and then dark.
+// explicit choice never touches the terminal; auto uses non-reading process
+// hints so Bubble Tea remains the terminal's only input reader.
 func configureTheme(theme string) {
 	switch theme {
 	case "light":
@@ -65,36 +37,16 @@ func configureTheme(theme string) {
 	case "dark":
 		lipgloss.SetHasDarkBackground(true)
 	default:
-		lipgloss.SetHasDarkBackground(detectDarkBackground())
+		lipgloss.SetHasDarkBackground(fallbackDarkBackground())
 	}
 }
 
-func detectDarkBackground() bool {
-	terminal, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return fallbackDarkBackground()
-	}
-	defer func() { _ = terminal.Close() }()
-
-	if !term.IsTerminal(terminal.Fd()) {
-		return fallbackDarkBackground()
-	}
-	state, err := term.MakeRaw(terminal.Fd())
-	if err != nil {
-		return fallbackDarkBackground()
-	}
-	defer func() { _ = term.Restore(terminal.Fd(), state) }()
-
-	if dark, answered := queryDarkBackground(terminal, backgroundQueryTimeout); answered {
-		return dark
-	}
-	return fallbackDarkBackground()
-}
-
-// fallbackDarkBackground decides when the tty does not report its background.
-// tmux answers OSC 11 for panes but not for display-popup, so inside tmux ask
-// it for the client's theme before trusting COLORFGBG.
+// fallbackDarkBackground uses only environment and multiplexer metadata. It
+// intentionally never opens or reads the controlling terminal.
 func fallbackDarkBackground() bool {
+	if colorFGBG := strings.TrimSpace(os.Getenv("COLORFGBG")); colorFGBG != "" {
+		return colorFGBGIsDark(colorFGBG)
+	}
 	if os.Getenv("TMUX") != "" {
 		switch tmuxClientTheme() {
 		case "light":
@@ -103,108 +55,7 @@ func fallbackDarkBackground() bool {
 			return true
 		}
 	}
-	return colorFGBGIsDark(os.Getenv("COLORFGBG"))
-}
-
-// queryDarkBackground sends one OSC 11 request followed by a DA1 request.
-// The DA1 response is a sentinel for terminals that do not answer OSC 11.
-func queryDarkBackground(terminal terminalQuery, timeout time.Duration) (dark, answered bool) {
-	if timeout <= 0 {
-		timeout = backgroundQueryTimeout
-	}
-	deadline := time.Now().Add(timeout)
-	if _, err := io.WriteString(terminal, osc11Query+da1Query); err != nil {
-		return false, false
-	}
-
-	data, gotDA1 := readUntilDA1(terminal, deadline)
-	if !gotDA1 {
-		// A response can become readable at the timeout boundary. Consume it
-		// without ever blocking before restoring the terminal to cooked mode.
-		drainTerminal(terminal)
-		return false, false
-	}
-	// A terminal can queue more than one status response. Once the requested
-	// reply is complete, consume immediately available bytes so Bubble Tea does
-	// not interpret an OSC response as a key.
-	drainTerminal(terminal)
-	color, ok := parseOSC11Reply(data)
-	if !ok {
-		return false, false
-	}
-	return colorIsDark(color), true
-}
-
-func readUntilDA1(terminal terminalQuery, deadline time.Time) ([]byte, bool) {
-	var data []byte
-	buffer := make([]byte, 256)
-	for {
-		ready, err := waitForData(terminal.Fd(), deadline)
-		if err != nil || !ready {
-			return data, false
-		}
-		n, readErr := terminal.Read(buffer)
-		if n > 0 {
-			data = append(data, buffer[:n]...)
-			if end, ok := da1ReplyEnd(data); ok {
-				return data[:end], true
-			}
-		}
-		if readErr != nil || n == 0 {
-			return data, false
-		}
-	}
-}
-
-// waitForData waits until fd is readable or deadline expires. The fd is
-// selected immediately before each read because terminal files may block even
-// after their descriptor has been obtained.
-func waitForData(fd uintptr, deadline time.Time) (ready bool, err error) {
-	for {
-		remaining := time.Until(deadline)
-		if remaining < 0 {
-			remaining = 0
-		}
-		timeval := unix.NsecToTimeval(remaining.Nanoseconds())
-		var readfds unix.FdSet
-		readfds.Set(int(fd))                                                 //nolint:gosec
-		n, selectErr := unix.Select(int(fd)+1, &readfds, nil, nil, &timeval) //nolint:gosec
-		if selectErr == unix.EINTR {
-			continue
-		}
-		if selectErr != nil {
-			return false, selectErr
-		}
-		return n > 0, nil
-	}
-}
-
-func drainTerminal(terminal terminalQuery) {
-	buffer := make([]byte, 256)
-	for i := 0; i < 32; i++ {
-		ready, err := waitForData(terminal.Fd(), time.Now())
-		if err != nil || !ready {
-			return
-		}
-		n, readErr := terminal.Read(buffer)
-		if readErr != nil || n == 0 {
-			return
-		}
-	}
-}
-
-func da1ReplyEnd(data []byte) (int, bool) {
-	for start := 0; start+3 < len(data); start++ {
-		if data[start] != '\x1b' || data[start+1] != '[' || data[start+2] != '?' {
-			continue
-		}
-		for end := start + 3; end < len(data); end++ {
-			if data[end] == 'c' {
-				return end + 1, true
-			}
-		}
-	}
-	return 0, false
+	return true
 }
 
 // parseOSC11Reply extracts the background RGB value from an OSC 11 response.

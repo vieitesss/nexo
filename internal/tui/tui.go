@@ -7,6 +7,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -49,16 +50,13 @@ type Deps struct {
 	Agents     []capabilities.Agent
 	// ProjectSource is started after the first frame. A nil source means the
 	// Projects snapshot is already complete.
-	ProjectSource func(context.Context) ([]picker.Place, error)
+	ProjectSource   func(context.Context) ([]picker.Place, error)
+	ProjectWarnings func() []string
 	// AutoTab applies the no-argument opening rule once the initial agent
 	// snapshot arrives. Explicit tabs never change when sources refresh.
 	AutoTab bool
 	// StartupTrace is opt-in timing instrumentation; normal runs leave it nil.
-	StartupTrace *startup.Trace
-	// themeAsync is set only by Run; tests and embedders can keep theme setup
-	// deterministic while the real program probes after its first frame.
-	themeAsync bool
-
+	StartupTrace         *startup.Trace
 	ContainerSource      capabilities.ContainerLister
 	AgentSource          capabilities.AgentSource
 	AgentRefreshInterval time.Duration
@@ -87,19 +85,7 @@ func Run(ctx context.Context, deps Deps, tab Tab) error {
 	if !validTab(tab) {
 		tab = defaultTab(deps.Agents)
 	}
-	if strings.EqualFold(strings.TrimSpace(deps.Theme), "auto") || strings.TrimSpace(deps.Theme) == "" {
-		// Theme probing may wait for a terminal response or a multiplexer
-		// round-trip. Start with the stable dark palette and correct it after
-		// the first frame so probing never gates startup.
-		configureTheme("dark")
-		deps.themeAsync = true
-	} else {
-		configureTheme(deps.Theme)
-	}
-	if deps.StartupTrace == nil {
-		deps.StartupTrace = startup.New("tui", nil)
-	}
-	deps.StartupTrace.MarkOnce("start")
+	configureTheme(deps.Theme)
 	model := NewModel(ctx, deps, tab)
 	input := deps.Input
 	if input == nil {
@@ -109,9 +95,19 @@ func Run(ctx context.Context, deps Deps, tab Tab) error {
 	if output == nil {
 		output = os.Stdout
 	}
+	var bufferedTrace bytes.Buffer
+	if deps.StartupTrace == nil {
+		deps.StartupTrace = startup.New("tui", &bufferedTrace)
+		model.trace = deps.StartupTrace
+		model.source.trace = deps.StartupTrace
+	}
+	deps.StartupTrace.MarkOnce("start")
 	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(input), tea.WithOutput(output), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	result, err := program.Run()
 	model.cancelBackgroundLoads()
+	if bufferedTrace.Len() > 0 {
+		_, _ = output.Write(bufferedTrace.Bytes())
+	}
 	if err != nil {
 		return fmt.Errorf("run tui: %w", err)
 	}
@@ -184,6 +180,7 @@ type row struct {
 type projectsMsg struct {
 	generation int
 	projects   []picker.Place
+	warnings   []string
 	err        error
 }
 
@@ -192,8 +189,6 @@ type agentsMsg struct {
 	agents     []capabilities.Agent
 	err        error
 }
-
-type themeMsg struct{ dark bool }
 
 type containersMsg struct {
 	generation int
@@ -229,16 +224,17 @@ type Model struct {
 	catalog *picker.Catalog
 	rows    []row
 
-	width, height int
-	sized         bool
-	gitErrors     map[string]string
-	source        *sourceState
-	input         *inputState
-	now           func() time.Time
-	toast         string
-	autoTab       bool
-	trace         *startup.Trace
-	themeAsync    bool
+	width, height           int
+	sized                   bool
+	gitErrors               map[string]string
+	source                  *sourceState
+	input                   *inputState
+	now                     func() time.Time
+	toast                   string
+	autoTab                 bool
+	trace                   *startup.Trace
+	initialSelectionPending bool
+	userInteracted          bool
 }
 
 // NewModel creates a model with the requested opening tab. It does not do I/O.
@@ -279,42 +275,21 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 		deps: deps, catalog: catalog, source: source,
 		input:     newInputState(tab, deps, loadCtx),
 		gitErrors: make(map[string]string), now: now,
-		autoTab: deps.AutoTab, trace: deps.StartupTrace, themeAsync: deps.themeAsync,
+		autoTab: deps.AutoTab, trace: deps.StartupTrace, initialSelectionPending: true,
 	}
 	m.rebuild(false)
+	m.initialSelectionPending = !hasItemRows(m.rows)
 	return m
 }
 
-// Tab reports the currently visible tab.
-func (m Model) Tab() Tab { return m.input.tab }
-
-// Query reports the current search query.
-func (m Model) Query() string { return string(m.input.query) }
-
-// Rows returns a compact copy of the visible row identities for model tests.
-func (m Model) Rows() []string {
-	rows := make([]string, 0, len(m.rows))
-	for _, row := range m.rows {
-		rows = append(rows, row.id)
+func hasItemRows(rows []row) bool {
+	for _, candidate := range rows {
+		if candidate.kind == itemRow && candidate.cursorable {
+			return true
+		}
 	}
-	return rows
+	return false
 }
-
-// Cursor reports the stable identity under the cursor.
-func (m Model) Cursor() string { return m.input.cursor }
-
-// Marked returns marked container IDs in visible source order.
-func (m Model) Marked() []string {
-	refs := m.input.markedTargetsCatalog(m.catalog)
-	ids := make([]string, 0, len(refs))
-	for _, ref := range refs {
-		ids = append(ids, ref.ID)
-	}
-	return ids
-}
-
-// Cancelled reports whether the model closed without an action.
-func (m Model) Cancelled() bool { return m.input.cancelled }
 
 // SelectedPlace reports an accepted project or container.
 func (m Model) SelectedPlace() (picker.Place, bool) {
@@ -364,28 +339,41 @@ func (m Model) execute(ctx context.Context) error {
 
 func (m *Model) SetSize(width, height int) {
 	m.width, m.height, m.sized = width, height, true
-	m.rebuild(false)
+	m.rebuildWithTabPolicy(false, !m.userInteracted)
 }
-
-// SetToast displays a status message in place of the normal footer hints.
-func (m *Model) SetToast(text string) { m.toast = text }
 
 // SetQuery is useful to embedding callers and model tests. Entering a query
 // selects its best match; refining one keeps the current identity when it
 // still matches. Query changes do not alter the saved fold state.
 func (m *Model) SetQuery(query string) {
+	m.userInteracted = true
 	m.input.setQuery(query)
 	m.rebuild(false)
 }
 
 func (m *Model) rebuild(force bool) {
+	m.rebuildWithTabPolicy(force, true)
+}
+
+func (m *Model) rebuildSource() {
+	m.rebuildWithTabPolicy(false, !m.userInteracted)
+	if m.initialSelectionPending && !m.input.cursorMoved {
+		m.input.forceFirst = true
+		m.rebuildWithTabPolicy(false, !m.userInteracted)
+		if !m.input.forceFirst {
+			m.initialSelectionPending = false
+		}
+	}
+}
+
+func (m *Model) rebuildWithTabPolicy(force bool, allowQueryTab bool) {
 	if force {
 		m.input.forceFirst = true
 	}
 	oldRows := m.rows
 	projection := m.projection()
 	rows := projection.Rows(m.input.tab)
-	if projection.query != "" && projection.MatchCount(m.input.tab) == 0 {
+	if allowQueryTab && projection.query != "" && projection.MatchCount(m.input.tab) == 0 {
 		for _, tab := range []Tab{AgentsTab, ContainersTab, ProjectsTab} {
 			if tab == m.input.tab || projection.MatchCount(tab) == 0 {
 				continue
@@ -404,11 +392,7 @@ func (m Model) Init() tea.Cmd {
 	if m.source == nil {
 		return nil
 	}
-	cmd := m.source.Init(m.projection().projectPlaces())
-	if !m.themeAsync {
-		return cmd
-	}
-	return tea.Batch(cmd, detectThemeCmd(m.trace))
+	return m.source.Init(m.projection().projectPlaces())
 }
 
 func (m *Model) cancelBackgroundLoads() {
@@ -455,6 +439,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		m.autoTab = false
+		m.userInteracted = true
 		m.input.deps = m.deps
 		effect := m.input.key(msg, m.keyFrame())
 		if effect.rebuild {
@@ -467,6 +452,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, effect.cmd
 	case tea.MouseMsg:
 		m.autoTab = false
+		m.userInteracted = true
 		m.input.deps = m.deps
 		effect := m.input.mouse(msg, m.mouseFrame())
 		if effect.rebuild {
@@ -480,16 +466,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ToastMsg:
 		m.toast = msg.Text
 		return m, nil
-	case themeMsg:
-		if msg.dark {
-			configureTheme("dark")
-		} else {
-			configureTheme("light")
-		}
-		return m, nil
-	}
-	if projectResult, ok := msg.(projectsMsg); ok && projectResult.err == nil {
-		m.deps.Projects = append([]picker.Place(nil), projectResult.projects...)
 	}
 	if update, ok := m.source.Accept(msg); ok {
 		if update.toast != "" {
@@ -498,12 +474,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if update.reloadDone {
 			m.input.actionInFlight = false
 		}
-		if _, initialAgents := msg.(agentsMsg); initialAgents && m.autoTab {
-			m.input.tab = defaultTab(m.source.agentValues())
+		tabChanged := false
+		if initialAgents, ok := msg.(agentsMsg); ok && m.autoTab {
+			if initialAgents.err != nil {
+				if m.input.tab != ContainersTab {
+					m.input.tab = ContainersTab
+					tabChanged = true
+				}
+			} else {
+				selected := defaultTab(initialAgents.agents)
+				if m.input.tab != selected {
+					m.input.tab = selected
+					tabChanged = true
+				}
+			}
 			m.autoTab = false
 		}
-		if update.changed {
-			m.rebuild(false)
+		if update.projectsUpdated {
+			m.deps.Projects = append([]picker.Place(nil), update.projects...)
+		}
+		if update.changed || tabChanged {
+			m.rebuildSource()
 		}
 		return m, update.cmd
 	}
@@ -530,7 +521,7 @@ func (m Model) mouseFrame() inputFrame {
 func (m *Model) applyGit(msg picker.GitContextMsg) {
 	if msg.Err != nil {
 		m.gitErrors[msg.Path] = msg.Err.Error()
-		m.rebuild(false)
+		m.rebuildSource()
 		return
 	}
 	delete(m.gitErrors, msg.Path)
@@ -566,10 +557,5 @@ func (m *Model) applyGit(msg picker.GitContextMsg) {
 	if m.catalog != nil {
 		m.catalog.SetProjects(m.deps.Projects)
 	}
-	m.rebuild(false)
-}
-
-func (m *Model) SetAgents(agents []capabilities.Agent) {
-	m.source.setAgents(agents)
-	m.rebuild(false)
+	m.rebuildSource()
 }

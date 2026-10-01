@@ -1,10 +1,13 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
@@ -45,7 +48,15 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	trace := startup.New("tui", invocation.Stderr)
+	var traceBuffer bytes.Buffer
+	trace := invocation.StartupTrace
+	if trace == nil {
+		traceOutput := invocation.Stderr
+		if strings.TrimSpace(os.Getenv("NEXO_STARTUP_TRACE")) != "" {
+			traceOutput = &traceBuffer
+		}
+		trace = startup.New("tui", traceOutput)
+	}
 	trace.Mark("command-start")
 	deps, err := tuiDependencies(ctx, invocation, tab, initial, initialErr, true)
 	if err != nil {
@@ -53,24 +64,37 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 	}
 	deps.AutoTab = len(invocation.Args) == 0
 	deps.StartupTrace = trace
-	return runTabbedTUI(ctx, deps, tui.Tab(tab))
+	runErr := runTabbedTUI(ctx, deps, tui.Tab(tab))
+	if invocation.StartupTrace == nil && traceBuffer.Len() > 0 && invocation.Stderr != nil {
+		_, _ = invocation.Stderr.Write(traceBuffer.Bytes())
+	}
+	return runErr
 }
 
 func tuiDependencies(ctx context.Context, invocation Invocation, tab string, initial []capabilities.Agent, initialErr error, initialRead ...bool) (tui.Deps, error) {
 	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Theme: invocation.Config.TUI.EffectiveTheme(), Agents: append([]capabilities.Agent(nil), initial...), Input: invocation.Stdin, Output: invocation.Stdout}
+	var projectWarningsMu sync.Mutex
+	var projectWarnings []string
+	deps.ProjectWarnings = func() []string {
+		projectWarningsMu.Lock()
+		defer projectWarningsMu.Unlock()
+		warnings := append([]string(nil), projectWarnings...)
+		projectWarnings = nil
+		return warnings
+	}
 	deps.ProjectSource = func(discoveryCtx context.Context) ([]picker.Place, error) {
+		projectWarningsMu.Lock()
+		projectWarnings = nil
+		projectWarningsMu.Unlock()
 		discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
-		for _, warning := range discovery.Warnings {
-			if invocation.Stderr != nil {
-				_, _ = fmt.Fprintf(invocation.Stderr, "nexo: warning: %s\n", warning)
-			}
-		}
+		projectWarningsMu.Lock()
+		projectWarnings = append(projectWarnings, discovery.Warnings...)
+		projectWarningsMu.Unlock()
 		if discoveryCtx.Err() != nil {
 			return nil, discoveryCtx.Err()
 		}
 		return picker.ProjectPlaces(discovery.Candidates), nil
 	}
-	localProxyIDs := make(map[string]bool)
 	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
 		// Container discovery is a source command. It must not delay the first
 		// frame; action-time proxy checks below refresh the small identity set.
@@ -121,67 +145,63 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 		return actions.RenameContainer(actionCtx, ref.ID, name)
 	}
 	deps.KillContainers = func(actionCtx context.Context, refs []picker.ContainerRef) error {
-		groups := make([]containerTargetGroup, 0)
+		lister, ok := invocation.Adapter.(capabilities.ContainerLister)
+		if !ok {
+			return errors.New("container close requires a lister to classify targets")
+		}
+		containers, err := lister.ListContainers(actionCtx)
+		if err != nil {
+			return fmt.Errorf("classify close targets: %w", err)
+		}
+		localProxyIDs := make(map[string]bool, len(containers))
+		for _, container := range containers {
+			if container.Proxy {
+				localProxyIDs[container.Machine+"\x00"+container.ID] = true
+			}
+		}
+		localIDs := make([]string, 0, len(refs))
+		remoteGroups := make([]containerTargetGroup, 0)
 		for _, ref := range refs {
+			if localProxyIDs[ref.Machine+"\x00"+ref.ID] {
+				localIDs = append(localIDs, ref.ID)
+				continue
+			}
 			index := -1
-			for i := range groups {
-				if groups[i].machine == ref.Machine {
+			for i := range remoteGroups {
+				if remoteGroups[i].machine == ref.Machine {
 					index = i
 					break
 				}
 			}
 			if index < 0 {
-				groups = append(groups, containerTargetGroup{machine: ref.Machine})
-				index = len(groups) - 1
+				remoteGroups = append(remoteGroups, containerTargetGroup{machine: ref.Machine})
+				index = len(remoteGroups) - 1
 			}
-			groups[index].ids = append(groups[index].ids, ref.ID)
+			remoteGroups[index].ids = append(remoteGroups[index].ids, ref.ID)
 		}
-		for _, group := range groups {
-			for _, id := range group.ids {
-				isProxy := localProxyIDs[group.machine+"\x00"+id]
-				if !isProxy {
-					if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
-						if containers, listErr := lister.ListContainers(actionCtx); listErr == nil {
-							for _, container := range containers {
-								if container.ID == id && container.Machine == group.machine && container.Proxy {
-									isProxy = true
-									break
-								}
-							}
-						}
-					}
-				}
-				if !isProxy {
-					continue
-				}
-				actions, resolveErr := (localContainerResolver{adapter: invocation.Adapter}).ResolveContainerActions(actionCtx, picker.LocalMachine())
-				if resolveErr != nil {
-					return resolveErr
-				}
+		if len(localIDs) > 0 {
+			actions, resolveErr := (localContainerResolver{adapter: invocation.Adapter}).ResolveContainerActions(actionCtx, picker.LocalMachine())
+			if resolveErr != nil {
+				return resolveErr
+			}
+			for _, id := range localIDs {
 				if err := actions.KillContainer(actionCtx, id); err != nil {
 					return err
 				}
 			}
-			remoteIDs := make([]string, 0, len(group.ids))
-			for _, id := range group.ids {
-				if !localProxyIDs[group.machine+"\x00"+id] {
-					remoteIDs = append(remoteIDs, id)
-				}
-			}
-			if len(remoteIDs) == 0 {
-				continue
-			}
+		}
+		for _, group := range remoteGroups {
 			actions, resolveErr := resolver.ResolveContainerActions(actionCtx, group.machine)
 			if resolveErr != nil {
 				return resolveErr
 			}
 			if batch, ok := actions.(capabilities.ContainerBatchKiller); ok {
-				if err := batch.KillContainers(actionCtx, remoteIDs); err != nil {
+				if err := batch.KillContainers(actionCtx, group.ids); err != nil {
 					return err
 				}
 				continue
 			}
-			for _, id := range remoteIDs {
+			for _, id := range group.ids {
 				if err := actions.KillContainer(actionCtx, id); err != nil {
 					return err
 				}

@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -109,7 +110,24 @@ func RunWith(args []string, stdout, stderr io.Writer, commandRunner runner.Comma
 // and feature packages verify the complete invocation context without
 // reaching into process globals.
 func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr io.Writer, commandRunner runner.CommandRunner, environment backend.Environment, tty string) int {
-	trace := startup.New("cli", stderr)
+	var traceBuffer bytes.Buffer
+	traceOutput := stderr
+	tuiTrace := false
+	for _, arg := range args {
+		if arg == "tui" {
+			tuiTrace = true
+			break
+		}
+	}
+	if tuiTrace && strings.TrimSpace(os.Getenv("NEXO_STARTUP_TRACE")) != "" {
+		traceOutput = &traceBuffer
+		defer func() {
+			if traceBuffer.Len() > 0 && stderr != nil {
+				_, _ = stderr.Write(traceBuffer.Bytes())
+			}
+		}()
+	}
+	trace := startup.New("cli", traceOutput)
 	trace.Mark("start")
 	if registry == nil {
 		writeError(stderr, errors.New("command registry is nil"))
@@ -164,16 +182,17 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		configurator.ConfigureRemoteConfig(cfg.Remote, options.ConfigPath)
 	}
 	if err := command.Run(context.Background(), commands.Invocation{
-		Selection:  selection,
-		Config:     cfg,
-		ConfigPath: options.ConfigPath,
-		Runner:     commandRunner,
-		Adapter:    selection.Adapter,
-		Stdout:     stdout,
-		Stderr:     stderr,
-		Stdin:      os.Stdin,
-		JSON:       options.JSON,
-		Args:       options.Args,
+		Selection:    selection,
+		Config:       cfg,
+		ConfigPath:   options.ConfigPath,
+		Runner:       commandRunner,
+		Adapter:      selection.Adapter,
+		Stdout:       stdout,
+		Stderr:       stderr,
+		Stdin:        os.Stdin,
+		StartupTrace: trace,
+		JSON:         options.JSON,
+		Args:         options.Args,
 	}); err != nil {
 		trace.Mark("command-failed")
 		writeError(stderr, err)

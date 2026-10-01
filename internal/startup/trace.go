@@ -23,7 +23,8 @@ type Trace struct {
 }
 
 // New returns an enabled trace when NEXO_STARTUP_TRACE is non-empty. Output is
-// sent to out, or stderr when out is nil. The trace is nil when disabled.
+// sent to out, or stderr when out is nil. TUI callers buffer the writer until
+// terminal restoration; the trace itself never writes to a live screen.
 func New(name string, out io.Writer) *Trace {
 	if strings.TrimSpace(os.Getenv("NEXO_STARTUP_TRACE")) == "" {
 		return nil
@@ -34,8 +35,8 @@ func New(name string, out io.Writer) *Trace {
 	return &Trace{start: time.Now(), name: name, out: out, once: make(map[string]bool)}
 }
 
-// Mark writes one elapsed marker. Nil traces make instrumentation cheap at
-// call sites and are intentionally safe to call unconditionally.
+// Mark writes one elapsed marker. Nil traces are negligible-cost disabled
+// instrumentation and are intentionally safe to call unconditionally.
 func (t *Trace) Mark(event string) {
 	if t == nil {
 		return

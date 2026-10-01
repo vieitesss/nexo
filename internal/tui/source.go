@@ -7,6 +7,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -34,10 +35,12 @@ func (state reloadState) done() bool {
 }
 
 type sourceUpdate struct {
-	changed    bool
-	reloadDone bool
-	toast      string
-	cmd        tea.Cmd
+	changed         bool
+	reloadDone      bool
+	toast           string
+	cmd             tea.Cmd
+	projects        []picker.Place
+	projectsUpdated bool
 }
 
 // sourceState owns all asynchronous source state. It deliberately keeps the
@@ -62,12 +65,13 @@ type sourceState struct {
 	groupWarnings  map[string]string
 	refreshErr     error
 
-	generations   sourceGenerations
-	refreshing    bool
-	pendingReload reloadState
-	cancelLoads   context.CancelFunc
-	gitSlots      chan struct{}
-	trace         *startup.Trace
+	generations     sourceGenerations
+	refreshing      bool
+	pendingReload   reloadState
+	cancelLoads     context.CancelFunc
+	gitSlots        chan struct{}
+	trace           *startup.Trace
+	projectWarnings func() []string
 }
 
 func newSource(ctx context.Context, catalog *picker.Catalog, deps Deps, cancel context.CancelFunc, remoteMachines []string) *sourceState {
@@ -83,6 +87,7 @@ func newSource(ctx context.Context, catalog *picker.Catalog, deps Deps, cancel c
 		remoteLoaded:   make(map[string]bool), groupErrors: make(map[string]string),
 		groupWarnings: make(map[string]string), refreshErr: deps.AgentError,
 		cancelLoads: cancel, gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)), trace: deps.StartupTrace,
+		projectWarnings: deps.ProjectWarnings,
 	}
 }
 
@@ -123,8 +128,12 @@ func (s *sourceState) refreshProjectsAt(generation int) tea.Cmd {
 	return func() tea.Msg {
 		s.trace.Mark("projects-start")
 		projects, err := s.projectSource(s.ctx)
+		var warnings []string
+		if s.projectWarnings != nil {
+			warnings = s.projectWarnings()
+		}
 		s.trace.Mark("projects-done")
-		return projectsMsg{generation: generation, projects: projects, err: err}
+		return projectsMsg{generation: generation, projects: projects, warnings: warnings, err: err}
 	}
 }
 
@@ -246,7 +255,14 @@ func (s *sourceState) Accept(msg tea.Msg) (sourceUpdate, bool) {
 			s.catalog.SetProjects(msg.projects)
 			s.syncCatalog()
 		}
-		return sourceUpdate{changed: true, cmd: tea.Batch(s.gitCommands(msg.projects)...)}, true
+		toast := ""
+		if len(msg.warnings) > 0 {
+			toast = "project warning: " + msg.warnings[0]
+			if len(msg.warnings) > 1 {
+				toast += fmt.Sprintf(" (+%d more)", len(msg.warnings)-1)
+			}
+		}
+		return sourceUpdate{changed: true, toast: toast, projects: msg.projects, projectsUpdated: true, cmd: tea.Batch(s.gitCommands(msg.projects)...)}, true
 	case agentsMsg:
 		pendingBefore := s.pending()
 		if msg.generation != s.generations.agents {
@@ -289,16 +305,6 @@ func (s *sourceState) Accept(msg tea.Msg) (sourceUpdate, bool) {
 		s.applyRemote(msg.batch)
 		s.finishReload("remotes")
 		return sourceUpdate{changed: true, reloadDone: pendingBefore && !s.pending()}, true
-	case picker.AgentBatch:
-		if msg.Error != "" {
-			return sourceUpdate{}, true
-		}
-		s.agents = newAgentRecords(msg.Agents, "")
-		if s.catalog != nil {
-			s.catalog.ReplaceLocalAgents(msg.Agents)
-			s.syncCatalog()
-		}
-		return sourceUpdate{changed: true}, true
 	case picker.RemoteBatch:
 		pendingBefore := s.pending()
 		s.applyRemote(msg)
@@ -351,17 +357,6 @@ func (s *sourceState) syncCatalog() {
 	}
 }
 
-func (s *sourceState) agentValues() []capabilities.Agent {
-	values := make([]capabilities.Agent, 0, len(s.agents)+len(s.remoteAgents))
-	for _, record := range s.agents {
-		values = append(values, record.agent)
-	}
-	for _, record := range s.remoteAgents {
-		values = append(values, record.agent)
-	}
-	return values
-}
-
 func (s *sourceState) gitCommands(projects []picker.Place) []tea.Cmd {
 	if s.gitLoader == nil {
 		return nil
@@ -392,12 +387,4 @@ func (s *sourceState) gitCommands(projects []picker.Place) []tea.Cmd {
 		})
 	}
 	return cmds
-}
-
-func (s *sourceState) setAgents(agents []capabilities.Agent) {
-	s.agents = newAgentRecords(agents, "")
-	if s.catalog != nil {
-		s.catalog.ReplaceLocalAgents(agents)
-		s.syncCatalog()
-	}
 }
