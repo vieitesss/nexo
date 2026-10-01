@@ -81,6 +81,27 @@ func TestTUIRoutesExplicitTabs(t *testing.T) {
 	}
 }
 
+func TestTUIWatchesTheResolvedConfigPath(t *testing.T) {
+	deps, err := tuiDependencies(context.Background(), Invocation{
+		Selection:  backend.Selection{Kind: backend.Tmux},
+		ConfigPath: "/tmp/custom-nexo.toml",
+	}, "containers", nil, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deps.ConfigPath != "/tmp/custom-nexo.toml" {
+		t.Fatalf("ConfigPath = %q, want the explicit path", deps.ConfigPath)
+	}
+
+	deps, err = tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}}, "containers", nil, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deps.ConfigPath != config.DefaultPath() {
+		t.Fatalf("ConfigPath = %q, want the default path", deps.ConfigPath)
+	}
+}
+
 func TestClosingAProxyDoesNotForwardItsLocalID(t *testing.T) {
 	adapter := &closeClassificationAdapter{containers: []capabilities.Container{
 		{ID: "proxy-id", Machine: "dev", Proxy: true},

@@ -73,6 +73,10 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 
 func tuiDependencies(ctx context.Context, invocation Invocation, tab string, initial []capabilities.Agent, initialErr error, initialRead ...bool) (tui.Deps, error) {
 	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Theme: invocation.Config.TUI.EffectiveTheme(), Agents: append([]capabilities.Agent(nil), initial...), Input: invocation.Stdin, Output: invocation.Stdout}
+	deps.ConfigPath = invocation.ConfigPath
+	if deps.ConfigPath == "" {
+		deps.ConfigPath = config.DefaultPath()
+	}
 	var projectWarningsMu sync.Mutex
 	var projectWarnings []string
 	deps.ProjectWarnings = func() []string {
