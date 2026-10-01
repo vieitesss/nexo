@@ -210,8 +210,9 @@ func (g GitInspector) Inspect(ctx context.Context, path string) (GitState, error
 		}
 	}
 
-	if _, stashErr := g.run(checkCtx, path, "rev-parse", "--verify", "--quiet", "refs/stash"); stashErr == nil {
-		state.Stashes = true
+	state.Stashes, err = g.inspectStash(checkCtx, path, commonDir)
+	if err != nil {
+		return state, err
 	}
 	if submoduleOutput, submoduleErr := g.run(checkCtx, path, "submodule", "status", "--recursive"); submoduleErr != nil {
 		return state, fmt.Errorf("inspect submodules: %w", submoduleErr)
@@ -219,6 +220,99 @@ func (g GitInspector) Inspect(ctx context.Context, path string) (GitState, error
 		state.HasSubmodules = strings.TrimSpace(string(submoduleOutput)) != ""
 	}
 	return state, nil
+}
+
+func (g GitInspector) inspectStash(ctx context.Context, path, commonDir string) (bool, error) {
+	output, err := g.run(ctx, path, "for-each-ref", "--format=%(refname)", "refs/stash")
+	if err != nil {
+		return false, fmt.Errorf("inspect stash refs: %w", err)
+	}
+	listed := false
+	for _, ref := range strings.Fields(string(output)) {
+		if ref != "refs/stash" {
+			return false, fmt.Errorf("inspect stash refs: unexpected ref %q", ref)
+		}
+		listed = true
+	}
+
+	loosePath := filepath.Join(commonDir, "refs", "stash")
+	loosePresent, looseErr := stashMetadataPresent(loosePath)
+	if looseErr != nil {
+		return false, fmt.Errorf("inspect stash ref %q: %w", loosePath, looseErr)
+	}
+	if loosePresent && !listed {
+		return false, fmt.Errorf("inspect stash ref %q: Git did not return the existing ref", loosePath)
+	}
+
+	packedPresent, packedErr := packedStashPresent(filepath.Join(commonDir, "packed-refs"))
+	if packedErr != nil {
+		return false, packedErr
+	}
+	if packedPresent && !listed {
+		return false, errors.New("inspect packed stash ref: Git did not return the existing ref")
+	}
+
+	// A stale stash reflog still names recoverable local objects even when the
+	// ref itself has been deleted. Treat it as local data rather than silently
+	// classifying the repository as stash-free.
+	logPresent, logErr := stashMetadataPresent(filepath.Join(commonDir, "logs", "refs", "stash"))
+	if logErr != nil {
+		return false, fmt.Errorf("inspect stash reflog: %w", logErr)
+	}
+	return listed || loosePresent || packedPresent || logPresent, nil
+}
+
+func stashMetadataPresent(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if info.IsDir() {
+		return false, errors.New("stash metadata is a directory")
+	}
+	if _, err := os.ReadFile(path); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func packedStashPresent(path string) (bool, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect packed refs: %w", err)
+	}
+	for _, line := range strings.Split(string(contents), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "^") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 || !validObjectID(fields[0]) {
+			return false, fmt.Errorf("inspect packed refs: malformed entry %q", line)
+		}
+		if fields[1] == "refs/stash" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func validObjectID(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, digit := range value {
+		if (digit < '0' || digit > '9') && (digit < 'a' || digit > 'f') && (digit < 'A' || digit > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func wrapGitCheck(label string, err error) error {
