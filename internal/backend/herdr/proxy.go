@@ -172,6 +172,44 @@ func (b *Backend) closeWorkspace(workspaceID string) error {
 	return err
 }
 
+// SendPaneKeys sends the original user binding to a Herdr pane through the
+// native key-input command so key names keep their terminal semantics.
+func (b *Backend) SendPaneKeys(ctx context.Context, paneID string, keys []string) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("herdr pane input requires a command runner")
+	}
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return errors.New("herdr pane input requires a pane id")
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	args := make([]string, 0, len(keys)+3)
+	args = append(args, "send-keys", paneID, "--")
+	for _, key := range keys {
+		if strings.TrimSpace(key) == "" {
+			return errors.New("herdr pane input requires a key")
+		}
+		args = append(args, key)
+	}
+	_, err := b.run(ctx, "pane", args...)
+	return err
+}
+
+// SendPaneText types literal text into a Herdr pane.
+func (b *Backend) SendPaneText(ctx context.Context, paneID, text string) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("herdr pane input requires a command runner")
+	}
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return errors.New("herdr pane input requires a pane id")
+	}
+	_, err := b.run(ctx, "pane", "send-text", paneID, text)
+	return err
+}
+
 // ProxyTarget returns the remote identity attached by the current Herdr pane.
 func (b *Backend) ProxyTarget(ctx context.Context, paneID string) (string, error) {
 	if b == nil || b.Runner == nil {
@@ -305,6 +343,7 @@ func proxyBinary() string {
 }
 
 var _ capabilities.RemoteProxy = (*Backend)(nil)
+var _ capabilities.RemotePaste = (*Backend)(nil)
 var _ interface {
 	ProxySessionID(context.Context, string, string) (string, error)
 } = (*Backend)(nil)

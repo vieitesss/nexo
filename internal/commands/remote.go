@@ -59,7 +59,7 @@ func (remoteCommand) Run(ctx context.Context, invocation Invocation) error {
 		return err
 	}
 	if len(invocation.Args) == 0 {
-		return errors.New("remote requires a subcommand (want list, open, new, or close)")
+		return errors.New("remote requires a subcommand (want list, open, new, close, or paste)")
 	}
 	switch invocation.Args[0] {
 	case "list":
@@ -74,8 +74,10 @@ func (remoteCommand) Run(ctx context.Context, invocation Invocation) error {
 		// attach is intentionally hidden from help. It is the command run by
 		// the sole pane in a proxy session.
 		return runRemoteAttach(ctx, invocation)
+	case "paste":
+		return runRemotePaste(ctx, invocation)
 	default:
-		return fmt.Errorf("unknown remote subcommand %q (want list, open, new, or close)", invocation.Args[0])
+		return fmt.Errorf("unknown remote subcommand %q (want list, open, new, close, or paste)", invocation.Args[0])
 	}
 }
 
@@ -204,6 +206,57 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 		return fmt.Errorf("proxy %q/%q was not found", machine, container)
 	}
 	return killer.KillContainer(ctx, sessionID)
+}
+
+func runRemotePaste(ctx context.Context, invocation Invocation) error {
+	paster, ok := invocation.Adapter.(capabilities.RemotePaste)
+	if !ok {
+		return fmt.Errorf("backend %q does not support remote paste", invocation.Selection.Kind)
+	}
+	paneID := ""
+	if invocation.Selection.Kind == backend.Herdr {
+		paneID = strings.TrimSpace(os.Getenv("HERDR_PANE_ID"))
+	} else {
+		paneID = strings.TrimSpace(os.Getenv("TMUX_PANE"))
+	}
+	if paneID == "" {
+		return errors.New("remote paste requires the current pane (tmux: bind with TMUX_PANE=#{pane_id})")
+	}
+	keys := append([]string(nil), invocation.Args[1:]...)
+	target, err := paster.ProxyTarget(ctx, paneID)
+	if err != nil {
+		return fmt.Errorf("find current proxy: %w", err)
+	}
+	passThrough := func() error {
+		return paster.SendPaneKeys(ctx, paneID, keys)
+	}
+	if strings.TrimSpace(target) == "" {
+		return passThrough()
+	}
+	reader := remote.ClipboardReader{Runner: invocation.Runner}
+	png, err := reader.Read(ctx)
+	if err != nil {
+		var missing *remote.MissingToolError
+		if errors.As(err, &missing) {
+			if invocation.Stderr != nil {
+				_, _ = fmt.Fprintf(invocation.Stderr, "nexo: %s; passing the key through\n", missing)
+			}
+			return passThrough()
+		}
+		return err
+	}
+	if len(png) == 0 {
+		return passThrough()
+	}
+	identity, err := proxyidentity.ParseTarget(target)
+	if err != nil {
+		return fmt.Errorf("find current proxy: %w", err)
+	}
+	path, err := remote.UploadPNG(ctx, invocation.Runner, invocation.Config.Remote.SSHConfig, identity.Machine, png)
+	if err != nil {
+		return err
+	}
+	return paster.SendPaneText(ctx, paneID, remote.ShellQuotePath(path))
 }
 
 func runRemoteAttach(ctx context.Context, invocation Invocation) error {

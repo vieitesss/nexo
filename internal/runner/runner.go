@@ -16,6 +16,13 @@ type CommandRunner interface {
 	Run(context.Context, string, ...string) ([]byte, error)
 }
 
+// InputRunner runs a command with bytes connected to its standard input.
+// Implementations can be replaced by fakes in tests.
+type InputRunner interface {
+	CommandRunner
+	RunInput(context.Context, []byte, string, ...string) ([]byte, error)
+}
+
 // InteractiveRunner runs a command attached to the current terminal.
 type InteractiveRunner interface {
 	CommandRunner
@@ -46,6 +53,13 @@ type ExecRunner struct{}
 // Run implements CommandRunner.
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).Output()
+}
+
+// RunInput runs a command with input connected to standard input.
+func (ExecRunner) RunInput(ctx context.Context, input []byte, name string, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, name, args...)
+	command.Stdin = bytes.NewReader(input)
+	return command.Output()
 }
 
 // RunInteractive runs a command with the current process terminal attached.
