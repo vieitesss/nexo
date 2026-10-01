@@ -126,9 +126,9 @@ func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) 
 	if b == nil || b.Runner == nil {
 		return false, errors.New("tmux active-project check requires a command runner")
 	}
-	// q: uses tmux's shell escaping for ordinary special bytes. The pane ID
-	// is an unambiguous record separator: a literal newline in a path creates
-	// a malformed record and therefore fails closed instead of claiming idle.
+	// q: uses tmux's shell escaping for ordinary special bytes. The decoder
+	// validates the pane ID and absolute path fields so any ambiguous control
+	// byte fails closed instead of claiming that the project is idle.
 	output, err := b.run(ctx, "list-panes", "-a", "-F", "#{pane_id}\t#{q:pane_current_path}")
 	if err != nil {
 		if isNoServer(err) {
@@ -157,24 +157,44 @@ func isSymlink(path string) bool {
 func decodePanePathRecords(output string) ([]string, error) {
 	parts := strings.Split(output, "\n")
 	paths := make([]string, 0, len(parts))
+	seenPanes := make(map[string]struct{}, len(parts))
 	for index, record := range parts {
 		if index == len(parts)-1 && record == "" {
 			continue
 		}
 		fields := strings.SplitN(record, "\t", 2)
-		if len(fields) != 2 || fields[0] == "" || fields[1] == "" {
+		if len(fields) != 2 || !validPaneID(fields[0]) || fields[1] == "" {
 			return nil, errors.New("tmux pane path output contains an invalid record")
 		}
+		if _, seen := seenPanes[fields[0]]; seen {
+			return nil, errors.New("tmux pane path output contains a duplicate pane")
+		}
+		seenPanes[fields[0]] = struct{}{}
 		path, err := decodeTmuxQuotedPath(fields[1])
 		if err != nil {
 			return nil, err
 		}
-		if path == "" {
-			return nil, errors.New("tmux pane path output contains an empty path")
+		// q: does not frame control bytes: a tab stays in the field and a
+		// newline starts another record. Refuse both rather than guessing where
+		// a record ends and treating a malformed observation as idle.
+		if path == "" || strings.ContainsAny(path, "\n\t") || !filepath.IsAbs(path) {
+			return nil, errors.New("tmux pane path output contains an unsafe path")
 		}
 		paths = append(paths, path)
 	}
 	return paths, nil
+}
+
+func validPaneID(value string) bool {
+	if len(value) < 2 || value[0] != '%' {
+		return false
+	}
+	for _, digit := range value[1:] {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // decodeTmuxQuotedPath decodes the actual q: format emitted by tmux. It is

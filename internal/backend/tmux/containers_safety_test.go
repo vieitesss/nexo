@@ -61,6 +61,40 @@ func TestProjectActiveFailsClosedForLiteralNewlineRecord(t *testing.T) {
 	}
 }
 
+func TestProjectActiveFailsClosedForNewlineTabNativeRecord(t *testing.T) {
+	setSafetyEnv(t)
+	root := t.TempDir()
+	project := filepath.Join(root, "repo\n%99\tother")
+	if err := os.MkdirAll(filepath.Join(project, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	backend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
+		// This is the literal native output from tmux q: for a path containing
+		// a newline, percent sign and tab. The continuation looks like a second
+		// record unless pane IDs and absolute paths are validated.
+		native := "%7\t" + filepath.Join(root, "repo") + "\n\\%99\tother/src\n"
+		return []byte(native), nil
+	}))
+	if _, err := backend.ProjectActive(context.Background(), project); err == nil {
+		t.Fatal("ProjectActive() error = nil for a newline/tab-framing ambiguity")
+	}
+}
+
+func TestDecodePanePathRecordsRejectsEmbeddedTabAndRelativeContinuation(t *testing.T) {
+	for name, output := range map[string]string{
+		"embedded tab":      "%1\t/tmp/repo\tchild\n",
+		"trailing newline":  "%1\t/tmp/repo\n\n",
+		"relative path":     "%1\tchild/src\n",
+		"malformed pane id": "pane\t/tmp/repo\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodePanePathRecords(output); err == nil {
+				t.Fatalf("decodePanePathRecords(%q) error = nil", output)
+			}
+		})
+	}
+}
+
 func tmuxActualQuote(path string) string {
 	var quoted strings.Builder
 	for _, value := range path {
