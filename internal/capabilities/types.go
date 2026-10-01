@@ -2,14 +2,6 @@ package capabilities
 
 import "time"
 
-// Pane is a pane exposed by a backend.
-type Pane struct {
-	ID          string `json:"id"`
-	ContainerID string `json:"container_id,omitempty"`
-	Title       string `json:"title,omitempty"`
-	TTY         string `json:"tty,omitempty"`
-}
-
 // Agent is an agent pane exposed by a backend. ContainerID is the stable
 // backend-native container identity; Container is only a display label and may
 // be omitted or duplicated.
