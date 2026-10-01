@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
-  <title id="title">nexo</title>
-  <desc id="desc">A connected N-shaped mark for nexo</desc>
-  <rect x="8" y="8" width="144" height="144" rx="32" fill="#246b78"/>
-  <path d="M42 116V44h18l40 43V44h18v72h-18L60 73v43z" fill="#f7d08a"/>
-  <circle cx="42" cy="126" r="7" fill="#f7d08a"/>
-  <circle cx="118" cy="34" r="7" fill="#f7d08a"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300" role="img" aria-label="nexo">
+  <title>nexo</title>
+  <rect x="0.5" y="0.5" width="299" height="299" rx="68" fill="#171A21" stroke="#2A2F3A"/>
+  <g transform="translate(40 40) scale(2.2)">
+    <path d="M28 78 L28 50 A22 22 0 0 1 72 50 L72 78" fill="none" stroke="#E8EAED" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="50" cy="28" r="9" fill="#B8F15A"/>
+  </g>
 </svg>
