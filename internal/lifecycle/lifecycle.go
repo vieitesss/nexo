@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/projects"
@@ -57,7 +58,13 @@ func CreateWorktree(ctx context.Context, options capabilities.WorktreeCreateOpti
 		return capabilities.Worktree{}, err
 	}
 	options.Destination = path
+	return createAndOpenWorktree(ctx, options, adapter)
+}
 
+// createAndOpenWorktree runs the native create and open steps with their
+// shared result normalization and rollback. Extraction shares it so both
+// transactions keep identical open and cleanup semantics.
+func createAndOpenWorktree(ctx context.Context, options capabilities.WorktreeCreateOptions, adapter WorktreeAdapter) (capabilities.Worktree, error) {
 	result, err := adapter.Create(ctx, options)
 	if err != nil {
 		return capabilities.Worktree{}, err
@@ -73,23 +80,27 @@ func CreateWorktree(ctx context.Context, options capabilities.WorktreeCreateOpti
 		if adapter.Rollback == nil {
 			return capabilities.Worktree{}, openErr
 		}
-		if rollbackErr := adapter.Rollback(ctx, result); rollbackErr != nil {
+		cleanupCtx, cancel := CleanupContext(ctx)
+		defer cancel()
+		if rollbackErr := adapter.Rollback(cleanupCtx, result); rollbackErr != nil {
 			return capabilities.Worktree{}, errors.Join(openErr, rollbackErr)
 		}
 		return capabilities.Worktree{}, openErr
 	}
 
-	container, openErr := adapter.Open(ctx, path, capabilities.OpenOptions{NoFocus: options.NoFocus})
-	result.Container = normalizeContainer(path, container)
+	container, openErr := adapter.Open(ctx, options.Destination, capabilities.OpenOptions{NoFocus: options.NoFocus})
+	result.Container = normalizeContainer(options.Destination, container)
 	result = normalizeWorktree(options, result)
-	result.Container = normalizeContainer(path, result.Container)
+	result.Container = normalizeContainer(options.Destination, result.Container)
 	if openErr == nil {
 		return result, nil
 	}
 	if adapter.Rollback == nil {
 		return capabilities.Worktree{}, openErr
 	}
-	if rollbackErr := adapter.Rollback(ctx, result); rollbackErr != nil {
+	cleanupCtx, cancel := CleanupContext(ctx)
+	defer cancel()
+	if rollbackErr := adapter.Rollback(cleanupCtx, result); rollbackErr != nil {
 		return capabilities.Worktree{}, errors.Join(openErr, rollbackErr)
 	}
 	return capabilities.Worktree{}, openErr
@@ -143,6 +154,13 @@ func normalizeWorktree(options capabilities.WorktreeCreateOptions, result capabi
 		result.SessionName = result.Container.Name
 	}
 	return result
+}
+
+// CleanupContext returns a bounded context that is not canceled when the
+// caller abandons an operation after mutation has begun. Recovery must still
+// have a deadline so a broken native command cannot hang forever.
+func CleanupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), 30*time.Second)
 }
 
 func hasContainer(result capabilities.Worktree) bool {

@@ -20,8 +20,8 @@ func TestJSONSkillExamplesDecodeIntoWireTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocks := jsonFencedBlocks(string(contents))
-	if len(blocks) != 9 {
-		t.Fatalf("found %d JSON examples, want nine", len(blocks))
+	if len(blocks) != 10 {
+		t.Fatalf("found %d JSON examples, want ten", len(blocks))
 	}
 	values := []any{
 		&backend.Selection{},
@@ -32,6 +32,7 @@ func TestJSONSkillExamplesDecodeIntoWireTypes(t *testing.T) {
 		&[]remote.MachineResult{},
 		&[]remote.MachineResult{},
 		&openedContainerJSON{},
+		&worktreeJSON{},
 		&worktreeJSON{},
 	}
 	for index, block := range blocks {

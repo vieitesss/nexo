@@ -12,6 +12,9 @@ func Names(backend any) []string {
 	if _, ok := backend.(WorktreeCreator); ok {
 		names = append(names, "WorktreeCreator")
 	}
+	if _, ok := backend.(WorktreeExtractor); ok {
+		names = append(names, "WorktreeExtractor")
+	}
 	if _, ok := backend.(ContainerOpener); ok {
 		names = append(names, "ContainerOpener")
 	}

@@ -2,6 +2,9 @@ package herdr
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -55,6 +58,75 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 		return []byte(`{"result":{"type":"tab_list","tabs":[]}}`), nil
 	}
 	return nil, nil
+}
+
+type partialWorktreeRunner struct{}
+
+func (partialWorktreeRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if name == "herdr" && len(args) > 0 && args[0] == "worktree" && args[1] == "create" {
+		var repo, destination, branch string
+		for index := 0; index < len(args); index++ {
+			switch args[index] {
+			case "--cwd":
+				repo = args[index+1]
+			case "--path":
+				destination = args[index+1]
+			case "--branch":
+				branch = args[index+1]
+			}
+		}
+		output, err := exec.CommandContext(ctx, "git", "-C", repo, "worktree", "add", destination, branch).CombinedOutput()
+		if err != nil {
+			return output, err
+		}
+		return []byte("malformed response"), nil
+	}
+	if name == "herdr" {
+		return nil, nil
+	}
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+func runPartialHerdrGit(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	output, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v (%s)", args, err, output)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func TestExtractWorktreeCleansPartialNativeCreate(t *testing.T) {
+	repo := t.TempDir()
+	runPartialHerdrGit(t, repo, "init", "-q")
+	runPartialHerdrGit(t, repo, "config", "user.email", "test@example.com")
+	runPartialHerdrGit(t, repo, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(repo, "README"), []byte("initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runPartialHerdrGit(t, repo, "add", "README")
+	runPartialHerdrGit(t, repo, "commit", "-qm", "initial")
+	base := runPartialHerdrGit(t, repo, "branch", "--show-current")
+	runPartialHerdrGit(t, repo, "checkout", "-qb", "feature")
+	before := runPartialHerdrGit(t, repo, "rev-parse", "HEAD")
+	destination := filepath.Join(t.TempDir(), "feature")
+
+	_, err := New(partialWorktreeRunner{}).ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+		Repo: repo, Destination: destination, ReturnBranch: base, NoFocus: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "decode herdr created workspace") {
+		t.Fatalf("ExtractWorktree() error = %v, want malformed response", err)
+	}
+	if runPartialHerdrGit(t, repo, "branch", "--show-current") != "feature" || runPartialHerdrGit(t, repo, "rev-parse", "HEAD") != before {
+		t.Fatalf("original branch or HEAD changed after partial create")
+	}
+	if _, statErr := os.Stat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("destination after partial create = %v", statErr)
+	}
+	listing := runPartialHerdrGit(t, repo, "worktree", "list", "--porcelain")
+	if strings.Contains(listing, destination) || !strings.Contains(listing, "branch refs/heads/feature") {
+		t.Fatalf("worktree list after partial create = %s", listing)
+	}
 }
 
 func TestListContainersUsesWorkspaceAndFocusedPane(t *testing.T) {

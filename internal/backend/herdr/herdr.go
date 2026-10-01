@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/git"
 	"github.com/vieitesss/nexo/internal/lifecycle"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
@@ -101,6 +103,20 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 	})
 }
 
+func (b *Backend) ExtractWorktree(ctx context.Context, options capabilities.WorktreeExtractOptions) (capabilities.Worktree, error) {
+	if b == nil || b.Runner == nil {
+		return capabilities.Worktree{}, errors.New("herdr worktree extractor requires a command runner")
+	}
+	return lifecycle.ExtractWorktree(ctx, options, lifecycle.ExtractAdapter{
+		WorktreeAdapter: lifecycle.WorktreeAdapter{
+			Create:   b.createWorktree,
+			Open:     b.openProjectNative,
+			Rollback: b.removeWorktree,
+		},
+		Git: git.New(b.Runner),
+	})
+}
+
 func (b *Backend) createWorktree(ctx context.Context, options capabilities.WorktreeCreateOptions) (capabilities.Worktree, error) {
 	args := []string{"worktree", "create", "--cwd", options.Repo, "--branch", options.Branch}
 	if options.NewBranch {
@@ -112,11 +128,13 @@ func (b *Backend) createWorktree(ctx context.Context, options capabilities.Workt
 	}
 	output, err := b.run(ctx, args[0], args[1:]...)
 	if err != nil {
-		return capabilities.Worktree{}, err
+		cleanupErr := b.rollbackPartialCreate(options, workspaceID(output), ctx)
+		return capabilities.Worktree{}, errors.Join(err, cleanupErr)
 	}
 	workspace, err := decodeWorktreeWorkspace(output)
 	if err != nil {
-		return capabilities.Worktree{}, err
+		cleanupErr := b.rollbackPartialCreate(options, workspaceID(output), ctx)
+		return capabilities.Worktree{}, errors.Join(err, cleanupErr)
 	}
 	name := workspace.Label
 	if name == "" {
@@ -131,6 +149,63 @@ func (b *Backend) createWorktree(ctx context.Context, options capabilities.Workt
 		Container:   capabilities.OpenedContainer{ID: workspace.ID, Name: name, Path: options.Destination, Created: true},
 	}, nil
 }
+
+func workspaceID(output []byte) string {
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if json.Unmarshal(output, &envelope) != nil {
+		return ""
+	}
+	raw := output
+	if len(envelope.Result) != 0 && string(envelope.Result) != "null" {
+		raw = envelope.Result
+	}
+	var result struct {
+		Workspace struct {
+			ID string `json:"workspace_id"`
+		} `json:"workspace"`
+	}
+	if json.Unmarshal(raw, &result) != nil {
+		return ""
+	}
+	return result.Workspace.ID
+}
+
+func (b *Backend) rollbackPartialCreate(options capabilities.WorktreeCreateOptions, id string, ctx context.Context) error {
+	cleanupCtx, cancel := lifecycle.CleanupContext(ctx)
+	defer cancel()
+	var failures []error
+	if id != "" {
+		if _, err := b.run(cleanupCtx, "worktree", "remove", "--workspace", id, "--force"); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	if _, err := os.Lstat(options.Destination); err == nil {
+		if _, err := b.Runner.Run(cleanupCtx, "git", "-C", options.Repo, "worktree", "remove", "--force", options.Destination); err != nil {
+			failures = append(failures, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		failures = append(failures, err)
+	}
+	return errors.Join(failures...)
+}
+
+// RollbackExtractWorktree removes the extracted worktree and restores its
+// branch in the original checkout. Cleanup is independent of cancellation
+// because it is part of the data-safety transaction.
+func (b *Backend) RollbackExtractWorktree(ctx context.Context, worktree capabilities.Worktree) error {
+	cleanupCtx, cancel := lifecycle.CleanupContext(ctx)
+	defer cancel()
+	cleanupErr := b.removeWorktree(cleanupCtx, worktree)
+	if worktree.Repo == "" || worktree.Branch == "" {
+		return errors.Join(cleanupErr, errors.New("extracted worktree result lacks original branch identity"))
+	}
+	restoreErr := git.New(b.Runner).Checkout(cleanupCtx, worktree.Repo, worktree.Branch)
+	return errors.Join(cleanupErr, restoreErr)
+}
+
+var _ capabilities.WorktreeExtractionRollback = (*Backend)(nil)
 
 // RemoveWorktree removes a Herdr worktree workspace created by this invocation.
 func (b *Backend) RemoveWorktree(ctx context.Context, worktree capabilities.Worktree) error {
