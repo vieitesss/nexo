@@ -382,6 +382,14 @@ func openRemoteContainerWithResolver(ctx context.Context, invocation Invocation,
 	if kind != remote.KindTmux && kind != remote.KindHerdr {
 		return fmt.Errorf("remote machine %q has an unknown multiplexer kind", machine)
 	}
+	// A tmux server rewrites '.' and ':' when it creates sessions, so the
+	// container's stable spelling is tmux's canonical name. Normalize here,
+	// where the resolved remote kind is known, so every local proxy adapter
+	// stores the identity the listed container will later resolve. Native
+	// Herdr containers keep their spelling.
+	if kind == remote.KindTmux {
+		container = tmux.CanonicalContainerName(container)
+	}
 	if kind == remote.KindHerdr {
 		if invocation.Selection.Kind != backend.Herdr {
 			return fmt.Errorf("unsupported: %s runs Herdr; use Herdr to open it", machine)

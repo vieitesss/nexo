@@ -99,8 +99,11 @@ _Avoid_: mirror, remote session (that is what a proxy attaches to)
 
 **Proxy identity**:
 The machine/container pair that identifies a proxy independently of its local
-container label or native metadata. Machine matching is case-insensitive;
-container spelling remains native to the selected backend.
+container label or native metadata. Machine matching is case-insensitive. The
+container spelling follows the resolved remote multiplexer rather than the
+local proxy adapter: a remote tmux container uses tmux's canonical
+session-name spelling (`_` for `.` and `:`), while a native Herdr remote
+container keeps its spelling.
 
 **Place catalog**:
 The backend-neutral module that combines project candidates, local and remote
