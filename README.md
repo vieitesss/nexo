@@ -220,7 +220,7 @@ nexo --help
 | `nexo tui [agents\|containers\|projects]` | Render the TUI in the terminal supplied by your binding. With no tab, open Agents for unseen-stopped agents, otherwise Containers. |
 | `nexo agents` | List agent panes; add `watch` or `seen PANE_ID`. |
 | `nexo open PATH` | Open a discovered project candidate; add `--no-focus` to create or reuse its container without switching to it. Herdr also accepts `--workspace-id ID`. |
-| `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, or `close [MACHINE/CONTAINER]`. |
+| `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, `close [MACHINE/CONTAINER]`, or `paste [KEY...]`. |
 | `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch`, `--add-parent`, or `--no-focus`. |
 | `nexo worktree extract REPO DESTINATION` | Move the branch checked out in `REPO` into a new worktree and leave a return branch behind; add `--return-branch`, `--add-parent`, or `--no-focus`. |
 | `nexo tmux init` | Install tmux focus hooks and the agent watcher (tmux backend only). |
@@ -251,6 +251,10 @@ nexo --backend=tmux remote list --json
 nexo --backend=tmux remote open devbox/api
 nexo --backend=herdr remote new devbox feature-api
 nexo --backend=tmux remote close devbox/api
+
+# Bind an image paste key in tmux; the key argument is replayed on pass-through.
+# nexo does not install this binding.
+# bind-key -T root C-v run-shell 'nexo --backend=tmux remote paste C-v'
 
 # Create a worktree and add its parent to project discovery.
 nexo --backend=tmux worktree create --new-branch --add-parent \

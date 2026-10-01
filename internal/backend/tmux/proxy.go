@@ -117,6 +117,49 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 	return proxyidentity.NewPolicy(b.configuredMachines()).Resolve(ctx, identity, tmuxProxyStore{backend: b, includeLabels: b.isRemoteMachine(machine)})
 }
 
+// ProxyTarget returns the identity recorded on a local proxy session.
+func (b *Backend) ProxyTarget(ctx context.Context, paneID string) (string, error) {
+	if b == nil || b.Runner == nil {
+		return "", errors.New("tmux remote proxy requires a command runner")
+	}
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return "", errors.New("tmux proxy pane id is empty")
+	}
+	output, err := b.run(ctx, "display-message", "-p", "-t", paneID, "#{"+proxySessionOption+"}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+// SendPaneKeys sends the original user binding to a local pane.
+func (b *Backend) SendPaneKeys(ctx context.Context, paneID string, keys []string) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("tmux pane input requires a command runner")
+	}
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return errors.New("tmux pane input requires a pane id")
+	}
+	args := append([]string{"-t", paneID}, keys...)
+	_, err := b.run(ctx, "send-keys", args...)
+	return err
+}
+
+// SendPaneText types literal text into a local pane.
+func (b *Backend) SendPaneText(ctx context.Context, paneID, text string) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("tmux pane input requires a command runner")
+	}
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return errors.New("tmux pane input requires a pane id")
+	}
+	_, err := b.run(ctx, "send-keys", "-t", paneID, "-l", text)
+	return err
+}
+
 func (b *Backend) configuredMachines() []string {
 	if b == nil {
 		return nil
@@ -255,4 +298,5 @@ func NewCommandTransport(remote config.RemoteConfig) proxy.Transport {
 }
 
 var _ capabilities.RemoteProxy = (*Backend)(nil)
+var _ capabilities.RemotePaste = (*Backend)(nil)
 var _ proxy.Transport = commandProxyTransport{}

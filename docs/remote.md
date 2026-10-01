@@ -175,3 +175,30 @@ Commands:
   target, the current proxy is used where the active backend exposes one.
 - `nexo remote list` lists remote containers and includes each machine's
   detected kind in `--json` output. Listing always uses SSH.
+
+### Clipboard image paste
+
+`nexo remote paste [KEY...]` is a user-bound helper for pasting a clipboard PNG
+into a proxy. It reads the local clipboard, uploads the image over SSH to a
+mode-0600 `nexo-paste-*.png` temporary file, and types that remote path into the
+attached pane. Outside a proxy, or when the clipboard has no image, it sends the
+original `KEY...` through unchanged. A missing local clipboard tool prints one
+notice before the key is passed through.
+
+nexo never installs this binding. In tmux, add a binding such as:
+
+```tmux
+bind-key -T root C-v run-shell 'nexo --backend=tmux remote paste C-v'
+```
+
+In Herdr, add a key action in the user's Herdr key/action configuration that
+runs:
+
+```sh
+nexo --backend=herdr remote paste C-v
+```
+
+Use the key token expected by the binding in place of `C-v`. The platform
+clipboard readers are `pngpaste` (or the macOS AppleScript fallback),
+`wl-paste` on Wayland, and `xclip` on X11. End-to-end verification with a real
+SSH proxy and a real macOS clipboard reader is still needed.
