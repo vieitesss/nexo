@@ -69,7 +69,10 @@ gpu1 = "herdr"                  # remote runs a Herdr server
 - nexo must be on `PATH` for **non-interactive** SSH shells. Put the export in
   a file those shells read, such as `~/.zshenv`, not `~/.zshrc`. Verify with
   `ssh MACHINE 'command -v nexo'`: a working non-interactive shell prints the
-  path.
+  path. Use a UTF-8 locale for those shells too, as belt and braces.
+- Remote invocations read the remote user's `$XDG_CONFIG_HOME/nexo/config.toml`,
+  or `~/.config/nexo/config.toml` when `XDG_CONFIG_HOME` is unset. The main
+  machine's `--config-file` is not forwarded.
 - Its own multiplexer: a tmux server, a Herdr server, or both.
 - Its own config only needs `[agents]` when the defaults do not fit. Agent
   processes and working patterns are evaluated on the remote, so change them
@@ -81,8 +84,14 @@ gpu1 = "herdr"                  # remote runs a Herdr server
   set -g focus-events on
   ```
 
-  This is required for seen-marking: the local listing reads the `seen` flag
-  that the remote focus hook writes.
+  On a remote without the plugin, add this to `~/.tmux.conf` instead:
+
+  ```tmux
+  if-shell 'command -v nexo >/dev/null 2>&1' 'run-shell "nexo tmux init --backend=tmux"'
+  ```
+
+  This sets up the focus hooks and watcher. It is required for seen-marking:
+  the local listing reads the `seen` flag that the remote focus hook writes.
 
 ```toml
 # On the remote, only when the defaults do not fit.
