@@ -379,7 +379,7 @@ func stateText(agent capabilities.Agent, text string, selected bool) string {
 	if !selected {
 		return stateColor(agent).Render(text)
 	}
-	return selectedStateMarkerStart + selectedStateColor(agent).Render(text) + selectedStateMarkerEnd
+	return selectedStateMarkerStart + stateColor(agent).Render(text) + selectedStateMarkerEnd
 }
 
 func (m renderFrame) containerText(row row, marker string, selected bool) (string, string) {
@@ -872,21 +872,6 @@ func stateColor(agent capabilities.Agent) lipgloss.Style {
 	default:
 		return yellow()
 	}
-}
-
-func selectedStateForeground(agent capabilities.Agent) lipgloss.AdaptiveColor {
-	switch {
-	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && !agent.Seen:
-		return lipgloss.AdaptiveColor{Light: "#9b1c1c", Dark: "#ffb3ba"}
-	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped"):
-		return lipgloss.AdaptiveColor{Light: "#166534", Dark: "#86efac"}
-	default:
-		return lipgloss.AdaptiveColor{Light: "#8a4b08", Dark: "#fbbf24"}
-	}
-}
-
-func selectedStateColor(agent capabilities.Agent) lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(selectedStateForeground(agent))
 }
 
 func normal() lipgloss.Style { return lipgloss.NewStyle().Foreground(palette.Fg) }

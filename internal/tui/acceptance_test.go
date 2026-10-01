@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -547,52 +546,6 @@ func selectionDeps() Deps {
 	}
 }
 
-func contrastRatioHex(foreground, background string) float64 {
-	luminance := func(value string) float64 {
-		value = strings.TrimPrefix(value, "#")
-		channels := [3]float64{}
-		for index := range channels {
-			channel, err := strconv.ParseUint(value[index*2:index*2+2], 16, 8)
-			if err != nil {
-				panic(err)
-			}
-			linear := float64(channel) / 255
-			if linear <= 0.04045 {
-				channels[index] = linear / 12.92
-			} else {
-				channels[index] = math.Pow((linear+0.055)/1.055, 2.4)
-			}
-		}
-		return 0.2126*channels[0] + 0.7152*channels[1] + 0.0722*channels[2]
-	}
-	light, dark := luminance(foreground), luminance(background)
-	if light < dark {
-		light, dark = dark, light
-	}
-	return (light + 0.05) / (dark + 0.05)
-}
-
-func TestSelectedStateColoursContrastWithSelection(t *testing.T) {
-	selection := selectionBackground()
-	states := []capabilities.Agent{{State: "stopped"}, {State: "stopped", Seen: true}, {State: "working"}}
-	for _, dark := range []bool{true, false} {
-		background := selection.Dark
-		if !dark {
-			background = selection.Light
-		}
-		for _, agent := range states {
-			foreground := selectedStateForeground(agent)
-			value := foreground.Dark
-			if !dark {
-				value = foreground.Light
-			}
-			if ratio := contrastRatioHex(value, background); ratio < 4.5 {
-				t.Fatalf("dark=%t state=%q contrast=%0.2f, want at least 4.5", dark, agent.State, ratio)
-			}
-		}
-	}
-}
-
 func selectedStateCells(model Model, tab Tab, row row, plain string) map[int]bool {
 	allowed := map[int]bool{}
 	runes := []rune(plain)
@@ -638,7 +591,7 @@ func TestSelectedRowHasOnlySelectionForeground(t *testing.T) {
 		expected := selectionForegroundToken(t)
 		stateTokens := map[string]bool{}
 		for _, agent := range selectionDeps().Agents {
-			for _, token := range foregroundTokens(selectedStateColor(agent).Render("x")) {
+			for _, token := range foregroundTokens(stateColor(agent).Render("x")) {
 				if token != "" {
 					stateTokens[token] = true
 				}

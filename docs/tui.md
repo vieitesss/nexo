@@ -84,9 +84,8 @@ Semantic colours stay as terminal ANSI codes and follow the user's theme:
 agent state is red, yellow or green, Git additions and deletions are bright
 green and bright red, and errors are red. The selected row is the only painted
 background — one blue bar with a single foreground. Bold names and headers keep
-their weight on the selected row. State dots remain explicit adaptive red,
-green, or amber variants on that background; on the Agents tab, the state word
-and stopped age retain the same state colour.
+their weight on the selected row, and agent state dots, state words and stopped
+ages keep exactly the same terminal ANSI colour they have when unselected.
 
 The `[tui]` `theme` setting controls how adaptive colours are selected. The
 default `"auto"` queries OSC 11 on the controlling terminal (including inside
