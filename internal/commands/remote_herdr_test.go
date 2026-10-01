@@ -65,6 +65,37 @@ func TestRemoteOpenHerdrUsesNativeMachineSupport(t *testing.T) {
 	}
 }
 
+func TestRemoteOpenHerdrPreservesNativeContainerSpelling(t *testing.T) {
+	var output strings.Builder
+	adapter := &recordingRemoteProxy{}
+	fake := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "ssh" {
+			return []byte("__NEXO_REMOTE_KIND__herdr\n{\"result\":{\"type\":\"workspace_list\",\"workspaces\":[]}}\n"), nil
+		}
+		if name == "herdr" && strings.Join(args, " ") == "machine list --json" {
+			return []byte(`[{"target":"gpu1","enabled":true}]`), nil
+		}
+		return nil, nil
+	})
+	err := (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Herdr},
+		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"gpu1"}}},
+		Adapter:   adapter,
+		Runner:    fake,
+		Stdout:    &output,
+		Args:      []string{"open", "gpu1/app.v1:blue"},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(output.String(), "app.v1:blue is available under gpu1") {
+		t.Fatalf("output = %q, want native Herdr container spelling", output.String())
+	}
+	if adapter.opened != [2]string{} {
+		t.Fatalf("proxy = %#v, want the native Herdr machine path", adapter.opened)
+	}
+}
+
 func TestHerdrMachineSavedMatchesEnabledSSHTargetOnly(t *testing.T) {
 	if !herdrMachineSaved([]byte(`[{"id":"1","label":"other","target":"gpu1","enabled":true}]`), "gpu1") {
 		t.Fatal("expected matching target to be recognized")

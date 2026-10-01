@@ -3,12 +3,14 @@ package commands
 import (
 	"context"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/proxyidentity"
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
@@ -38,23 +40,111 @@ func TestRemoteOpenRoutesThroughConfiguredRemoteProxy(t *testing.T) {
 }
 
 func TestRemoteOpenCanonicalizesTmuxContainerName(t *testing.T) {
-	proxy := &recordingRemoteProxy{}
-	err := (remoteCommand{}).Run(context.Background(), Invocation{
-		Selection: backend.Selection{Kind: backend.Tmux},
-		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
-		Adapter:   proxy,
-		Args:      []string{"open", "devbox/app.v1:blue"},
-	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+	adapter := &policyBackedProxy{machines: []string{"devbox"}, store: newMemoryProxyStore()}
+	invocation := Invocation{
+		Selection: backend.Selection{Kind: backend.Herdr},
+		Config: config.Config{Remote: config.RemoteConfig{
+			Machines: []string{"devbox"},
+			Backends: map[string]string{"devbox": "tmux"},
+		}},
+		Adapter: adapter,
 	}
-	if proxy.opened != [2]string{"devbox", "app_v1_blue"} {
-		t.Fatalf("proxy call = %#v, want canonical devbox/app_v1_blue", proxy.opened)
+
+	open := invocation
+	open.Args = []string{"open", "devbox/app.v1:blue"}
+	if err := (remoteCommand{}).Run(context.Background(), open); err != nil {
+		t.Fatalf("open punctuation alias error = %v", err)
+	}
+	if len(adapter.created) != 1 {
+		t.Fatalf("created = %#v, want one workspace for the tmux spelling", adapter.created)
+	}
+
+	reopen := invocation
+	reopen.Args = []string{"open", "devbox/app_v1_blue"}
+	if err := (remoteCommand{}).Run(context.Background(), reopen); err != nil {
+		t.Fatalf("reopen canonical name error = %v", err)
+	}
+	if len(adapter.created) != 1 {
+		t.Fatalf("reopen created a duplicate workspace: %#v", adapter.created)
+	}
+
+	close := invocation
+	close.Runner = runner.Func(func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "ssh" {
+			t.Fatal("remote close must not probe the remote machine")
+		}
+		return nil, nil
+	})
+	close.Args = []string{"close", "devbox/app_v1_blue"}
+	if err := (remoteCommand{}).Run(context.Background(), close); err != nil {
+		t.Fatalf("close canonical name error = %v", err)
+	}
+	if len(adapter.killed) != 1 || adapter.killed[0] != adapter.created[0] {
+		t.Fatalf("killed = %#v, want the created workspace %#v", adapter.killed, adapter.created)
 	}
 }
 
+// memoryProxyStore is an in-memory native store behind the shared lookup
+// policy.
+type memoryProxyStore struct {
+	workspaces map[string]string
+	order      []string
+}
+
+func newMemoryProxyStore() *memoryProxyStore {
+	return &memoryProxyStore{workspaces: make(map[string]string)}
+}
+
+func (s *memoryProxyStore) ListProxyCandidates(context.Context) ([]proxyidentity.Candidate, error) {
+	candidates := make([]proxyidentity.Candidate, 0, len(s.order))
+	for _, id := range s.order {
+		candidates = append(candidates, proxyidentity.Candidate{ID: id, TaggedIdentity: s.workspaces[id]})
+	}
+	return candidates, nil
+}
+
+func (s *memoryProxyStore) AdoptProxy(_ context.Context, id string, identity proxyidentity.Identity) error {
+	s.workspaces[id] = identity.String()
+	return nil
+}
+
+// policyBackedProxy is a Herdr-like local adapter: it stores whatever identity
+// it is given, so the command seam alone is responsible for handing it one
+// spelling for a remote tmux container.
+type policyBackedProxy struct {
+	machines []string
+	store    *memoryProxyStore
+	created  []string
+	killed   []string
+}
+
+func (p *policyBackedProxy) Proxy(ctx context.Context, machine, container string) error {
+	id, err := p.ProxySessionID(ctx, machine, container)
+	if err != nil {
+		return err
+	}
+	if id != "" {
+		return nil
+	}
+	id = "w" + strconv.Itoa(len(p.created)+1)
+	p.store.order = append(p.store.order, id)
+	p.store.workspaces[id] = proxyidentity.NewIdentity(machine, container).String()
+	p.created = append(p.created, id)
+	return nil
+}
+
+func (p *policyBackedProxy) ProxySessionID(ctx context.Context, machine, container string) (string, error) {
+	return proxyidentity.NewPolicy(p.machines).Resolve(ctx, proxyidentity.NewIdentity(machine, container), p.store)
+}
+
+func (p *policyBackedProxy) KillContainer(_ context.Context, id string) error {
+	p.killed = append(p.killed, id)
+	return nil
+}
+
 type recordingKiller struct {
-	closed string
+	closed      string
+	proxyTarget [2]string
 }
 
 func (k *recordingKiller) KillContainer(_ context.Context, id string) error {
@@ -64,7 +154,8 @@ func (k *recordingKiller) KillContainer(_ context.Context, id string) error {
 
 func (*recordingKiller) Proxy(context.Context, string, string) error { return nil }
 
-func (*recordingKiller) ProxySessionID(context.Context, string, string) (string, error) {
+func (k *recordingKiller) ProxySessionID(_ context.Context, machine, container string) (string, error) {
+	k.proxyTarget = [2]string{machine, container}
 	return "$7", nil
 }
 
@@ -87,6 +178,28 @@ func TestRemoteCloseOnlyKillsLocalProxy(t *testing.T) {
 	}
 	if killer.closed != "$7" {
 		t.Fatalf("closed target = %q, want stable proxy session id", killer.closed)
+	}
+}
+
+func TestRemoteCloseLeavesContainerSpellingToTheAdapter(t *testing.T) {
+	killer := &recordingKiller{}
+	err := (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Herdr},
+		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
+		Adapter:   killer,
+		Runner: runner.Func(func(_ context.Context, name string, _ ...string) ([]byte, error) {
+			if name == "ssh" {
+				t.Fatal("remote close must not probe SSH")
+			}
+			return nil, nil
+		}),
+		Args: []string{"close", "devbox/app.v1:blue"},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if killer.proxyTarget != [2]string{"devbox", "app.v1:blue"} {
+		t.Fatalf("proxy target = %#v, want native spelling", killer.proxyTarget)
 	}
 }
 
@@ -160,4 +273,7 @@ func TestRemoteAttachValidatesBackendAndMachine(t *testing.T) {
 }
 
 var _ capabilities.RemoteProxy = (*recordingRemoteProxy)(nil)
+var _ capabilities.RemoteProxy = (*policyBackedProxy)(nil)
 var _ capabilities.ContainerKiller = (*recordingKiller)(nil)
+var _ capabilities.ContainerKiller = (*policyBackedProxy)(nil)
+var _ proxyidentity.Store = (*memoryProxyStore)(nil)

@@ -14,6 +14,7 @@ import (
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/lifecycle"
 	"github.com/vieitesss/nexo/internal/projects"
+	"github.com/vieitesss/nexo/internal/proxyidentity"
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
@@ -27,7 +28,7 @@ type Backend struct {
 
 	proxyConfig     config.RemoteConfig
 	proxyConfigPath string
-	remoteMachines  map[string]bool
+	remoteMachines  proxyidentity.MachineSet
 }
 
 // New constructs a tmux backend using the supplied command runner. The
@@ -40,7 +41,7 @@ func New(r runner.CommandRunner, inside ...bool) *Backend {
 	notifier := NewNotifier(r)
 	agents := NewAgentSource(r)
 	agents.SetNotifier(notifier)
-	return &Backend{Runner: r, Inside: inTmux, agents: agents, notifier: notifier, remoteMachines: make(map[string]bool)}
+	return &Backend{Runner: r, Inside: inTmux, agents: agents, notifier: notifier, remoteMachines: proxyidentity.NewMachineSet(nil)}
 }
 
 // Name identifies this backend.

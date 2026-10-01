@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
 // RemoteConfig controls the machines queried by remote place sources.
@@ -35,12 +37,6 @@ func (r RemoteConfig) EffectiveTransport() string {
 	return transport
 }
 
-// NormalizeMachineName returns the comparison form used for remote machine
-// names.
-func NormalizeMachineName(machine string) string {
-	return strings.ToLower(strings.TrimSpace(machine))
-}
-
 // ConfiguredMachines returns the configured remote machines, including names
 // that occur only as keys in remote.backends. The first spelling wins while
 // matching remains case-insensitive and whitespace-tolerant.
@@ -49,7 +45,7 @@ func (r RemoteConfig) ConfiguredMachines() []string {
 	seen := make(map[string]bool, len(r.Machines)+len(r.Backends))
 	add := func(machine string) {
 		machine = strings.TrimSpace(machine)
-		key := NormalizeMachineName(machine)
+		key := proxyidentity.NormalizeMachineName(machine)
 		if key == "" || seen[key] {
 			return
 		}
@@ -73,12 +69,12 @@ func (r RemoteConfig) ConfiguredMachines() []string {
 // IsMachineConfigured reports whether machine is named by remote.machines or
 // remote.backends.
 func (r RemoteConfig) IsMachineConfigured(machine string) bool {
-	key := NormalizeMachineName(machine)
+	key := proxyidentity.NormalizeMachineName(machine)
 	if key == "" {
 		return false
 	}
 	for _, configured := range r.ConfiguredMachines() {
-		if NormalizeMachineName(configured) == key {
+		if proxyidentity.NormalizeMachineName(configured) == key {
 			return true
 		}
 	}
@@ -87,10 +83,10 @@ func (r RemoteConfig) IsMachineConfigured(machine string) bool {
 
 // BackendFor returns the configured remote backend, defaulting to auto.
 func (r RemoteConfig) BackendFor(machine string) string {
-	machine = NormalizeMachineName(machine)
+	machine = proxyidentity.NormalizeMachineName(machine)
 	backend := ""
 	for configured, value := range r.Backends {
-		if NormalizeMachineName(configured) == machine {
+		if proxyidentity.NormalizeMachineName(configured) == machine {
 			backend = value
 			break
 		}
@@ -135,16 +131,16 @@ func validateRemote(remote RemoteConfig) error {
 	configured := make(map[string]bool, len(remote.Machines)+len(remote.Backends))
 	for _, machine := range remote.ConfiguredMachines() {
 		trimmed := strings.TrimSpace(machine)
-		configured[NormalizeMachineName(trimmed)] = true
+		configured[proxyidentity.NormalizeMachineName(trimmed)] = true
 		if strings.HasPrefix(trimmed, "-") {
 			return fmt.Errorf("machine %q starts with '-' and would be interpreted as an ssh option", machine)
 		}
-		if NormalizeMachineName(trimmed) == "local" || (localMachine != "" && NormalizeMachineName(trimmed) == NormalizeMachineName(localMachine)) {
+		if proxyidentity.NormalizeMachineName(trimmed) == "local" || (localMachine != "" && proxyidentity.NormalizeMachineName(trimmed) == proxyidentity.NormalizeMachineName(localMachine)) {
 			return fmt.Errorf("machine alias %q refers to the local machine", machine)
 		}
 	}
 	for machine, value := range remote.Backends {
-		if !configured[NormalizeMachineName(machine)] {
+		if !configured[proxyidentity.NormalizeMachineName(machine)] {
 			return fmt.Errorf("backend is configured for unknown machine %q", machine)
 		}
 		switch strings.ToLower(strings.TrimSpace(value)) {

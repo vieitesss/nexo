@@ -13,6 +13,7 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/proxy"
+	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
 const proxySessionOption = "@nexo-proxy"
@@ -61,10 +62,7 @@ func (b *Backend) ConfigureRemoteConfig(remote config.RemoteConfig, configPath s
 	}
 	b.proxyConfig = remote
 	b.proxyConfigPath = configPath
-	b.remoteMachines = make(map[string]bool)
-	for _, machine := range remote.ConfiguredMachines() {
-		b.remoteMachines[config.NormalizeMachineName(machine)] = true
-	}
+	b.remoteMachines = proxyidentity.NewMachineSet(remote.ConfiguredMachines())
 }
 
 // ValidateProxyIdentity rejects values that cannot safely be represented by a
@@ -115,69 +113,66 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return "", err
 	}
-	machine = config.NormalizeMachineName(machine)
-	identity := machine + "/" + container
-	output, err := b.run(ctx, "list-sessions", "-F", "#{session_id}\t#{@nexo-proxy}")
-	if err != nil {
-		if isNoServer(err) {
-			return "", nil
-		}
-		return "", err
+	identity := proxyidentity.NewIdentity(machine, container)
+	return proxyidentity.NewPolicy(b.configuredMachines()).Resolve(ctx, identity, tmuxProxyStore{backend: b, includeLabels: b.isRemoteMachine(machine)})
+}
+
+func (b *Backend) configuredMachines() []string {
+	if b == nil {
+		return nil
 	}
-	for _, line := range strings.Split(strings.TrimRight(string(output), "\r\n"), "\n") {
-		fields := strings.SplitN(line, "\t", 2)
-		if len(fields) == 2 && proxyIdentityMatches(fields[1], machine, container) {
-			return fields[0], nil
-		}
-	}
-	if !b.isRemoteMachine(machine) {
-		return "", nil
-	}
-	// A user-created session has no metadata. Match its exact display name and
-	// adopt it before returning, so opening it can never create a duplicate.
-	// A session already tagged with a different identity is never adopted: the
-	// tag is authoritative and the display name must not override it.
-	output, err = b.run(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{@nexo-proxy}")
-	if err != nil {
-		if isNoServer(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	for _, line := range strings.Split(strings.TrimRight(string(output), "\r\n"), "\n") {
-		fields := strings.SplitN(line, "\t", 3)
-		if len(fields) != 3 || strings.TrimSpace(fields[2]) != "" || !proxySessionNameMatches(fields[1], machine, container) {
-			continue
-		}
-		if _, err := b.run(ctx, "set-option", "-t", fields[0], proxySessionOption, identity); err != nil {
-			return "", err
-		}
-		return fields[0], nil
-	}
-	return "", nil
+	return b.proxyConfig.ConfiguredMachines()
 }
 
 func (b *Backend) isRemoteMachine(machine string) bool {
-	return b != nil && b.remoteMachines[config.NormalizeMachineName(machine)]
+	return b != nil && b.remoteMachines.Contains(machine)
 }
 
-func proxyIdentityMatches(identity, machine, container string) bool {
-	identityMachine, identityContainer, ok := splitProxyIdentity(identity)
-	return ok && config.NormalizeMachineName(identityMachine) == config.NormalizeMachineName(machine) && identityContainer == container
+type tmuxProxyStore struct {
+	backend       *Backend
+	includeLabels bool
 }
 
-func proxySessionNameMatches(name, machine, container string) bool {
-	identityMachine, identityContainer, ok := splitProxyIdentity(name)
-	return ok && config.NormalizeMachineName(identityMachine) == config.NormalizeMachineName(machine) && CanonicalContainerName(identityContainer) == container
-}
-
-func splitProxyIdentity(identity string) (string, string, bool) {
-	identity = strings.TrimSpace(identity)
-	separator := strings.IndexByte(identity, '/')
-	if separator <= 0 || separator == len(identity)-1 {
-		return "", "", false
+func (s tmuxProxyStore) ListProxyCandidates(ctx context.Context) ([]proxyidentity.Candidate, error) {
+	format := "#{session_id}\t#{@nexo-proxy}"
+	if s.includeLabels {
+		format = "#{session_id}\t#{session_name}\t#{@nexo-proxy}"
 	}
-	return strings.TrimSpace(identity[:separator]), strings.TrimSpace(identity[separator+1:]), true
+	output, err := s.backend.run(ctx, "list-sessions", "-F", format)
+	if err != nil {
+		if isNoServer(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimRight(string(output), "\r\n"), "\n")
+	candidates := make([]proxyidentity.Candidate, 0, len(lines))
+	for _, line := range lines {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) < 2 {
+			continue
+		}
+		candidate := proxyidentity.Candidate{ID: fields[0], TaggedIdentity: fields[len(fields)-1]}
+		if len(fields) == 3 {
+			candidate.Label = canonicalProxyLabel(fields[1])
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, nil
+}
+
+func (s tmuxProxyStore) AdoptProxy(ctx context.Context, sessionID string, identity proxyidentity.Identity) error {
+	_, err := s.backend.run(ctx, "set-option", "-t", sessionID, proxySessionOption, identity.String())
+	return err
+}
+
+func canonicalProxyLabel(label string) string {
+	identity, ok := proxyidentity.ParseValue(label)
+	if !ok {
+		return label
+	}
+	identity.Container = CanonicalContainerName(identity.Container)
+	return identity.String()
 }
 
 // Proxy opens or switches to a local proxy container. The remote attachment
@@ -192,9 +187,10 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return err
 	}
-	machine = config.NormalizeMachineName(machine)
+	identity := proxyidentity.NewIdentity(machine, container)
+	machine = identity.Machine
 
-	name := machine + "/" + container
+	name := identity.String()
 	if _, err := b.proxyPaneCommand(machine, container); err != nil {
 		return err
 	}
@@ -218,7 +214,7 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 		if sessionID == "" {
 			return errors.New("tmux remote proxy did not report a session id")
 		}
-		if _, err := b.run(ctx, "set-option", "-t", sessionID, proxySessionOption, name); err != nil {
+		if _, err := b.run(ctx, "set-option", "-t", sessionID, proxySessionOption, identity.String()); err != nil {
 			return err
 		}
 	}

@@ -9,8 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
-	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
+	"github.com/vieitesss/nexo/internal/proxyidentity"
 	"github.com/vieitesss/nexo/internal/remote"
 )
 
@@ -50,7 +50,7 @@ func containerActionResolver(invocation Invocation) capabilities.ContainerAction
 func configuredRemoteMachines(machines []string) map[string]bool {
 	configured := make(map[string]bool, len(machines))
 	for _, machine := range machines {
-		machine = config.NormalizeMachineName(machine)
+		machine = proxyidentity.NormalizeMachineName(machine)
 		if machine != "" {
 			configured[machine] = true
 		}
@@ -68,7 +68,7 @@ func (r configuredContainerResolver) ResolveContainerActions(ctx context.Context
 	if isLocalContainer(machine) {
 		return r.local.ResolveContainerActions(ctx, machine)
 	}
-	if r.remote[config.NormalizeMachineName(machine)] {
+	if r.remote[proxyidentity.NormalizeMachineName(machine)] {
 		if r.proxy != nil {
 			return remoteContainerActions{machine: machine, proxy: r.proxy}, nil
 		}
@@ -165,7 +165,7 @@ func (a localContainerActions) KillContainers(ctx context.Context, ids []string)
 
 func isLocalContainer(machine string) bool {
 	machine = strings.TrimSpace(machine)
-	return machine == "" || config.NormalizeMachineName(machine) == "local" || config.NormalizeMachineName(machine) == config.NormalizeMachineName(picker.LocalMachine())
+	return machine == "" || proxyidentity.NormalizeMachineName(machine) == "local" || proxyidentity.NormalizeMachineName(machine) == proxyidentity.NormalizeMachineName(picker.LocalMachine())
 }
 
 func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
@@ -178,7 +178,7 @@ func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
 	seen := make(map[string]bool)
 	for _, configured := range machines {
 		machine := strings.TrimSpace(configured)
-		key := config.NormalizeMachineName(machine)
+		key := proxyidentity.NormalizeMachineName(machine)
 		if key == "" || seen[key] {
 			continue
 		}
