@@ -620,6 +620,17 @@ func (s *Source) Watch(ctx context.Context) error {
 		watchersMu.Unlock()
 		release()
 	}()
+	// An orderly shutdown clears every highlight this watcher owns. The context
+	// is already canceled, so cleanup gets its own bounded one. A crash cannot
+	// run this; the next startup reconciles the durable marker instead.
+	defer func() {
+		if ctx.Err() == nil {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), highlightCleanupTimeout)
+		defer cancel()
+		_ = s.clearHighlights(cleanupCtx)
+	}()
 	if err := s.installHooksQuiet(ctx); err != nil {
 		return err
 	}
