@@ -149,12 +149,12 @@ func TestProjectsQueryKeepsSelectionWhileRefining(t *testing.T) {
 	if model.Cursor() != "project:/work/about" {
 		t.Fatalf("empty-to-query cursor = %q, want best match", model.Cursor())
 	}
-	model.cursor = "project:/work/alphabet"
+	model.input.cursor = "project:/work/alphabet"
 	model.SetQuery("al")
 	if model.Cursor() != "project:/work/alphabet" {
 		t.Fatalf("refined query lost matching selection: %q", model.Cursor())
 	}
-	model.cursor = "project:/work/alpha"
+	model.input.cursor = "project:/work/alpha"
 	model.SetQuery("ab")
 	if model.Cursor() != "project:/work/about" {
 		t.Fatalf("refined query did not choose best replacement: %q", model.Cursor())
@@ -206,7 +206,7 @@ func TestProjectsFlatNameKeepsFullWidthForALongFolder(t *testing.T) {
 	}}, ProjectsTab)
 	model.SetQuery("n")
 	model.SetSize(80, 10)
-	layout := model.projectLayout()
+	layout := model.frame().projectLayout()
 	if want := shell.StringWidth(name); layout.name != want {
 		t.Fatalf("name column %d shrank from %d to keep the folder: %+v", layout.name, want, layout)
 	}
@@ -226,7 +226,7 @@ func TestProjectBranchAndFolderMatchesAreHighlighted(t *testing.T) {
 	branch.SetSize(120, 8)
 	// The matched row is unselected here so the accent colour shows; a selected
 	// row keeps only bold and underline.
-	branch.cursor = "group:/work/folder"
+	branch.input.cursor = "group:/work/folder"
 	if !strings.Contains(branch.View(), accent().Bold(true).Render("u")) {
 		t.Fatalf("branch match was not highlighted: %q", branch.View())
 	}
@@ -236,7 +236,7 @@ func TestProjectBranchAndFolderMatchesAreHighlighted(t *testing.T) {
 	}}}, ProjectsTab)
 	folder.SetQuery("folder")
 	folder.SetSize(120, 8)
-	folder.cursor = "group:/home/tester/folder"
+	folder.input.cursor = "group:/home/tester/folder"
 	if !strings.Contains(folder.View(), accent().Bold(true).Render("f")) {
 		t.Fatalf("folder match was not highlighted: %q", folder.View())
 	}
@@ -265,7 +265,7 @@ func TestProjectsFlatNameIsCappedAndKeepsGitColumnAt80(t *testing.T) {
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
 	model.SetQuery("gitops")
 	model.SetSize(80, 24)
-	layout := model.projectLayout()
+	layout := model.frame().projectLayout()
 	if minName := 16; layout.name < minName {
 		t.Fatalf("name width %d fell below the floor %d", layout.name, minName)
 	}
@@ -288,7 +288,7 @@ func TestProjectsFlatKeepsNamesUpTo30At80(t *testing.T) {
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
 	model.SetQuery("gitops")
 	model.SetSize(80, 24)
-	layout := model.projectLayout()
+	layout := model.frame().projectLayout()
 	shown := 0
 	for _, row := range model.rows {
 		if row.kind != itemRow || row.itemKind != "project" {
@@ -313,7 +313,7 @@ func TestProjectsFlatDropsFolderBeforeCuttingBranch(t *testing.T) {
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
 	model.SetQuery("gitops")
 	model.SetSize(60, 16)
-	layout := model.projectLayout()
+	layout := model.frame().projectLayout()
 	if layout.path != 0 {
 		t.Fatalf("folder column kept at 60 columns: %+v", layout)
 	}
@@ -333,7 +333,7 @@ func TestProjectsGroupedColumnsUseTheFullWidthAt60(t *testing.T) {
 	model = updateModel(t, model, keyMsg(tea.KeyRight))
 	model = updateModel(t, model, keyMsg(tea.KeyDown))
 	model = updateModel(t, model, keyMsg(tea.KeyRight))
-	layout := model.projectLayout()
+	layout := model.frame().projectLayout()
 	if minBranch := 12; layout.git < minBranch {
 		t.Fatalf("grouped branch width %d fell below the floor %d", layout.git, minBranch)
 	}
@@ -481,7 +481,7 @@ func TestSelectedRowPaintsTheBodyWidthForEveryRowKind(t *testing.T) {
 		model := NewModel(context.Background(), deps, tab)
 		model.SetSize(100, 30)
 		for _, id := range model.Rows() {
-			model.cursor = id
+			model.input.cursor = id
 			styledLines := strings.Split(model.View(), "\n")
 			painted := 0
 			for _, line := range styledLines[2:29] {

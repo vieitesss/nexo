@@ -98,7 +98,7 @@ func TestMarkedNameKeepsAccentForegroundWhenUnselected(t *testing.T) {
 	model.SetSize(80, 24)
 	// Move the cursor off the marked container: a selected row drops every
 	// per-segment colour and keeps the mark as bold weight instead.
-	model.cursor = "machine:" + picker.LocalMachine()
+	model.input.cursor = "machine:" + picker.LocalMachine()
 	var line string
 	for _, candidate := range strings.Split(model.View(), "\n") {
 		if strings.Contains(shell.Plain(candidate), "◆ one") {
@@ -182,7 +182,7 @@ func assertSelectedBackgroundCells(t *testing.T, model Model, selectedID string)
 	t.Helper()
 	frame := strings.Split(model.View(), "\n")
 	bodyHeight := model.height - 3
-	lines, start := model.bodyLayout(bodyHeight)
+	lines, start := model.frame().bodyLayout(bodyHeight)
 	for screenLine := 0; screenLine < bodyHeight; screenLine++ {
 		line := frame[2+screenLine]
 		cells := backgroundCells(line)
@@ -239,7 +239,7 @@ func TestSelectedRowBackgroundCoversEveryCell(t *testing.T) {
 			if tc.query != "" {
 				model.SetQuery(tc.query)
 			}
-			model.cursor = tc.selected
+			model.input.cursor = tc.selected
 			if model.Cursor() != tc.selected {
 				t.Fatalf("cursor = %q, want %q; rows=%v", model.Cursor(), tc.selected, model.Rows())
 			}
@@ -287,7 +287,7 @@ func TestSelectedStateColoursSurviveBothSelectionThemes(t *testing.T) {
 				if row.kind != itemRow {
 					continue
 				}
-				model.cursor = row.id
+				model.input.cursor = row.id
 				line := ""
 				for _, candidate := range strings.Split(model.View(), "\n") {
 					if strings.Contains(shell.Plain(candidate), "●") && strings.HasPrefix(candidate, selectedRowPrefix()) {
@@ -383,12 +383,13 @@ func BenchmarkContainerRowsMultiMachine(b *testing.B) {
 			id := machine + "-" + strconv.Itoa(index)
 			places = append(places, picker.Place{Kind: picker.ContainerKind, ContainerID: id, ContainerName: id})
 		}
-		model.applyRemote(picker.RemoteBatch{Machine: machine, Places: places})
+		model.source.applyRemote(picker.RemoteBatch{Machine: machine, Places: places})
+		model.rebuild(false)
 	}
 	model.SetSize(120, 40)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		model.containerRows()
+		model.projection().Rows(ContainersTab)
 	}
 }
