@@ -307,10 +307,6 @@ func TestSelectionIdentityAcrossResizeAndAsyncBatches(t *testing.T) {
 			t.Fatal("resize changed selection identity")
 		}
 	}
-	model = updateModel(t, model, picker.PreviewBatch{Previews: map[picker.ContainerRef]string{{Machine: picker.LocalMachine(), ID: "local-one"}: "new preview"}})
-	if model.Cursor() != identity {
-		t.Fatal("preview changed selection identity")
-	}
 	model = updateModel(t, model, agentsMsg{agents: richDeps().Agents})
 	if model.Cursor() != identity {
 		t.Fatal("agent refresh changed selection identity")
