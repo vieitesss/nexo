@@ -35,7 +35,7 @@ func (deleteCommand) Run(ctx context.Context, invocation Invocation) error {
 		return fmt.Errorf("inspect %q: %w", path, err)
 	}
 	if invocation.Stdout != nil {
-		if err := writeDeletePlan(invocation.Stdout, plan, invocation.JSON); err != nil {
+		if err := writeDeletePlan(invocation.Stdout, plan, parsed.permanent, invocation.JSON); err != nil {
 			return err
 		}
 	}
@@ -179,7 +179,8 @@ func parseDeleteArgs(args []string) (deleteArgs, error) {
 	return parsed, nil
 }
 
-func writeDeletePlan(out interface{ Write([]byte) (int, error) }, plan deletion.Plan, jsonOutput bool) error {
+func writeDeletePlan(out interface{ Write([]byte) (int, error) }, plan deletion.Plan, permanent, jsonOutput bool) error {
+	plan.Action = plan.EffectiveAction(permanent)
 	if jsonOutput {
 		return json.NewEncoder(out).Encode(plan)
 	}

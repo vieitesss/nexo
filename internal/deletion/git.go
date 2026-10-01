@@ -74,7 +74,6 @@ func (g GitInspector) Inspect(ctx context.Context, path string) (GitState, error
 	}
 	if isRegisteredWorktree(gitDir, commonDir) {
 		state.LinkedWorktree = true
-		state.PrimaryPath = primaryFromCommonDir(commonDir)
 	}
 
 	worktrees, wtErr := g.run(checkCtx, path, "worktree", "list", "--porcelain")
@@ -82,6 +81,12 @@ func (g GitInspector) Inspect(ctx context.Context, path string) (GitState, error
 		return state, fmt.Errorf("list worktrees: %w", wtErr)
 	}
 	worktreeInfo := parseWorktrees(worktrees)
+	if state.LinkedWorktree {
+		state.PrimaryPath = primaryFromWorktreeRegistration(worktreeInfo, top)
+		if state.PrimaryPath == "" {
+			return state, errors.New("linked worktree registration has no primary checkout")
+		}
+	}
 	roots := make([]string, 0, len(worktreeInfo))
 	for _, worktree := range worktreeInfo {
 		roots = append(roots, worktree.Path)
@@ -304,8 +309,17 @@ func isRegisteredWorktree(gitDir, commonDir string) bool {
 	return true
 }
 
-func primaryFromCommonDir(commonDir string) string {
-	return filepath.Clean(filepath.Dir(commonDir))
+// primaryFromWorktreeRegistration uses Git's registered checkout paths rather
+// than guessing from the common metadata directory. This also handles a
+// primary checkout created with separate Git metadata.
+func primaryFromWorktreeRegistration(worktrees []worktreeInfo, selected string) string {
+	selected = filepath.Clean(selected)
+	for _, worktree := range worktrees {
+		if filepath.Clean(worktree.Path) != selected {
+			return filepath.Clean(worktree.Path)
+		}
+	}
+	return ""
 }
 
 type worktreeInfo struct {
@@ -397,27 +411,6 @@ func parseStatus(output []byte) (dirty, untracked, unpushed, hasUpstream bool) {
 	return dirty, untracked, unpushed, hasUpstream
 }
 
-// VerifyWorktreeRemoval checks the same non-force refusal facts after a
-// worktree has been identity-staged but before Git removes its registration.
-func (g GitInspector) VerifyWorktreeRemoval(ctx context.Context, path string) error {
-	status, err := g.run(ctx, path, "status", "--porcelain=v2", "--untracked-files=all")
-	if err != nil {
-		return fmt.Errorf("verify worktree status: %w", err)
-	}
-	dirty, untracked, _, _ := parseStatus(status)
-	if dirty || untracked {
-		return errors.New("git refused deletion: worktree has tracked or untracked changes")
-	}
-	submodules, err := g.run(ctx, path, "submodule", "status", "--recursive")
-	if err != nil {
-		return fmt.Errorf("verify worktree submodules: %w", err)
-	}
-	if strings.TrimSpace(string(submodules)) != "" {
-		return errors.New("git refused deletion: worktree contains submodules")
-	}
-	return nil
-}
-
 // RemoveWorktree deliberately omits --force. Git's refusal is a hard safety
 // blocker, even when a caller requested force for other warnings.
 func (g GitInspector) RemoveWorktree(ctx context.Context, repo, path string) error {
@@ -429,20 +422,4 @@ func (g GitInspector) RemoveWorktree(ctx context.Context, repo, path string) err
 		return fmt.Errorf("git worktree remove %q: %w", path, err)
 	}
 	return nil
-}
-
-// RemoveWorktreeChecked repeats the no-follow and identity checks while the
-// deletion transaction is serialized, immediately before invoking Git.
-func (g GitInspector) RemoveWorktreeChecked(ctx context.Context, repo, path string, fs FileSystem, expected string) error {
-	if err := validateAncestors(fs, filepath.Clean(path)); err != nil {
-		return fmt.Errorf("validate worktree path: %w", err)
-	}
-	current, err := Fingerprint(fs, path)
-	if err != nil {
-		return fmt.Errorf("recheck worktree %q: %w", path, err)
-	}
-	if expected != "" && current != expected {
-		return fmt.Errorf("path changed since preflight: %q", path)
-	}
-	return g.RemoveWorktree(ctx, repo, path)
 }

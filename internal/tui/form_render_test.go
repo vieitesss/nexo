@@ -19,17 +19,23 @@ func TestDeletePreflightSmallViewportIsScrollable(t *testing.T) {
 	form.deletePreflightEnabled = true
 	form.stage = 1
 	form.deletePlan = &deletion.Plan{Path: "/tmp/project", Action: "trash", Warnings: []deletion.Finding{
-		{Code: "one", Message: "warning one"},
-		{Code: "two", Message: "warning two"},
-		{Code: "three", Message: "warning three"},
-		{Code: "four", Message: "warning four"},
-		{Code: "five", Message: "warning five"},
+		{Code: "one", Message: "local-only Git data: unpushed commits and stashes must be reviewed"},
+		{Code: "two", Message: "non-empty directory contains files that will be removed"},
+		{Code: "three", Message: "remote verification failed and deletion is blocked"},
+		{Code: "four", Message: "active container uses this project path"},
+		{Code: "five", Message: "linked worktree has untracked files"},
 	}, CanProceed: true}
 	lines := make([]string, 12)
 	for i := range lines {
 		lines[i] = "background"
 	}
 	_ = overlayForm(lines, form, 32, 8)
+	wrapped := strings.Join(formLinesForWidth(form.renderLines(), 24), " ")
+	for _, phrase := range []string{"unpushed commits", "stashes", "contains files", "remote verification failed", "active container", "untracked files"} {
+		if !strings.Contains(wrapped, phrase) {
+			t.Fatalf("wrapped preflight omitted %q: %q", phrase, wrapped)
+		}
+	}
 	if form.deletePreflightSeen {
 		t.Fatal("small preflight marked seen before its findings were scrolled")
 	}

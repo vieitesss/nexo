@@ -15,6 +15,7 @@ import (
 	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/git"
 	"github.com/vieitesss/nexo/internal/lifecycle"
+	"github.com/vieitesss/nexo/internal/pathpolicy"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 	"github.com/vieitesss/nexo/internal/runner"
@@ -209,25 +210,9 @@ func uniquePaths(values []string) []string {
 }
 
 func herdrPathContains(project, candidate string) bool {
-	project, candidate = filepath.Clean(project), filepath.Clean(candidate)
-	if project == candidate || herdrDescendant(project, candidate) {
-		return true
-	}
 	info, err := os.Lstat(project)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 {
-		return false
-	}
-	resolvedProject, projectErr := filepath.EvalSymlinks(project)
-	resolvedCandidate, candidateErr := filepath.EvalSymlinks(candidate)
-	if projectErr != nil || candidateErr != nil {
-		return false
-	}
-	return filepath.Clean(resolvedProject) == filepath.Clean(resolvedCandidate) || herdrDescendant(resolvedProject, resolvedCandidate)
-}
-
-func herdrDescendant(parent, child string) bool {
-	rel, err := filepath.Rel(parent, child)
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+	selectedIsSymlink := err == nil && info.Mode()&os.ModeSymlink != 0
+	return pathpolicy.Contains(project, candidate, selectedIsSymlink, pathpolicy.OSResolver{})
 }
 
 var _ capabilities.AgentSource = (*Backend)(nil)

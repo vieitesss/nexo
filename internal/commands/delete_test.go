@@ -44,6 +44,53 @@ func TestDeleteCommandDryRunPrintsPreflightAndDoesNothing(t *testing.T) {
 	}
 }
 
+func TestDeleteDryRunReportsEffectiveAction(t *testing.T) {
+	setDeleteTestEnv(t)
+	root := t.TempDir()
+	candidate := filepath.Join(root, "repo")
+	if err := os.Mkdir(candidate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command, _ := NewRegistry().Lookup("delete")
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "trash", args: []string{"--dry-run", candidate}, want: "(trash)"},
+		{name: "permanent", args: []string{"--dry-run", "--permanent", candidate}, want: "(permanent)"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var out bytes.Buffer
+			err := command.Run(context.Background(), Invocation{
+				Runner: &deleteRunner{err: errors.New("not a git repository")}, Adapter: deleteUseChecker{}, Stdout: &out,
+				Config: config.Config{ProjectsConfig: config.ProjectsConfig{Paths: []string{root}}}, Args: test.args,
+			})
+			if err != nil || !strings.Contains(out.String(), test.want) {
+				t.Fatalf("Run() = %v, output %q; want %s", err, out.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestDeleteJSONReportsEffectiveAction(t *testing.T) {
+	setDeleteTestEnv(t)
+	root := t.TempDir()
+	candidate := filepath.Join(root, "repo")
+	if err := os.Mkdir(candidate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	command, _ := NewRegistry().Lookup("delete")
+	err := command.Run(context.Background(), Invocation{
+		Runner: &deleteRunner{err: errors.New("not a git repository")}, Adapter: deleteUseChecker{}, Stdout: &out, JSON: true,
+		Config: config.Config{ProjectsConfig: config.ProjectsConfig{Paths: []string{root}}}, Args: []string{"--dry-run", "--permanent", candidate},
+	})
+	if err != nil || !strings.Contains(out.String(), `"action":"permanent"`) {
+		t.Fatalf("Run() = %v, output %q; want permanent action", err, out.String())
+	}
+}
+
 func TestDeleteCommandPermanentRequiresForceForWarnings(t *testing.T) {
 	setDeleteTestEnv(t)
 	root := t.TempDir()

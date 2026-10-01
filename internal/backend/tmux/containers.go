@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/pathpolicy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
@@ -125,11 +126,10 @@ func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) 
 	if b == nil || b.Runner == nil {
 		return false, errors.New("tmux active-project check requires a command runner")
 	}
-	// q: asks tmux for a reversibly quoted record. Raw newline-delimited
-	// pane_current_path output cannot represent a filename containing a newline
-	// or preserve a trailing carriage return, so decode failures are safety
-	// errors rather than evidence that the project is idle.
-	output, err := b.run(ctx, "list-panes", "-a", "-F", "#{q:pane_current_path}")
+	// q: uses tmux's shell escaping for ordinary special bytes. The pane ID
+	// is an unambiguous record separator: a literal newline in a path creates
+	// a malformed record and therefore fails closed instead of claiming idle.
+	output, err := b.run(ctx, "list-panes", "-a", "-F", "#{pane_id}\t#{q:pane_current_path}")
 	if err != nil {
 		if isNoServer(err) {
 			return false, nil
@@ -137,98 +137,63 @@ func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) 
 		return false, err
 	}
 	path = filepath.Clean(path)
-	panePaths, decodeErr := decodePanePathRecords(string(output), strings.ContainsAny(path, "\r\n"))
+	panePaths, decodeErr := decodePanePathRecords(string(output))
 	if decodeErr != nil {
 		return false, decodeErr
 	}
 	for _, panePath := range panePaths {
-		if projectPathContains(path, panePath) {
+		if pathpolicy.Contains(path, panePath, isSymlink(path), pathpolicy.OSResolver{}) {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 
-func projectPathContains(project, pane string) bool {
-	project, pane = filepath.Clean(project), filepath.Clean(pane)
-	if project == pane || descendantPath(project, pane) {
-		return true
-	}
-	// A selected symlink is removed as a link, so its target's use must not
-	// turn a safe link deletion into a deletion of the target.
-	info, err := os.Lstat(project)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 {
-		return false
-	}
-	resolvedProject, projectErr := filepath.EvalSymlinks(project)
-	resolvedPane, paneErr := filepath.EvalSymlinks(pane)
-	if projectErr != nil || paneErr != nil {
-		return false
-	}
-	return filepath.Clean(resolvedProject) == filepath.Clean(resolvedPane) || descendantPath(resolvedProject, resolvedPane)
+func isSymlink(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode()&os.ModeSymlink != 0
 }
 
-func descendantPath(parent, child string) bool {
-	rel, err := filepath.Rel(parent, child)
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
-}
-
-func decodePanePathRecords(output string, sensitive bool) ([]string, error) {
+func decodePanePathRecords(output string) ([]string, error) {
 	parts := strings.Split(output, "\n")
 	paths := make([]string, 0, len(parts))
-	for index, part := range parts {
-		if index == len(parts)-1 && part == "" {
+	for index, record := range parts {
+		if index == len(parts)-1 && record == "" {
 			continue
 		}
-		if part == "" {
-			continue
+		fields := strings.SplitN(record, "\t", 2)
+		if len(fields) != 2 || fields[0] == "" || fields[1] == "" {
+			return nil, errors.New("tmux pane path output contains an invalid record")
 		}
-		path, quoted, err := decodeTmuxQuotedPath(part)
+		path, err := decodeTmuxQuotedPath(fields[1])
 		if err != nil {
 			return nil, err
 		}
-		if !quoted && (strings.ContainsAny(path, "\r\n") || sensitive) {
-			return nil, errors.New("tmux pane path output is not safely encoded")
+		if path == "" {
+			return nil, errors.New("tmux pane path output contains an empty path")
 		}
-		if path != "" {
-			paths = append(paths, path)
-		}
+		paths = append(paths, path)
 	}
 	return paths, nil
 }
 
-// decodeTmuxQuotedPath accepts tmux's q: shell quoting and a plain record for
-// compatibility with older servers. Backslash escapes are decoded without
-// trimming any filename bytes.
-func decodeTmuxQuotedPath(record string) (string, bool, error) {
-	start := 0
-	if strings.HasPrefix(record, "$'") {
-		start = 1
-	}
-	if len(record)-start < 2 || record[start] != '\'' || record[len(record)-1] != '\'' {
-		return record, false, nil
-	}
-	inner := record[start+1 : len(record)-1]
+// decodeTmuxQuotedPath decodes the actual q: format emitted by tmux. It is
+// shell-style escaping without the single-quoted wrapper: spaces, slashes and
+// quotes are each represented by a backslash followed by the original byte.
+func decodeTmuxQuotedPath(record string) (string, error) {
 	var decoded strings.Builder
-	for index := 0; index < len(inner); index++ {
-		if inner[index] != '\\' {
-			decoded.WriteByte(inner[index])
+	for index := 0; index < len(record); index++ {
+		if record[index] != '\\' {
+			decoded.WriteByte(record[index])
 			continue
 		}
-		if index+1 >= len(inner) {
-			return "", true, errors.New("tmux pane path has an incomplete escape")
+		if index+1 == len(record) {
+			return "", errors.New("tmux pane path has an incomplete escape")
 		}
 		index++
-		switch inner[index] {
-		case 'n':
-			decoded.WriteByte('\n')
-		case 'r':
-			decoded.WriteByte('\r')
-		default:
-			decoded.WriteByte(inner[index])
-		}
+		decoded.WriteByte(record[index])
 	}
-	return decoded.String(), true, nil
+	return decoded.String(), nil
 }
 
 // KillContainer kills one selected tmux session.

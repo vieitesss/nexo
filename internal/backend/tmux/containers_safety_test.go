@@ -8,6 +8,73 @@ import (
 	"testing"
 )
 
+func TestProjectActiveUsesActualTmuxEscapingAndSharedPathPolicy(t *testing.T) {
+	setSafetyEnv(t)
+	root := t.TempDir()
+	for _, test := range []struct {
+		name string
+		part string
+	}{
+		{name: "space", part: "repo space"},
+		{name: "backslash", part: `repo\\slash`},
+		{name: "quote", part: `repo"quote`},
+		{name: "carriage return", part: "repo\r"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			project := filepath.Join(root, test.part)
+			child := filepath.Join(project, "src")
+			if err := os.MkdirAll(child, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			backend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
+				return []byte("%1\t" + tmuxActualQuote(child) + "\n"), nil
+			}))
+			active, err := backend.ProjectActive(context.Background(), project)
+			if err != nil || !active {
+				t.Fatalf("ProjectActive() = %v, %v; want descendant active", active, err)
+			}
+			exactBackend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
+				return []byte("%1\t" + tmuxActualQuote(project) + "\n"), nil
+			}))
+			active, err = exactBackend.ProjectActive(context.Background(), project)
+			if err != nil || !active {
+				t.Fatalf("exact ProjectActive() = %v, %v; want active", active, err)
+			}
+		})
+	}
+}
+
+func TestProjectActiveFailsClosedForLiteralNewlineRecord(t *testing.T) {
+	setSafetyEnv(t)
+	root := t.TempDir()
+	project := filepath.Join(root, "repo\nname")
+	if err := os.MkdirAll(filepath.Join(project, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	backend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
+		// q: leaves a literal newline in the path; the separator parser must
+		// reject the resulting incomplete record rather than claim inactivity.
+		return []byte("%1\t" + filepath.Join(project, "src") + "\n"), nil
+	}))
+	if _, err := backend.ProjectActive(context.Background(), project); err == nil {
+		t.Fatal("ProjectActive() error = nil for an unparseable newline record")
+	}
+}
+
+func tmuxActualQuote(path string) string {
+	var quoted strings.Builder
+	for _, value := range path {
+		switch value {
+		case ' ', '\\', '"':
+			quoted.WriteByte('\\')
+			quoted.WriteRune(value)
+		default:
+			quoted.WriteRune(value)
+		}
+	}
+	return quoted.String()
+}
+
 func TestProjectActiveBlocksDescendantAndPhysicalAliasButNotLinkTarget(t *testing.T) {
 	setSafetyEnv(t)
 	root := t.TempDir()
@@ -20,101 +87,23 @@ func TestProjectActiveBlocksDescendantAndPhysicalAliasButNotLinkTarget(t *testin
 	if err := os.Symlink(project, alias); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	cases := []struct {
-		name string
-		pane string
-		want bool
-	}{
-		{name: "descendant", pane: child, want: true},
-		{name: "physical alias", pane: filepath.Join(alias, "src"), want: true},
-		{name: "trailing space is distinct", pane: project + " ", want: false},
-	}
-	for _, test := range cases {
-		t.Run(test.name, func(t *testing.T) {
-			backend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
-				return []byte(test.pane + "\n"), nil
-			}))
-			got, err := backend.ProjectActive(context.Background(), project)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != test.want {
-				t.Fatalf("ProjectActive() = %v, want %v", got, test.want)
-			}
-		})
-	}
-
-	linkBackend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
-		return []byte(filepath.Join(project, "src") + "\n"), nil
+	backend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("%1\t" + tmuxActualQuote(filepath.Join(alias, "src")) + "\n"), nil
 	}))
-	linkActive, err := linkBackend.ProjectActive(context.Background(), alias)
+	active, err := backend.ProjectActive(context.Background(), project)
+	if err != nil || !active {
+		t.Fatalf("physical alias ProjectActive() = %v, %v", active, err)
+	}
+	linkBackend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("%1\t" + tmuxActualQuote(filepath.Join(project, "src")) + "\n"), nil
+	}))
+	active, err = linkBackend.ProjectActive(context.Background(), alias)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if linkActive {
+	if active {
 		t.Fatal("link target usage made link deletion active")
 	}
-}
-
-func TestProjectActivePreservesEmbeddedNewlineAndCarriageReturnPaths(t *testing.T) {
-	setSafetyEnv(t)
-	root := t.TempDir()
-	newlineProject := filepath.Join(root, "project\nname")
-	if err := os.MkdirAll(filepath.Join(newlineProject, "src"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	carriageProject := filepath.Join(root, "project\r")
-	if err := os.MkdirAll(filepath.Join(carriageProject, "src"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, test := range []struct {
-		name    string
-		project string
-		pane    string
-	}{
-		{name: "newline", project: newlineProject, pane: filepath.Join(newlineProject, "src")},
-		{name: "trailing carriage return", project: carriageProject, pane: filepath.Join(carriageProject, "src")},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			backend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
-				return []byte(tmuxQuotePath(test.pane) + "\n"), nil
-			}))
-			active, err := backend.ProjectActive(context.Background(), test.project)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !active {
-				t.Fatalf("ProjectActive() = false for pane %q", test.pane)
-			}
-		})
-	}
-	unsafe := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
-		return []byte(newlineProject + "\n"), nil
-	}))
-	if _, err := unsafe.ProjectActive(context.Background(), newlineProject); err == nil {
-		t.Fatal("ProjectActive() error = nil for unencoded embedded-newline output")
-	}
-}
-
-func tmuxQuotePath(path string) string {
-	var quoted strings.Builder
-	quoted.WriteByte('\'')
-	for _, value := range path {
-		switch value {
-		case '\\':
-			quoted.WriteString("\\\\")
-		case '\n':
-			quoted.WriteString("\\n")
-		case '\r':
-			quoted.WriteString("\\r")
-		case '\'':
-			quoted.WriteString("\\'")
-		default:
-			quoted.WriteRune(value)
-		}
-	}
-	quoted.WriteByte('\'')
-	return quoted.String()
 }
 
 func TestProjectActiveFailsClosedWithoutRunner(t *testing.T) {

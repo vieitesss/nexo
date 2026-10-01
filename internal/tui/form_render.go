@@ -82,7 +82,11 @@ func formLinesForWidth(lines []string, width int) []string {
 			continue
 		}
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "!") || strings.HasPrefix(trimmed, "?") || strings.HasPrefix(line, "    ") {
+		// Findings are safety-critical content, not editable label/value pairs.
+		// Wrap their complete text so narrow dialogs never hide a phrase.
+		if strings.HasPrefix(trimmed, "!") || strings.HasPrefix(trimmed, "?") ||
+			strings.HasPrefix(trimmed, "warning:") || strings.HasPrefix(trimmed, "blocker:") ||
+			strings.HasPrefix(line, "    ") {
 			out = append(out, wrapFormText(line, width)...)
 			continue
 		}
