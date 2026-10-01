@@ -3,11 +3,17 @@ package tui
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 
 	"github.com/vieitesss/nexo/internal/deletion"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// formSerial gives every form transition a process-unique generation. Actions
+// replace one form with another, so a per-form counter could hand two forms the
+// same value and let a late result match the wrong action.
+var formSerial atomic.Uint64
 
 // formField and formStage are the small interface used by stagedForm. A form
 // owns field editing and stage transitions; its caller supplies validation and
@@ -161,7 +167,7 @@ func (f *stagedForm) key(msg tea.KeyMsg) formEffect {
 			f.cancel()
 			f.cancel = nil
 		}
-		f.generation++
+		f.nextGeneration()
 		return formEffect{Canceled: true}
 	}
 	if f.inFlight {
@@ -264,14 +270,21 @@ func (f *stagedForm) advance() formEffect {
 		return formEffect{Changed: true}
 	}
 	f.inFlight = true
-	f.generation++
-	generation := f.generation
+	generation := f.nextGeneration()
 	ctx, cancel := context.WithCancel(f.ctx)
 	f.cancel = cancel
 	if f.submit == nil {
 		return formEffect{Submitted: true}
 	}
 	return formEffect{Cmd: f.submit(ctx, f.values(), generation), Submitted: true}
+}
+
+// nextGeneration returns a process-unique token for one form transition. The
+// token is carried through submitted messages so a replacement form can never
+// accept a late result from the form it replaced.
+func (f *stagedForm) nextGeneration() uint64 {
+	f.generation = formSerial.Add(1)
+	return f.generation
 }
 
 func (f *stagedForm) nextField() formEffect { return f.moveField(1) }

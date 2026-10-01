@@ -309,7 +309,7 @@ statuses, and safe verification.
 | `Tab` / `Shift-Tab` | Switch tabs |
 | `F1` / `F2` / `F3` | Jump to Agents / Containers / Projects |
 | `↑` / `↓`, `Ctrl-N` / `Ctrl-P` | Move |
-| `Enter` | Open the selected item or focus the selected agent |
+| `Enter` | Open the selected item, focus the selected agent, or name a new remote container |
 | `←` / `→` | Fold the selected folder or checkout, step Left to its parent, or unfold with Right |
 | `Ctrl-T` | Mark the selected container |
 | `Ctrl-O` | Open the clone form for the selected Projects row |
@@ -337,6 +337,13 @@ upstream agree on the head owner and branch, and is refreshed in the background
 while the TUI stays open.
 
 See [docs/tui.md](docs/tui.md) for the complete row and search behavior.
+
+Every reachable remote machine whose listing succeeded also shows a
+`+ new container…` row at the end of its section. Selecting it creates a
+container named after the current search query with the multiplexer that
+machine's listing resolved and focuses it, exactly like
+`nexo remote new MACHINE NAME`; an empty query opens a name prompt first. The
+row is absent while a machine loads or after its listing fails.
 
 ## Configuration
 

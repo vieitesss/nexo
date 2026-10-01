@@ -332,6 +332,8 @@ func (m renderFrame) rowText(row row) (string, string) {
 	case groupRow:
 		labelStyle := bold()
 		return marker + foldPrefixStyled(row) + labelStyle.Render(abbreviateHome(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
+	case newContainerRow:
+		return marker + strings.Repeat("  ", row.depth) + muted().Render(sanitize(row.label)), ""
 	case separatorRow:
 		return "", ""
 	case itemRow:
@@ -724,6 +726,9 @@ func (m renderFrame) footer() string {
 	left = append(left, hint("↑↓", "move"))
 	if _, ok := m.currentItem(); ok {
 		left = append(left, hint("Enter", "open"))
+	}
+	if current, ok := m.currentRow(); ok && current.kind == newContainerRow {
+		left = append(left, hint("Enter", "new"))
 	}
 	left = append(left, hint("Tab", "tabs"))
 	if m.tab == ProjectsTab {
