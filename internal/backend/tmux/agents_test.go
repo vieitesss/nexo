@@ -1,8 +1,11 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -202,5 +205,55 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 	}
 	if len(watcherAgents) != 1 || !watcherAgents[0].Seen {
 		t.Fatalf("watcher poll clobbered focus hook state: %#v", watcherAgents)
+	}
+}
+
+func TestMarkSeenUnknownPaneCreatesNoState(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	r := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "tmux" {
+			return []byte("/tmp/tmux-test\n"), nil
+		}
+		return nil, nil
+	})
+	source := NewAgentSource(r)
+	source.SetStateDir(stateDir)
+	if err := source.MarkSeen(context.Background(), "%999"); err != nil {
+		t.Fatalf("MarkSeen() error = %v", err)
+	}
+	if _, err := os.Stat(stateDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state dir = %v, want no artifacts", err)
+	}
+}
+
+func TestMarkSeenUnknownPaneLeavesExistingStateByteIdentical(t *testing.T) {
+	r := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "tmux" {
+			return []byte("/tmp/tmux-test\n"), nil
+		}
+		return nil, nil
+	})
+	source := NewAgentSource(r)
+	source.SetStateDir(t.TempDir())
+	source.server = "/tmp/tmux-test"
+	if err := source.updateStates(func(states map[string]agentState) error {
+		states["%1"] = agentState{State: "stopped"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(source.statePath("json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.MarkSeen(context.Background(), "%999"); err != nil {
+		t.Fatalf("MarkSeen() error = %v", err)
+	}
+	after, err := os.ReadFile(source.statePath("json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("state changed:\nbefore %q\nafter  %q", before, after)
 	}
 }

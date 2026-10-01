@@ -543,17 +543,24 @@ func (s *Source) MarkSeen(ctx context.Context, paneID string) error {
 	if s.server == "" {
 		s.server = s.serverName(ctx)
 	}
+	// The tmux focus hook fires for every pane, including panes that have no
+	// tracked agent state. Read first so an unknown or already-visible pane is
+	// a silent no-op that creates no state artifacts.
+	saved, err := s.readPersistedStates()
+	if err != nil {
+		return fmt.Errorf("read agent state: %w", err)
+	}
+	state, ok := saved.Agents[paneID]
+	if !ok || state.State != "stopped" {
+		return nil
+	}
 	return s.updateStates(func(states map[string]agentState) error {
-		state, ok := states[paneID]
-		if !ok {
-			// The tmux focus hook fires for every pane, including panes that
-			// have no tracked agent state. Marking those is a silent no-op.
+		current, ok := states[paneID]
+		if !ok || current.State != "stopped" {
 			return nil
 		}
-		if state.State == "stopped" {
-			state.Seen = true
-			states[paneID] = state
-		}
+		current.Seen = true
+		states[paneID] = current
 		return nil
 	})
 }
