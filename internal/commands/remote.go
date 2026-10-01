@@ -59,7 +59,7 @@ func (remoteCommand) Run(ctx context.Context, invocation Invocation) error {
 		return err
 	}
 	if len(invocation.Args) == 0 {
-		return errors.New("remote requires a subcommand (want list, open, new, close, or paste)")
+		return errors.New("remote requires a subcommand (want list, open, new, close, previous, paste, or passthrough)")
 	}
 	switch invocation.Args[0] {
 	case "list":
@@ -76,8 +76,12 @@ func (remoteCommand) Run(ctx context.Context, invocation Invocation) error {
 		return runRemoteAttach(ctx, invocation)
 	case "paste":
 		return runRemotePaste(ctx, invocation)
+	case "passthrough":
+		return runRemotePassthrough(ctx, invocation)
+	case "previous":
+		return runRemotePrevious(ctx, invocation)
 	default:
-		return fmt.Errorf("unknown remote subcommand %q (want list, open, new, close, or paste)", invocation.Args[0])
+		return fmt.Errorf("unknown remote subcommand %q (want list, open, new, close, paste, passthrough, or previous)", invocation.Args[0])
 	}
 }
 
@@ -257,6 +261,50 @@ func runRemotePaste(ctx context.Context, invocation Invocation) error {
 		return err
 	}
 	return paster.SendPaneText(ctx, paneID, remote.ShellQuotePath(path))
+}
+
+func runRemotePassthrough(ctx context.Context, invocation Invocation) error {
+	if len(invocation.Args) < 2 {
+		return errors.New("remote passthrough requires at least one key")
+	}
+	paster, ok := invocation.Adapter.(capabilities.RemotePaste)
+	if !ok {
+		return fmt.Errorf("backend %q does not support remote passthrough", invocation.Selection.Kind)
+	}
+	paneID := ""
+	if invocation.Selection.Kind == backend.Herdr {
+		paneID = strings.TrimSpace(os.Getenv("HERDR_PANE_ID"))
+	} else {
+		paneID = strings.TrimSpace(os.Getenv("TMUX_PANE"))
+	}
+	if paneID == "" {
+		return errors.New("remote passthrough requires the current pane (tmux: bind with TMUX_PANE=#{pane_id})")
+	}
+	keys := append([]string(nil), invocation.Args[1:]...)
+	if _, err := paster.ProxyTarget(ctx, paneID); err != nil {
+		// Proxy detection is advisory for a pass-through binding: the local
+		// pane receives the same key sequence when metadata is unavailable.
+		return paster.SendPaneKeys(ctx, paneID, keys)
+	}
+	return paster.SendPaneKeys(ctx, paneID, keys)
+}
+
+func runRemotePrevious(ctx context.Context, invocation Invocation) error {
+	if len(invocation.Args) != 1 {
+		return errors.New("remote previous accepts no arguments")
+	}
+	proxy, ok := invocation.Adapter.(capabilities.RemoteProxy)
+	if !ok {
+		return fmt.Errorf("backend %q does not support remote proxies", invocation.Selection.Kind)
+	}
+	entry, ok, err := historyStore(invocation).Previous(true)
+	if err != nil {
+		return fmt.Errorf("read previous remote container: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+	return proxy.Proxy(ctx, entry.Machine, entry.Name)
 }
 
 func runRemoteAttach(ctx context.Context, invocation Invocation) error {

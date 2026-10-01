@@ -24,6 +24,7 @@ type Invocation struct {
 	Selection  backend.Selection
 	Config     config.Config
 	ConfigPath string
+	StateDir   string
 	Runner     runner.CommandRunner
 	Adapter    any
 	// ContainerResolver optionally supplies machine-specific container

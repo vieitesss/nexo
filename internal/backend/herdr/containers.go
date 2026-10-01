@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 )
 
 var (
@@ -57,6 +58,11 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 				ActivePaneID: paneID,
 				Proxy:        true,
 			})
+			if workspace.Focused {
+				if err := b.recordContainer(containerstate.Entry{ID: workspace.ID, Name: proxyContainer, Machine: proxyMachine, Proxy: true}); err != nil {
+					return nil, err
+				}
+			}
 			continue
 		}
 		containers = append(containers, capabilities.Container{
@@ -65,6 +71,11 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 			Machine:      machine,
 			ActivePaneID: paneID,
 		})
+		if workspace.Focused {
+			if err := b.recordContainer(containerstate.Entry{ID: workspace.ID, Name: workspace.Label, Machine: machine}); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return containers, nil
 }

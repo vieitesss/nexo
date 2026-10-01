@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/proxy"
 )
 
@@ -232,6 +233,30 @@ func (c *blockingProxyClock) Sleep(ctx context.Context, _ time.Duration) error {
 		return ctx.Err()
 	case <-c.release:
 		return nil
+	}
+}
+
+func TestProxyIdentitySurvivesAttachmentReconnect(t *testing.T) {
+	stateDir := t.TempDir()
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"list-sessions -F #{session_id}\t#{session_name}\t#{@nexo-proxy}": []byte("$1\tdevbox/api\tdevbox/api\n"),
+	}}
+	backend := New(runner, true)
+	backend.usageStateDir = stateDir
+	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"devbox"}}, "")
+	if err := backend.Proxy(context.Background(), "devbox", "api"); err != nil {
+		t.Fatal(err)
+	}
+	transport := &fakeProxyTransport{failures: 1}
+	if err := proxy.RunReconnect(context.Background(), transport, &fakeProxyClock{}, nil, "devbox", "api", time.Second, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	entry, ok, err := containerstate.New(stateDir, "tmux", localMachine()).Previous(true)
+	if err != nil || !ok {
+		t.Fatalf("proxy history = %#v, ok=%v, err=%v", entry, ok, err)
+	}
+	if entry.Machine != "devbox" || entry.Name != "api" || !entry.Proxy {
+		t.Fatalf("proxy history = %#v, want devbox/api proxy", entry)
 	}
 }
 

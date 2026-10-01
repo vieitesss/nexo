@@ -12,6 +12,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/proxy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
@@ -292,11 +293,18 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	if _, err := b.run(ctx, "set-option", "-t", sessionID, "status", "off"); err != nil {
 		return err
 	}
-	if b.Inside {
-		_, err = b.runClient(ctx, "switch-client", "-t", sessionID)
+	if err := b.recordContainer(containerstate.Entry{ID: sessionID, Name: container, Machine: machine, Proxy: true}); err != nil {
 		return err
 	}
-	return b.runInteractive(ctx, "attach-session", "-t", sessionID)
+	if b.Inside {
+		_, err = b.runClient(ctx, "switch-client", "-t", sessionID)
+	} else {
+		err = b.runInteractive(ctx, "attach-session", "-t", sessionID)
+	}
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (b *Backend) proxyPaneCommand(machine, container string) (string, error) {

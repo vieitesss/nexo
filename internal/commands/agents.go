@@ -53,7 +53,15 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 			if marker, ok := invocation.Adapter.(interface {
 				MarkAgentSeen(context.Context, string) error
 			}); ok {
-				return marker.MarkAgentSeen(ctx, invocation.Args[1])
+				if err := marker.MarkAgentSeen(ctx, invocation.Args[1]); err != nil {
+					return err
+				}
+				if recorder, ok := invocation.Adapter.(interface {
+					RecordFocusedPane(context.Context, string) error
+				}); ok {
+					return recorder.RecordFocusedPane(ctx, invocation.Args[1])
+				}
+				return nil
 			}
 			return errors.New("selected backend does not support marking agents seen")
 		default:

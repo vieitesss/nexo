@@ -15,6 +15,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/proxy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
@@ -110,8 +111,10 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 		return err
 	}
 	if workspaceID != "" {
-		_, err := b.run(ctx, "workspace", "focus", workspaceID)
-		return err
+		if _, err := b.run(ctx, "workspace", "focus", workspaceID); err != nil {
+			return err
+		}
+		return b.recordContainer(containerstate.Entry{ID: workspaceID, Name: container, Machine: machine, Proxy: true})
 	}
 
 	identityValue := identity.String()
@@ -139,7 +142,7 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	if _, err := b.run(ctx, "pane", "send-text", paneID, command+"\n"); err != nil {
 		return b.operationWithCleanup(err, workspaceID)
 	}
-	return nil
+	return b.recordContainer(containerstate.Entry{ID: workspaceID, Name: container, Machine: machine, Proxy: true})
 }
 
 func (b *Backend) verifyProxyToken(ctx context.Context, workspaceID, identity string) error {

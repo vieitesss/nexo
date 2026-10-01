@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/git"
 	"github.com/vieitesss/nexo/internal/lifecycle"
 	"github.com/vieitesss/nexo/internal/projects"
@@ -28,6 +29,7 @@ type Backend struct {
 	proxyConfigPath string
 	remoteMachines  proxyidentity.MachineSet
 	proxyPolicy     proxyidentity.Policy
+	usageStateDir   string
 }
 
 // New constructs a Herdr backend using the supplied command runner.
@@ -44,7 +46,10 @@ func (b *Backend) OpenContainer(ctx context.Context, id string) error {
 		return errors.New("herdr container opener requires an id")
 	}
 	_, err := b.run(ctx, "workspace", "focus", id)
-	return err
+	if err != nil {
+		return err
+	}
+	return b.recordContainer(containerstate.Entry{ID: id, Machine: localMachine()})
 }
 
 // ListAgents implements capabilities.AgentSource with Herdr's native agent
@@ -53,7 +58,20 @@ func (b *Backend) ListAgents(ctx context.Context) ([]capabilities.Agent, error) 
 	if b == nil || b.agents == nil {
 		return nil, errors.New("herdr agents requires a command runner")
 	}
-	return b.agents.ListAgents(ctx)
+	agents, err := b.agents.ListAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, agent := range agents {
+		if !agent.Focused {
+			continue
+		}
+		if err := b.recordContainer(containerstate.Entry{ID: agent.ContainerID, Name: agent.Container, Machine: localMachine()}); err != nil {
+			return nil, err
+		}
+		break
+	}
+	return agents, nil
 }
 
 // FocusPane focuses the exact agent pane ID through Herdr's agent command.
@@ -254,7 +272,25 @@ func decodeWorktreeWorkspace(output []byte) (workspace, error) {
 // creates the workspace without moving the user's view to it. Shared
 // lifecycle policy normalizes the result at this module's seam.
 func (b *Backend) OpenProject(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
-	return lifecycle.OpenProject(ctx, path, options, b.openProjectNative)
+	container, err := lifecycle.OpenProject(ctx, path, options, b.openProjectNative)
+	if err != nil {
+		return container, err
+	}
+	if err := b.recordContainer(containerstate.Entry{ID: container.ID, Name: container.Name, Machine: localMachine()}); err != nil {
+		return container, err
+	}
+	return container, nil
+}
+
+func (b *Backend) usageStore() containerstate.Store {
+	return containerstate.New(b.usageStateDir, "herdr", localMachine())
+}
+
+func (b *Backend) recordContainer(entry containerstate.Entry) error {
+	if b == nil {
+		return errors.New("herdr container state is unavailable")
+	}
+	return b.usageStore().Record(entry)
 }
 
 func (b *Backend) openProjectNative(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {

@@ -175,6 +175,38 @@ Commands:
   target, the current proxy is used where the active backend exposes one.
 - `nexo remote list` lists remote containers and includes each machine's
   detected kind in `--json` output. Listing always uses SSH.
+- `nexo previous` opens the previous non-proxy container on this machine;
+  without history it does nothing.
+- `nexo remote previous` switches to or opens the most recently used remote
+  proxy; without history it does nothing. The proxy identity is recorded as a
+  machine/container pair, so reconnects do not replace it with the local
+  proxy label.
+
+### Root-key passthrough
+
+`nexo remote passthrough KEY...` is a user-bound helper for root-table keys.
+Inside a proxy it sends the key sequence through the attached pane to the
+remote multiplexer; outside a proxy it sends the same sequence to the local
+pane unchanged. It uses the backend's native key names and safe send-keys
+argument handling. Nexo never installs this binding, and `none` means simply
+that the user does not bind the command.
+
+In tmux, `run-shell` does not inherit `TMUX_PANE`, so capture the current pane
+explicitly:
+
+```tmux
+bind-key -T root C-h run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-h'
+bind-key -T root C-j run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-j'
+bind-key -T root C-k run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-k'
+bind-key -T root C-l run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-l'
+```
+
+In Herdr, add a key action in the user's key/action configuration that runs,
+for example:
+
+```sh
+nexo --backend=herdr remote passthrough ctrl+h
+```
 
 ### Clipboard image paste
 

@@ -75,6 +75,21 @@ func assertPanes(t *testing.T, paster *fakeRemotePaster, want string) {
 	}
 }
 
+func TestRemotePassthroughPreservesKeysOutsideProxy(t *testing.T) {
+	t.Setenv("TMUX_PANE", "%9")
+	paster := &fakeRemotePaster{}
+	if err := runRemotePassthrough(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Adapter:   paster,
+		Args:      []string{"passthrough", "C-h", "C-j"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(paster.keys, [][]string{{"C-h", "C-j"}}) {
+		t.Fatalf("keys = %#v, want original sequence", paster.keys)
+	}
+}
+
 func TestRemotePastePassesKeyOutsideProxyWithoutReadingClipboard(t *testing.T) {
 	t.Setenv("TMUX_PANE", "%9")
 	paster := &fakeRemotePaster{}
