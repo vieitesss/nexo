@@ -12,6 +12,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	gitops "github.com/vieitesss/nexo/internal/git"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/remote"
@@ -72,7 +73,7 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 }
 
 func tuiDependencies(ctx context.Context, invocation Invocation, tab string, initial []capabilities.Agent, initialErr error, initialRead ...bool) (tui.Deps, error) {
-	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Theme: invocation.Config.TUI.EffectiveTheme(), Agents: append([]capabilities.Agent(nil), initial...), Input: invocation.Stdin, Output: invocation.Stdout}
+	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Theme: invocation.Config.TUI.EffectiveTheme(), Agents: append([]capabilities.Agent(nil), initial...), Input: invocation.Stdin, Output: invocation.Stdout, CloneConfig: invocation.Config.Clone, ProjectPaths: invocation.Config.Paths, Home: os.Getenv("HOME")}
 	deps.ConfigPath = invocation.ConfigPath
 	if deps.ConfigPath == "" {
 		deps.ConfigPath = config.DefaultPath()
@@ -90,7 +91,11 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 		projectWarningsMu.Lock()
 		projectWarnings = nil
 		projectWarningsMu.Unlock()
-		discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
+		projectConfig := invocation.Config.ProjectsConfig
+		if current, loadErr := config.LoadOptional(deps.ConfigPath); loadErr == nil {
+			projectConfig = current.ProjectsConfig
+		}
+		discovery := projects.Discover(projectConfig, os.Getenv("HOME"))
 		projectWarningsMu.Lock()
 		projectWarnings = append(projectWarnings, discovery.Warnings...)
 		projectWarningsMu.Unlock()
@@ -98,6 +103,14 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 			return nil, discoveryCtx.Err()
 		}
 		return picker.ProjectPlaces(discovery.Candidates), nil
+	}
+	deps.AddProjectPath = func(addCtx context.Context, parent string) error {
+		if err := addCtx.Err(); err != nil {
+			return err
+		}
+		configPath := deps.ConfigPath
+		_, _, err := config.AddProjectPath(configPath, parent, os.Getenv("HOME"))
+		return err
 	}
 	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
 		// Container discovery is a source command. It must not delay the first
@@ -126,6 +139,9 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 	}
 	deps.RemoteCommands = remotePlaceCommands(ctx, invocation)
 	deps.RemoteMachines = append([]string(nil), invocation.Config.Remote.ConfiguredMachines()...)
+	deps.CloneProject = func(cloneCtx context.Context, source, destination string) error {
+		return gitops.Clone(cloneCtx, invocation.Runner, source, destination)
+	}
 	deps.OpenProject = func(openCtx context.Context, place picker.Place) error {
 		opener, ok := invocation.Adapter.(capabilities.ProjectOpener)
 		if !ok {

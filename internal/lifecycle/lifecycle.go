@@ -6,11 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/destination"
 	"github.com/vieitesss/nexo/internal/projects"
 )
 
@@ -106,17 +105,12 @@ func createAndOpenWorktree(ctx context.Context, options capabilities.WorktreeCre
 	return capabilities.Worktree{}, openErr
 }
 
-func preflightDestination(destination string) (string, error) {
-	path, err := filepath.Abs(destination)
+func preflightDestination(path string) (string, error) {
+	result, err := destination.New(destination.Options{AllowMissingParent: true}).Resolve(path)
 	if err != nil {
 		return "", fmt.Errorf("resolve worktree destination: %w", err)
 	}
-	if _, err := os.Lstat(path); err == nil {
-		return "", fmt.Errorf("worktree destination %q already exists", path)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("check worktree destination %q: %w", path, err)
-	}
-	return path, nil
+	return result.Path, nil
 }
 
 func normalizeContainer(path string, container capabilities.OpenedContainer) capabilities.OpenedContainer {

@@ -220,6 +220,7 @@ nexo --help
 | `nexo tui [agents\|containers\|projects]` | Render the TUI in the terminal supplied by your binding. With no tab, open Agents for unseen-stopped agents, otherwise Containers. |
 | `nexo agents` | List agent panes; add `watch` or `seen PANE_ID`. |
 | `nexo open PATH` | Open a discovered project candidate; add `--no-focus` to create or reuse its container without switching to it. Herdr also accepts `--workspace-id ID`. |
+| `nexo clone [--add-parent] SOURCE [DESTINATION]` | Clone a repository with Git; the optional flag adds the destination parent to project paths. Add `--json` for structured output. |
 | `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, `close [MACHINE/CONTAINER]`, or `paste [KEY...]`. |
 | `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch`, `--add-parent`, or `--no-focus`. |
 | `nexo worktree extract REPO DESTINATION` | Move the branch checked out in `REPO` into a new worktree and leave a return branch behind; add `--return-branch`, `--add-parent`, or `--no-focus`. |
@@ -245,6 +246,9 @@ nexo --backend=tmux open ~/src/api
 
 # Create or reuse the container without moving the user's view.
 nexo --backend=tmux --json open ~/src/api --no-focus
+
+# Clone a repository without opening its container.
+nexo --json clone git@github.com:owner/repo.git ~/src/repo
 
 # List and open configured remote containers.
 nexo --backend=tmux remote list --json
@@ -281,6 +285,7 @@ statuses, and safe verification.
 | `Enter` | Open the selected item or focus the selected agent |
 | `←` / `→` | Fold the selected folder or checkout, step Left to its parent, or unfold with Right |
 | `Ctrl-T` | Mark the selected container |
+| `Ctrl-O` | Open the clone form for the selected Projects row |
 | `Ctrl-X` | Kill marked or selected containers after confirmation |
 | `Ctrl-R` | Rename the selected container |
 | `Esc` / `Ctrl-C` | Clear search, then close / close |
@@ -329,6 +334,11 @@ highlight-color = "red"
 [tui]
 # Theme selection: auto, dark, or light. A running TUI follows changes live.
 theme = "auto"
+
+[clone]
+default-protocol = "ssh"
+ssh-prefix = "git@github.com:"
+https-prefix = "https://github.com/"
 
 [remote]
 machines = ["devbox"]

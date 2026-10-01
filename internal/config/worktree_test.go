@@ -36,6 +36,28 @@ func TestAddProjectPathPreservesCommentsAndFormatting(t *testing.T) {
 	}
 }
 
+func TestAddProjectPathRestorePreservesConcurrentEdit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	original := "paths = [\"/existing\"]\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restore, changed, err := AddProjectPath(path, "/projects", "")
+	if err != nil || !changed {
+		t.Fatalf("AddProjectPath() = (%v, %v), want changed", err, changed)
+	}
+	if err := os.WriteFile(path, []byte("paths = [\"/other\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := restore(); err == nil {
+		t.Fatal("restore() error = nil, want concurrent edit refusal")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "paths = [\"/other\"]\n" {
+		t.Fatalf("config after refused restore = %q, %v", got, err)
+	}
+}
+
 func TestAddProjectPathHandlesLiteralAndMultilineStrings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	contents := "backend = '''\npaths = [\"not-a-key\"] # still a string\n# also text\n'''\npaths = [\"~/work\"] # preserve this comment\n"

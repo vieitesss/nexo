@@ -34,6 +34,7 @@ type renderFrame struct {
 	confirmKill       bool
 	renameMode        bool
 	renameInput       []rune
+	form              *stagedForm
 }
 
 func (m Model) frame() renderFrame {
@@ -56,7 +57,7 @@ func (m Model) frame() renderFrame {
 		markedTargetsList: projection.markedTargets(m.input.marked), now: m.now,
 		toast: m.toast, refreshErr: m.source.refreshErr, gitErrors: m.gitErrors,
 		projection: projection, confirmKill: m.input.confirmKill,
-		renameMode: m.input.renameMode, renameInput: append([]rune(nil), m.input.renameInput...),
+		renameMode: m.input.renameMode, renameInput: append([]rune(nil), m.input.renameInput...), form: m.input.form,
 	}
 }
 
@@ -204,6 +205,9 @@ func (m renderFrame) view() string {
 	}
 	if len(lines) > m.height {
 		lines = lines[:m.height]
+	}
+	if m.form != nil {
+		lines = overlayForm(lines, m.form, m.width, m.height)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -725,6 +729,9 @@ func (m renderFrame) footer() string {
 	if m.tab == ProjectsTab {
 		if current, ok := m.currentRow(); ok && (current.foldable || foldParent(current) != "") {
 			left = append(left, hint("←→", "fold"))
+		}
+		if current, ok := m.currentItem(); ok && current.place.Kind == picker.ProjectKind {
+			left = append(left, hint("Ctrl-O", "clone"))
 		}
 	}
 	if m.currentContainer() || len(m.markedTargets()) > 0 {

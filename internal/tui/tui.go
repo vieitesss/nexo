@@ -13,12 +13,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/startup"
 )
@@ -77,9 +79,16 @@ type Deps struct {
 	RemoteCommands             []tea.Cmd
 	RemoteMachines             []string
 
-	OpenProject     func(context.Context, picker.Place) error
-	OpenContainer   func(context.Context, picker.Place) error
-	FocusAgent      func(context.Context, AgentRef) error
+	OpenProject   func(context.Context, picker.Place) error
+	OpenContainer func(context.Context, picker.Place) error
+	FocusAgent    func(context.Context, AgentRef) error
+	// CloneProject is the backend-neutral Git action used by the Projects-tab
+	// staged form. It must not open or focus a container.
+	CloneProject    func(context.Context, string, string) error
+	AddProjectPath  func(context.Context, string) error
+	CloneConfig     config.CloneConfig
+	ProjectPaths    []string
+	Home            string
 	KillContainers  func(context.Context, []picker.ContainerRef) error
 	RenameContainer func(context.Context, picker.ContainerRef, string) error
 
@@ -248,8 +257,10 @@ type pullRequestMsg struct {
 }
 
 type actionMsg struct {
-	kind string
-	err  error
+	kind        string
+	destination string
+	generation  uint64
+	err         error
 }
 
 type agentRecord struct {
@@ -284,6 +295,7 @@ type Model struct {
 	trace                   *startup.Trace
 	initialSelectionPending bool
 	userInteracted          bool
+	selectAfterRefresh      string
 }
 
 // NewModel creates a model with the requested opening tab. It does not do I/O.
@@ -300,6 +312,8 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	}
 	deps.Projects = append([]picker.Place(nil), deps.Projects...)
 	deps.Containers = append([]capabilities.Container(nil), deps.Containers...)
+	deps.CloneConfig = deps.CloneConfig.WithDefaults()
+	deps.ProjectPaths = append([]string(nil), deps.ProjectPaths...)
 	deps.Agents = append([]capabilities.Agent(nil), deps.Agents...)
 	remoteMachines := make([]string, 0, len(deps.RemoteMachines))
 	seenRemoteMachines := make(map[string]bool, len(deps.RemoteMachines))
@@ -331,6 +345,20 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	m.rebuild(false)
 	m.initialSelectionPending = !hasItemRows(m.rows)
 	return m
+}
+
+func projectPathIdentity(path string) string {
+	if path == "" {
+		return ""
+	}
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		absolute = filepath.Clean(path)
+	}
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		absolute = resolved
+	}
+	return filepath.Clean(absolute)
 }
 
 func hasItemRows(rows []row) bool {
@@ -466,6 +494,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SetSize(msg.Width, msg.Height)
 		return m, nil
 	case actionMsg:
+		if msg.kind == "clone" {
+			if msg.generation != 0 && msg.generation != m.input.actionGeneration {
+				return m, nil
+			}
+			if m.input.form != nil {
+				m.input.form.finish(msg.err)
+			}
+			if msg.err != nil {
+				m.input.actionInFlight = false
+				return m, nil
+			}
+			m.input.form = nil
+			m.input.actionInFlight = false
+			m.input.setQuery("")
+			m.selectAfterRefresh = projectPathIdentity(msg.destination)
+			cmd := m.source.ReloadProjects()
+			if cmd == nil {
+				m.selectAfterRefresh = ""
+			}
+			m.rebuild(false)
+			return m, cmd
+		}
 		if msg.err != nil {
 			m.toast = msg.err.Error()
 			m.source.remoteCommands = append([]tea.Cmd(nil), m.deps.RemoteCommands...)
@@ -547,6 +597,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if update, ok := m.source.Accept(msg); ok {
+		if _, projectError := msg.(projectsMsg); projectError && update.projects == nil {
+			m.selectAfterRefresh = ""
+		}
 		if update.toast != "" {
 			m.toast = update.toast
 		}
@@ -571,12 +624,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if update.projectsUpdated {
 			m.deps.Projects = append([]picker.Place(nil), update.projects...)
+			if m.selectAfterRefresh != "" {
+				m.input.revealProjectAncestors(update.projects, m.selectAfterRefresh)
+			}
 		}
 		if update.pullRequest != nil {
 			m.applyPullRequest(*update.pullRequest)
 		}
 		if update.changed || tabChanged {
 			m.rebuildSource()
+		}
+		if update.projectsUpdated && m.selectAfterRefresh != "" {
+			selected := false
+			for _, value := range m.rows {
+				if value.kind == itemRow && value.itemKind == "project" && projectPathIdentity(value.place.Path) == m.selectAfterRefresh {
+					m.input.cursor = value.id
+					selected = true
+					break
+				}
+			}
+			m.selectAfterRefresh = ""
+			if !selected {
+				m.input.cursor = ""
+				m.input.reconcileSelection(nil, m.rows)
+			}
 		}
 		return m, update.cmd
 	}

@@ -31,12 +31,14 @@ type inputState struct {
 	expanded    map[string]bool
 	marked      map[picker.ContainerRef]bool
 
-	confirmKill    bool
-	killTargets    []picker.ContainerRef
-	renameMode     bool
-	renameInput    []rune
-	renameTarget   picker.ContainerRef
-	actionInFlight bool
+	confirmKill      bool
+	killTargets      []picker.ContainerRef
+	form             *stagedForm
+	renameMode       bool
+	renameInput      []rune
+	renameTarget     picker.ContainerRef
+	actionInFlight   bool
+	actionGeneration uint64
 
 	selectedPlace    *picker.Place
 	selectedAgent    *capabilities.Agent
@@ -177,7 +179,9 @@ func (s *inputState) markedTargetsCatalog(catalog *picker.Catalog) []picker.Cont
 }
 
 func (s *inputState) mouse(msg tea.MouseMsg, frame inputFrame) inputEffect {
-	if s.actionInFlight || s.confirmKill || s.renameMode {
+	// A staged form owns the whole screen operation. Never hit-test tabs or
+	// rows painted underneath it, including wheel events.
+	if s.form != nil || s.actionInFlight || s.confirmKill || s.renameMode {
 		return inputEffect{}
 	}
 	event := tea.MouseEvent(msg)
@@ -287,10 +291,33 @@ func foldPrefixStyled(row row) string {
 func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 	if msg.Type == tea.KeyCtrlC {
 		s.cancelled = true
+		if s.form != nil {
+			if s.form.cancel != nil {
+				s.form.cancel()
+				s.form.cancel = nil
+			}
+			s.form.generation++
+			s.actionGeneration = s.form.generation
+		}
+		s.form = nil
 		s.confirmKill = false
 		s.renameMode = false
 		s.killTargets = nil
 		return inputEffect{quit: true}
+	}
+	if s.form != nil {
+		effect := s.form.key(msg)
+		if effect.Canceled {
+			s.actionGeneration = s.form.generation
+			s.form = nil
+			s.actionInFlight = false
+			return inputEffect{rebuild: true}
+		}
+		if effect.Submitted {
+			s.actionInFlight = true
+			s.actionGeneration = s.form.generation
+		}
+		return inputEffect{rebuild: effect.Changed || effect.Submitted, cmd: effect.Cmd}
 	}
 	if s.actionInFlight {
 		return inputEffect{}
@@ -356,6 +383,14 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 	case tea.KeyCtrlT:
 		s.toggleMark(frame.rows)
 		return inputEffect{rebuild: true}
+	case tea.KeyCtrlO:
+		if s.tab == ProjectsTab {
+			if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ProjectKind {
+				s.form = newCloneForm(s.deps, s.ctx)
+				return inputEffect{rebuild: true}
+			}
+		}
+		return inputEffect{}
 	case tea.KeyCtrlX:
 		refs := append([]picker.ContainerRef(nil), frame.markedTargets()...)
 		if len(refs) == 0 {
@@ -541,22 +576,26 @@ func (s *inputState) foldRight(rows []row) bool {
 }
 
 func (s *inputState) revealProjectAncestors(projects []picker.Place, path string) {
-	for path != "" {
+	target := projectPathIdentity(path)
+	for target != "" {
 		var found *picker.Place
 		for i := range projects {
-			if projects[i].Path == path {
+			if projectPathIdentity(projects[i].Path) == target {
 				found = &projects[i]
 				break
 			}
 		}
-		if found == nil || found.ParentPath == "" {
+		if found == nil {
 			return
 		}
 		for _, key := range []string{projectIdentity(*found), "project:" + found.ParentPath, "group:" + found.Group} {
 			s.expanded[key] = true
 			delete(s.folded, key)
 		}
-		path = found.ParentPath
+		if found.ParentPath == "" {
+			return
+		}
+		target = projectPathIdentity(found.ParentPath)
 	}
 }
 

@@ -15,7 +15,7 @@ import (
 
 // AddProjectPath appends parent to the top-level paths array without
 // reformatting the rest of the configuration. The returned restore function
-// puts the file back exactly as it was before this call.
+// only restores when the file still contains this operation's exact write.
 func AddProjectPath(path, parent, home string) (restore func() error, changed bool, err error) {
 	if path == "" {
 		return nil, false, errors.New("config path is empty")
@@ -48,12 +48,39 @@ func AddProjectPath(path, parent, home string) (restore func() error, changed bo
 	if err := writeConfigFile(path, updated, mode, existed); err != nil {
 		return nil, false, err
 	}
+	writtenInfo, statErr := os.Stat(path)
+	if statErr != nil {
+		return nil, false, fmt.Errorf("stat updated config %s: %w", path, statErr)
+	}
 
 	restore = func() error {
+		currentInfo, currentStatErr := os.Stat(path)
+		if currentStatErr != nil {
+			if !existed && errors.Is(currentStatErr, os.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf("check config before restore: %w", currentStatErr)
+		}
+		if !os.SameFile(writtenInfo, currentInfo) {
+			return errors.New("config changed after project path update; refusing to overwrite newer edits")
+		}
+		current, readErr := os.ReadFile(path)
+		if readErr != nil {
+			if !existed && errors.Is(readErr, os.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf("check config before restore: %w", readErr)
+		}
+		if !bytes.Equal(current, updated) {
+			return errors.New("config changed after project path update; refusing to overwrite newer edits")
+		}
 		if existed {
 			return writeConfigFile(path, original, mode, true)
 		}
-		return os.Remove(path)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
 	}
 	return restore, true, nil
 }
