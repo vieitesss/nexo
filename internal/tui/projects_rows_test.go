@@ -30,6 +30,10 @@ func TestProjectsGroupedRowsUseHomeAndWorktreeGutter(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
 	model.SetSize(120, 36)
+	// Folders and checkouts start folded; unfold this one to see its worktrees.
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
+	model = updateModel(t, model, keyMsg(tea.KeyDown))
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
 	plain := shell.Plain(model.View())
 	if !strings.Contains(plain, "~/work/prefapp") {
 		t.Fatalf("group path was not abbreviated: %q", plain)
@@ -62,6 +66,9 @@ func TestProjectsColumnsRespectTerminalWidths(t *testing.T) {
 	}
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
 	model.SetSize(120, 16)
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
+	model = updateModel(t, model, keyMsg(tea.KeyDown))
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
 	plain := shell.Plain(model.View())
 	if !strings.Contains(plain, "gitops-publication-si-01-03-jh69pd38vg") || !strings.Contains(plain, "fix/publication-si-01-03-jh69pd38vg") {
 		t.Fatalf("wide columns truncated needlessly: %q", plain)
@@ -93,12 +100,11 @@ func TestProjectsQueryIsFlatRankedAndStartsAtBestName(t *testing.T) {
 	if model.Cursor() != rows[0] {
 		t.Fatalf("cursor = %q, want first ranked row %q", model.Cursor(), rows[0])
 	}
-	// The folder column is flat mode only and at 80 columns keeping it would
-	// starve the branch, so assert its placement at a width where it survives.
+	// The folder column is flat mode only and reads as a path before the name.
 	model.SetSize(120, 16)
 	plain := shell.Plain(model.View())
-	if !strings.Contains(plain, "~/work/prefapp") || strings.Contains(plain, "⌄  ") {
-		t.Fatalf("flat query did not move folder to final column: %q", plain)
+	if !strings.Contains(plain, "~/work/prefapp/") || strings.Contains(plain, "⌄  ") {
+		t.Fatalf("flat query did not put the folder before the name: %q", plain)
 	}
 }
 
@@ -160,6 +166,11 @@ func TestProjectsQueryPreservesFoldState(t *testing.T) {
 		{Kind: picker.ProjectKind, Path: "/work/nexo-wt", Group: "/work", DisplayRemainder: "nexo-wt", ParentPath: "/work/nexo"},
 	}
 	model := NewModel(context.Background(), Deps{Projects: places}, ProjectsTab)
+	// Unfold the folder and checkout, then fold the checkout from its worktree.
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
+	model = updateModel(t, model, keyMsg(tea.KeyDown))
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
+	model = updateModel(t, model, keyMsg(tea.KeyDown))
 	model = updateModel(t, model, keyMsg(tea.KeyLeft))
 	model.SetQuery("nexo")
 	model.SetQuery("")
@@ -179,6 +190,28 @@ func TestProjectsFlatNaturalNameWidthWhenRowFits(t *testing.T) {
 	plain := shell.Plain(model.View())
 	if !strings.Contains(plain, name) || !strings.Contains(plain, "main") {
 		t.Fatalf("fitting row was truncated: %q", plain)
+	}
+}
+
+// TestProjectsFlatNameKeepsFullWidthForALongFolder pins the priority: the
+// folder truncates from the left before the name loses any character, so a
+// 40-cell name at 80 columns stays whole instead of dropping to the 45% cap.
+func TestProjectsFlatNameKeepsFullWidthForALongFolder(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	name := strings.Repeat("n", 40)
+	group := "/home/tester/work/some/rather/deep/folder"
+	model := NewModel(context.Background(), Deps{Projects: []picker.Place{
+		{Kind: picker.ProjectKind, Path: group + "/" + name, Group: group, DisplayRemainder: name, Git: true, GitContext: &picker.GitContext{Identity: "main"}},
+	}}, ProjectsTab)
+	model.SetQuery("n")
+	model.SetSize(80, 10)
+	layout := model.projectLayout()
+	if want := shell.StringWidth(name); layout.name != want {
+		t.Fatalf("name column %d shrank from %d to keep the folder: %+v", layout.name, want, layout)
+	}
+	plain := shell.Plain(model.View())
+	if !strings.Contains(plain, name) {
+		t.Fatalf("long folder starved the name: %q", plain)
 	}
 }
 
@@ -208,8 +241,8 @@ func TestProjectsFlatRowFitsWithoutTruncation(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
 	model.SetQuery("gitops")
-	// 106 is the natural width of the widest flat row in this fixture.
-	model.SetSize(106, 24)
+	// 120 columns is wide enough for the whole row, folder included.
+	model.SetSize(120, 24)
 	plain := shell.Plain(model.View())
 	if !strings.Contains(plain, "gitops-publication-si-01-03-jh69pd38vg") {
 		t.Fatalf("name truncated although the row fits: %q", plain)
@@ -217,9 +250,12 @@ func TestProjectsFlatRowFitsWithoutTruncation(t *testing.T) {
 	if !strings.Contains(plain, "fix/publication-si-01-03-jh69pd38vg") {
 		t.Fatalf("branch truncated although the row fits: %q", plain)
 	}
+	if !strings.Contains(plain, "~/work/prefapp/") {
+		t.Fatalf("folder dropped although the row fits: %q", plain)
+	}
 }
 
-func TestProjectsFlatNameLeadsBranchAt80(t *testing.T) {
+func TestProjectsFlatNameIsCappedAndKeepsGitColumnAt80(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
 	model.SetQuery("gitops")
@@ -228,11 +264,14 @@ func TestProjectsFlatNameLeadsBranchAt80(t *testing.T) {
 	if minName := 16; layout.name < minName {
 		t.Fatalf("name width %d fell below the floor %d", layout.name, minName)
 	}
-	if layout.name <= layout.branch {
-		t.Fatalf("name width %d did not lead branch width %d: %+v", layout.name, layout.branch, layout)
-	}
 	if cap := int(0.45 * float64(80)); layout.name != cap {
 		t.Fatalf("name width %d != cap %d: %+v", layout.name, cap, layout)
+	}
+	if layout.path != 0 {
+		t.Fatalf("folder column survived at 80 columns: %+v", layout)
+	}
+	if layout.git < projectMinBranch {
+		t.Fatalf("Git column %d fell below the floor %d: %+v", layout.git, projectMinBranch, layout)
 	}
 }
 
@@ -273,8 +312,8 @@ func TestProjectsFlatDropsFolderBeforeCuttingBranch(t *testing.T) {
 	if layout.path != 0 {
 		t.Fatalf("folder column kept at 60 columns: %+v", layout)
 	}
-	if minBranch := 12; layout.branch < minBranch {
-		t.Fatalf("branch width %d fell below the floor %d", layout.branch, minBranch)
+	if minBranch := 12; layout.git < minBranch {
+		t.Fatalf("branch width %d fell below the floor %d", layout.git, minBranch)
 	}
 	plain := shell.Plain(model.View())
 	if strings.Contains(plain, "~/work/prefapp") {
@@ -286,11 +325,15 @@ func TestProjectsGroupedColumnsUseTheFullWidthAt60(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
 	model.SetSize(60, 16)
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
+	model = updateModel(t, model, keyMsg(tea.KeyDown))
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
 	layout := model.projectLayout()
-	if minBranch := 12; layout.branch < minBranch {
-		t.Fatalf("grouped branch width %d fell below the floor %d", layout.branch, minBranch)
+	if minBranch := 12; layout.git < minBranch {
+		t.Fatalf("grouped branch width %d fell below the floor %d", layout.git, minBranch)
 	}
-	used := layout.name + layout.branch + layout.summary + 2 + 2*2
+	// Marker + the gutter between the name and the Git column.
+	used := layout.name + layout.git + 2 + 2
 	if used != 60 {
 		t.Fatalf("grouped row uses %d of 60 cells: %+v", used, layout)
 	}
@@ -303,12 +346,122 @@ func TestProjectsLoadingAndDetachedBranchStates(t *testing.T) {
 	}
 	model := NewModel(context.Background(), Deps{Projects: places}, ProjectsTab)
 	model.SetSize(80, 10)
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
 	plain := shell.Plain(model.View())
 	if !strings.Contains(plain, "loading") || !strings.Contains(plain, "…") {
 		t.Fatalf("loading branch state missing: %q", plain)
 	}
 	if !strings.Contains(plain, "⎇ abc1234") {
 		t.Fatalf("detached short sha missing: %q", plain)
+	}
+}
+
+func TestProjectGitSummaryFollowsBranchInSameColumn(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	places := []picker.Place{
+		{Kind: picker.ProjectKind, Path: "/home/tester/work/dirty", Group: "/home/tester/work", DisplayRemainder: "dirty", Git: true,
+			GitContext: &picker.GitContext{Identity: "main", Dirty: true, Adds: 1462, Deletes: 290, Ahead: 1, Behind: 11}},
+	}
+	model := NewModel(context.Background(), Deps{Projects: places}, ProjectsTab)
+	model.SetSize(200, 12)
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
+	plain := shell.Plain(model.View())
+	if !strings.Contains(plain, "⎇ main  +1462 −290 * ↑1 ↓11") {
+		t.Fatalf("Git summary did not follow the branch in the same column: %q", plain)
+	}
+}
+
+// TestProjectBranchTruncatesBeforeSummary pins the truncation order: a long
+// branch loses cells so the change counts, dirty mark and divergence stay on
+// screen.
+func TestProjectBranchTruncatesBeforeSummary(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	branch := strings.Repeat("feature/long-", 8)
+	places := []picker.Place{
+		{Kind: picker.ProjectKind, Path: "/home/tester/work/proj", Group: "/home/tester/work", DisplayRemainder: "proj", Git: true,
+			GitContext: &picker.GitContext{Identity: branch, Adds: 1462, Deletes: 290, Dirty: true, Ahead: 2}},
+	}
+	model := NewModel(context.Background(), Deps{Projects: places}, ProjectsTab)
+	model.SetSize(80, 10)
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
+	plain := shell.Plain(model.View())
+	if !strings.Contains(plain, "+1462 −290 * ↑2") {
+		t.Fatalf("Git summary was truncated with the branch: %q", plain)
+	}
+	if strings.Contains(plain, branch) {
+		t.Fatalf("long branch was not truncated: %q", plain)
+	}
+}
+
+func TestProjectsFlatFolderLeadsNameAsPath(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
+	model.SetQuery("gitops")
+	model.SetSize(120, 16)
+	plain := shell.Plain(model.View())
+	if !strings.Contains(plain, "~/work/prefapp/gitops-k8s") {
+		t.Fatalf("folder did not lead the name as a path: %q", plain)
+	}
+	offset := -1
+	for _, line := range strings.Split(plain, "\n") {
+		index := strings.Index(line, "gitops-")
+		if index < 0 {
+			continue
+		}
+		if offset == -1 {
+			offset = index
+		}
+		if index != offset {
+			t.Fatalf("name column moved to %d, want %d: %q", index, offset, line)
+		}
+	}
+	if offset < 0 {
+		t.Fatalf("no name rows rendered: %q", plain)
+	}
+}
+
+func TestProjectsFlatFolderLeftTruncatesThenDrops(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
+	model.SetQuery("gitops")
+	model.SetSize(100, 16)
+	plain := shell.Plain(model.View())
+	if !strings.Contains(plain, "…") || !strings.Contains(plain, "fapp/") {
+		t.Fatalf("folder was not left-truncated and kept its tail: %q", plain)
+	}
+	name := "gitops-publication-si-01-03-jh69pd38vg"
+	if !strings.Contains(plain, name) {
+		t.Fatalf("folder truncation starved the name: %q", plain)
+	}
+
+	// One step narrower leaves less than the folder's floor, so the folder is
+	// dropped whole while the name keeps every cell.
+	model.SetSize(95, 16)
+	plain = shell.Plain(model.View())
+	if strings.Contains(plain, "fapp") || strings.Contains(plain, "firestartr-pro/") {
+		t.Fatalf("folder survived a width where the name needs the cells: %q", plain)
+	}
+	if !strings.Contains(plain, name) {
+		t.Fatalf("name was truncated before the folder was dropped: %q", plain)
+	}
+}
+
+func TestProjectDivergenceUsesItsOwnColour(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI)
+	t.Setenv("HOME", "/home/tester")
+	places := []picker.Place{
+		{Kind: picker.ProjectKind, Path: "/home/tester/work/proj", Group: "/home/tester/work", DisplayRemainder: "proj", Git: true,
+			GitContext: &picker.GitContext{Identity: "main", Ahead: 1, Behind: 11}},
+	}
+	model := NewModel(context.Background(), Deps{Projects: places}, ProjectsTab)
+	model.SetSize(200, 10)
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
+	view := model.View()
+	if !strings.Contains(view, divergence().Render("↑1")) || !strings.Contains(view, divergence().Render("↓11")) {
+		t.Fatalf("divergence did not use the divergence colour: %q", view)
+	}
+	if strings.Contains(view, muted().Render("↑1")) || strings.Contains(view, muted().Render("↓11")) {
+		t.Fatalf("divergence reused the muted branch colour: %q", view)
 	}
 }
 

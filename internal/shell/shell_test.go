@@ -18,6 +18,18 @@ func TestPromptLineKeepsCursorAtInputEnd(t *testing.T) {
 	}
 }
 
+func TestTruncateLeftKeepsTheTailAndHead(t *testing.T) {
+	if got, want := TruncateLeft("~/work/prefapp/gitops", 10, "…"), "…pp/gitops"; got != want {
+		t.Fatalf("TruncateLeft = %q, want %q", got, want)
+	}
+	if got, want := TruncateLeft("~/work", 20, "…"), "~/work"; got != want {
+		t.Fatalf("TruncateLeft fitting value = %q, want %q", got, want)
+	}
+	if got := TruncateLeft("~/work", 0, "…"); got != "" {
+		t.Fatalf("TruncateLeft zero width = %q", got)
+	}
+}
+
 func TestPlainDropsOSCAndControlPayloads(t *testing.T) {
 	value := "before\x1b]8;;https://example.test\x07link\x1b]8;;\x1b\\after\x1bPbinary\x1b\\\x00end"
 	if got, want := Plain(value), "beforelinkafter end"; got != want {

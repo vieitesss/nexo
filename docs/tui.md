@@ -6,12 +6,13 @@ refreshed.
 
 ## Projects
 
-Projects are grouped by their containing folder. Folder headers, checkout
-projects, and linked worktree children start expanded. A checkout with linked
-worktrees can be folded with Left and unfolded with Right; the same keys fold or
-unfold a containing folder. A folded checkout remains the selected row and shows
-a subtle count of its hidden worktree children. Search does not change the saved
-fold state.
+Projects are grouped by their containing folder. On an empty query every folder
+and every checkout with linked worktrees starts folded. Right unfolds the
+selected folder or checkout. Left folds the parent and moves the selection
+there: a worktree folds its checkout, a project folds its folder, and an
+expanded folder folds itself. Left on a folded folder does nothing. A folded
+checkout keeps a subtle count of its hidden worktree children. Search does not
+change the saved fold state.
 
 ## Search
 
@@ -24,7 +25,12 @@ name.
 
 The Projects tab uses natural column widths whenever the full row fits. When a
 terminal is too narrow, the name column is capped proportionally before lower
-priority columns are reduced or removed. Matched characters in names, branches,
+priority columns are reduced or removed. In search results the containing folder
+is shown to the left of the name as a path (`~/work/prefapp/gitops-k8s`),
+right-aligned and ending in `/` so names stay aligned. The branch and its Git
+summary (`⎇ main  +12 −3 * ↑1 ↓2`) share the column after the name; the branch
+truncates before the summary. The folder truncates from the left with `…` and is
+dropped before the name loses characters. Matched characters in names, branches,
 and visible folders are highlighted independently within their cells.
 
 ## Keys

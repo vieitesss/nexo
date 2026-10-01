@@ -12,43 +12,65 @@ import (
 	"github.com/vieitesss/nexo/internal/shell"
 )
 
-func TestProjectGroupsStartExpandedAndFoldAsAUnit(t *testing.T) {
+func TestProjectTreeStartsFoldedAndFoldsFromChildren(t *testing.T) {
 	projects := []picker.Place{
 		{Kind: picker.ProjectKind, Path: "/work/nexo", Group: "/work", DisplayRemainder: "nexo"},
 		{Kind: picker.ProjectKind, Path: "/work/nexo-wt", Group: "/work", DisplayRemainder: "nexo-wt", ParentPath: "/work/nexo"},
 	}
 	model := NewModel(context.Background(), Deps{Projects: projects}, ProjectsTab)
-	if got := model.Rows(); len(got) != 3 {
-		t.Fatalf("default expanded rows = %v, want group, project and worktree", got)
+	if got := model.Rows(); !slices.Equal(got, []string{"group:/work"}) {
+		t.Fatalf("empty-query default rows = %v, want folded folder", got)
+	}
+	if model.Cursor() != "group:/work" {
+		t.Fatalf("default cursor = %q, want folder", model.Cursor())
 	}
 
-	// A linked worktree folds under its own checkout without changing either
-	// row's identity, and the hidden-child count remains on the checkout row.
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
-	wantFolded := []string{"group:/work", "project:/work/nexo"}
-	if got := model.Rows(); !slices.Equal(got, wantFolded) {
-		t.Fatalf("folded project rows = %v, want %v", got, wantFolded)
+	// Left on a folded folder does nothing.
+	if got := updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft}).Rows(); !slices.Equal(got, []string{"group:/work"}) {
+		t.Fatalf("Left on folded folder changed rows: %v", got)
 	}
-	if model.Cursor() != "project:/work/nexo" {
-		t.Fatalf("folded project cursor = %q, want checkout identity", model.Cursor())
+
+	// Right unfolds the folder. The checkout with a worktree stays folded and
+	// keeps its hidden-child count.
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRight})
+	if got := model.Rows(); !slices.Equal(got, []string{"group:/work", "project:/work/nexo"}) {
+		t.Fatalf("unfolded folder rows = %v", got)
 	}
 	model.SetSize(80, 8)
 	if !strings.Contains(shell.Plain(model.View()), "nexo  1") {
-		t.Fatalf("folded project did not show hidden-child count: %q", shell.Plain(model.View()))
-	}
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRight})
-	if got := model.Rows(); !slices.Equal(got, []string{"group:/work", "project:/work/nexo", "project:/work/nexo-wt"}) {
-		t.Fatalf("unfolded project rows = %v", got)
+		t.Fatalf("folded checkout did not show hidden-child count: %q", shell.Plain(model.View()))
 	}
 
-	// The containing project group still folds independently.
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
-	if got := model.Rows(); len(got) != 1 || got[0] != "group:/work" {
-		t.Fatalf("folded group rows = %v, want only header", got)
-	}
+	// Right on the checkout unfolds its worktree.
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRight})
-	if got := model.Rows(); len(got) != 3 {
-		t.Fatalf("unfolded group rows = %v, want all projects and worktrees", got)
+	if got := model.Rows(); !slices.Equal(got, []string{"group:/work", "project:/work/nexo", "project:/work/nexo-wt"}) {
+		t.Fatalf("unfolded checkout rows = %v", got)
+	}
+
+	// Left on the worktree folds the checkout and moves the selection there.
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
+	if got := model.Rows(); !slices.Equal(got, []string{"group:/work", "project:/work/nexo"}) {
+		t.Fatalf("Left on worktree rows = %v", got)
+	}
+	if model.Cursor() != "project:/work/nexo" {
+		t.Fatalf("Left on worktree cursor = %q, want checkout", model.Cursor())
+	}
+
+	// Left on a project folds the folder and moves the selection there.
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
+	if got := model.Rows(); !slices.Equal(got, []string{"group:/work"}) {
+		t.Fatalf("Left on project rows = %v", got)
+	}
+	if model.Cursor() != "group:/work" {
+		t.Fatalf("Left on project cursor = %q, want folder", model.Cursor())
+	}
+
+	// An expanded folder folds itself on Left too.
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRight})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
+	if got := model.Rows(); !slices.Equal(got, []string{"group:/work"}) {
+		t.Fatalf("Left on expanded folder rows = %v", got)
 	}
 }
