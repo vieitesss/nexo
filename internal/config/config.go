@@ -25,6 +25,7 @@ type Config struct {
 	Backend        string `toml:"backend"`
 	ProjectsConfig `toml:",inline"`
 	Agents         AgentsConfig `toml:"agents"`
+	Glance         GlanceConfig `toml:"glance"`
 	TUI            TUIConfig    `toml:"tui"`
 	Remote         RemoteConfig `toml:"remote"`
 	Clone          CloneConfig  `toml:"clone"`
@@ -80,6 +81,7 @@ func parse(contents []byte, path string) (Config, error) {
 		Backend string `toml:"backend"`
 		ProjectsConfig
 		Agents AgentsConfig `toml:"agents"`
+		Glance GlanceConfig `toml:"glance"`
 		TUI    TUIConfig    `toml:"tui"`
 		Clone  struct {
 			DefaultProtocol string `toml:"default-protocol"`
@@ -102,6 +104,7 @@ func parse(contents []byte, path string) (Config, error) {
 		Backend:        raw.Backend,
 		ProjectsConfig: raw.ProjectsConfig,
 		Agents:         raw.Agents,
+		Glance:         raw.Glance,
 		TUI:            raw.TUI,
 		Clone: CloneConfig{
 			DefaultProtocol: raw.Clone.DefaultProtocol,
@@ -147,10 +150,17 @@ func parse(contents []byte, path string) (Config, error) {
 	if err := validateClone(cfg.Clone); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "clone.default-protocol")
 	}
+	if err := validateGlanceFields(cfg.Glance.Fields); err != nil {
+		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "glance.fields")
+	}
+	if err := validateGlanceTint(cfg.Glance.Tint); err != nil {
+		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "glance.tint")
+	}
 	if err := validateRemote(cfg.Remote); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, remoteValidationKey(err))
 	}
 	cfg.Agents = cfg.Agents.WithDefaults()
+	cfg.Glance = cfg.Glance.WithDefaults()
 	cfg.TUI = cfg.TUI.WithDefaults()
 	cfg.Clone = cfg.Clone.WithDefaults()
 	return cfg, nil

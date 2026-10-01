@@ -73,6 +73,50 @@ the highlights it owns; after a crash the marker survives, and the next watcher
 start reconciles it. Herdr owns this natively, so nexo never highlights Herdr
 windows.
 
+## Glance row
+
+`nexo tmux glance on|off|toggle` shows an always-visible row listing every
+agent pane. It is tmux-only and user-bound: nexo installs no key, so bind the
+command yourself, for example
+`bind -n M-g run-shell 'nexo --backend=tmux tmux glance toggle'`.
+
+The row starts with the label `nexo │` and then one bracketed entry per agent
+pane, for example `nexo │ [● zeta:1.0]`. Each entry renders the enabled
+`[glance] fields` in the fixed order `dot, target, harness, session, window,
+branch, age`; the defaults are `dot` and `target`. The dot is `◐` for a working
+agent, `●` for an unseen stopped agent and `○` for a seen stopped agent, and
+entries are ordered unseen stopped, working, then seen stopped. When the row is
+narrower than its entries, whole entries are dropped and an ellipsis marks the
+omission; the label itself is never truncated. Agent text is escaped so a name
+cannot inject a tmux format or command.
+
+The row is one extra status line. `on` scans the whole `status-format` array
+and every session's local options, then takes the first row beyond the rows in
+use whose slot is neither a custom global row nor a custom session row. A slot
+that still holds tmux's built-in default is free; a slot the user set, even one
+beyond the displayed rows, is preserved. It then raises `status` to show the
+row and keeps `status-left` untouched. Sessions whose own `status` or
+`status-format` would shadow the row are adjusted, and their exact originals
+are recorded. If no row is free, `on` refuses without changing anything.
+
+`off` restores the original `status` value and the original `status-format`
+value, byte for byte, including intentional padding and explicitly empty rows,
+and restores every session override it touched. It then removes the private
+`@nexo-glance-state` record that stores the originals. `toggle` flips between
+the two. The record is one server option, so the state is per tmux server and
+a single write publishes it atomically.
+
+The watcher keeps the row current on every poll, so agent state changes appear
+without another command, and only writes when the rendered row or an option
+actually changed. Sessions created while the row is on are picked up on the
+next poll. Restart `nexo agents watch` for `[glance]` changes to take effect,
+like the window highlight. A configured `[glance] tint` paints the row
+background, either with a tmux colour or with a theme palette option such as
+`@thm_surface_0`; with no tint the row keeps the normal status background.
+The command is tmux-only because Herdr renders its own agent sidebar, which
+already lists agent panes natively, so nexo adds nothing for it. It needs a
+running watcher before `on` to keep updating after the first render.
+
 ## Notifications
 
 On tmux, only `nexo agents watch` sends desktop notifications; plain agent

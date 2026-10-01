@@ -142,7 +142,7 @@ bind a display-popup -E -B -w 100% -h 100% "nexo tui agents"
 ```
 
 See [docs/agents.md](docs/agents.md) for watcher behavior, the unseen
-window highlight, and notification details.
+window highlight, the glance row, and notification details.
 
 ### Herdr adapter
 
@@ -158,7 +158,9 @@ For a checkout under development, link the manifest instead:
 herdr plugin link /path/to/nexo
 ```
 
-The manifest provides four TUI actions and popup panes. Add the plugin
+The manifest provides four TUI actions and popup panes. Herdr's native agent
+sidebar already lists agent panes, so the glance row is tmux-only and the
+Herdr adapter adds nothing for it. Add the plugin
 actions to Herdr's key configuration if desired:
 
 ```toml
@@ -225,6 +227,7 @@ nexo --help
 | `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch`, `--add-parent`, or `--no-focus`. |
 | `nexo worktree extract REPO DESTINATION` | Move the branch checked out in `REPO` into a new worktree and leave a return branch behind; add `--return-branch`, `--add-parent`, or `--no-focus`. |
 | `nexo tmux init` | Install tmux focus hooks and the agent watcher (tmux backend only). |
+| `nexo tmux glance on\|off\|toggle` | Show, hide or toggle the glance row that lists agent panes (tmux backend only). Bind it yourself; nexo installs no key. |
 
 Examples:
 
@@ -260,6 +263,9 @@ nexo --backend=tmux remote close devbox/api
 # run-shell does not inherit TMUX_PANE, so the binding passes it explicitly.
 # nexo does not install this binding.
 # bind-key -T root C-v run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote paste C-v'
+
+# Bind the glance row toggle; nexo installs no key itself.
+# bind -n M-g run-shell 'nexo --backend=tmux tmux glance toggle'
 
 # Create a worktree and add its parent to project discovery.
 nexo --backend=tmux worktree create --new-branch --add-parent \
@@ -333,6 +339,13 @@ sound = false
 working-pattern = { pi = "⠋" }
 highlight-color = "red"
 
+[glance]
+# Agent fields shown per entry. Known fields render in this fixed order:
+# dot, target, harness, session, window, branch, age.
+fields = ["dot", "target"]
+# Row tint: a tmux colour, a palette option such as @thm_surface_0, or "default".
+tint = "default"
+
 [tui]
 # Theme selection: auto, dark, or light. A running TUI follows changes live.
 theme = "auto"
@@ -375,6 +388,8 @@ machine and each remote machine need.
 | `agents.notify` | `true` | Queue tmux working-to-stopped desktop notifications. Herdr notifications are native and unaffected. |
 | `agents.sound` | `false` | Play a short sound with tmux notifications. |
 | `agents.highlight-color` | `red` | tmux window-list colour for a window holding an unseen stopped agent. A value with a `=` is used as a full style (for example `bg=red,bold`); otherwise it becomes `fg=<colour>`. Read when the watcher starts, so restart `nexo agents watch` after changing it. Herdr uses its native agent state instead. |
+| `glance.fields` | `dot`, `target` | Agent fields shown in each glance entry, in the fixed order `dot, target, harness, session, window, branch, age`. Unknown or duplicate fields are rejected. |
+| `glance.tint` | none | Background tint for the tmux glance row: a tmux colour, a `@palette` option such as `@thm_surface_0`, or `default`/empty for no tint. |
 | `tui.theme` | `auto` | Select `auto`, `dark`, or `light`; auto queries the terminal background and falls back to `COLORFGBG`, then dark. A running TUI polls the config and follows `dark`/`light` changes without a restart; `auto` is not re-probed mid-session. |
 | `remote.machines` | `[]` | SSH aliases to list and open. `local`, the local hostname, and aliases beginning with `-` are rejected. |
 | `remote.backends` | `{}` | Optional per-machine backend table. Each key must be in `remote.machines`; values are `auto`, `tmux`, or `herdr`. Unlisted machines use `auto`. |
@@ -392,7 +407,7 @@ config key, and an empty or `auto` selection detects the inner multiplexer.
 
 | Backend | v1 status | Implemented or checked capabilities |
 | --- | --- | --- |
-| **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, focuses panes, creates and extracts Git worktrees, detects agents by process and screen polling, watches, notifies and highlights unseen windows, and proxies remote tmux containers over SSH/mosh/et. |
+| **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, focuses panes, creates and extracts Git worktrees, detects agents by process and screen polling, watches, notifies, highlights unseen windows, shows a toggleable glance row listing agent panes, and proxies remote tmux containers over SSH/mosh/et. |
 | **Herdr** | Implemented | Opens and manages native workspaces, reads pane screens, focuses panes, creates and extracts Git worktrees, consumes Herdr's native agent state and notifications, registers Herdr remote machines for its native sidebar, and fills the tmux-remote gap with a workspace proxy. The plugin manifest supplies the popup surface. |
 | **Zellij** | Planned | Capability interfaces checked on paper: native project/session actions, pane listing, screen reads, focus, and floating panes; nexo would fill agent, notification, and remote-proxy gaps. |
 | **WezTerm** | Planned | Capability interfaces checked on paper: native spawn/list/read/focus; no popup CLI operation, and workspace switching needs a Lua/user action. |

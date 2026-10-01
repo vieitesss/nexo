@@ -52,15 +52,17 @@ var errWatcherAlreadyRunning = errors.New("tmux agent watcher already running")
 // Source discovers agent panes in a tmux server and polls their visible
 // screens for harness working indicators.
 type Source struct {
-	runner     runner.CommandRunner
-	config     config.AgentsConfig
-	now        func() time.Time
-	stateDir   string
-	server     string
-	notifier   capabilities.Notifier
-	hookBinary string
-	hookConfig string
-	mu         sync.Mutex
+	runner       runner.CommandRunner
+	config       config.AgentsConfig
+	glance       config.GlanceConfig
+	glanceSynced bool
+	now          func() time.Time
+	stateDir     string
+	server       string
+	notifier     capabilities.Notifier
+	hookBinary   string
+	hookConfig   string
+	mu           sync.Mutex
 }
 
 // NewAgentSource creates a tmux AgentSource with the default configuration.
@@ -182,6 +184,11 @@ func (s *Source) listAgents(ctx context.Context, highlight bool) ([]capabilities
 			StoppedSince: state.StoppedSince,
 			Branch:       current.branch,
 		})
+	}
+	if highlight {
+		if err := s.reconcileGlanceLocked(ctx, agents); err != nil {
+			return nil, err
+		}
 	}
 	return agents, nil
 }

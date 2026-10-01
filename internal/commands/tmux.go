@@ -19,20 +19,58 @@ func init() {
 func (tmuxCommand) Name() string { return "tmux" }
 
 func (tmuxCommand) Run(ctx context.Context, invocation Invocation) error {
-	if len(invocation.Args) != 1 || invocation.Args[0] != "init" {
-		return fmt.Errorf("usage: nexo tmux init")
+	if len(invocation.Args) == 0 {
+		return fmt.Errorf("usage: nexo tmux init|glance on|off|toggle")
 	}
 	if invocation.Selection.Kind != backend.Tmux {
-		return errors.New("tmux init requires the tmux backend")
+		return errors.New("tmux commands require the tmux backend")
 	}
+	if configurable, ok := invocation.Adapter.(interface {
+		ConfigureAgents(config.AgentsConfig)
+	}); ok {
+		configurable.ConfigureAgents(invocation.Config.Agents)
+	}
+	switch invocation.Args[0] {
+	case "init":
+		if len(invocation.Args) != 1 {
+			return fmt.Errorf("usage: nexo tmux init")
+		}
+		return runTmuxInit(ctx, invocation)
+	case "glance":
+		if len(invocation.Args) != 2 {
+			return fmt.Errorf("usage: nexo tmux glance on|off|toggle")
+		}
+		return runTmuxGlance(ctx, invocation)
+	default:
+		return fmt.Errorf("unknown tmux command %q", invocation.Args[0])
+	}
+}
+
+func runTmuxInit(ctx context.Context, invocation Invocation) error {
 	initializer, ok := invocation.Adapter.(interface {
 		Init(context.Context, tmuxbackend.InitInput) error
 	})
 	if !ok {
 		return errors.New("selected backend does not support tmux adapter initialization")
 	}
-	if configurable, ok := invocation.Adapter.(interface{ ConfigureAgents(config.AgentsConfig) }); ok {
-		configurable.ConfigureAgents(invocation.Config.Agents)
-	}
 	return initializer.Init(ctx, tmuxbackend.InitInput{ConfigPath: invocation.ConfigPath})
+}
+
+func runTmuxGlance(ctx context.Context, invocation Invocation) error {
+	action, err := tmuxbackend.ParseGlanceAction(invocation.Args[1])
+	if err != nil {
+		return UsageError{Err: err}
+	}
+	if configurable, ok := invocation.Adapter.(interface {
+		ConfigureGlance(config.GlanceConfig)
+	}); ok {
+		configurable.ConfigureGlance(invocation.Config.Glance)
+	}
+	controller, ok := invocation.Adapter.(interface {
+		Glance(context.Context, tmuxbackend.GlanceAction) error
+	})
+	if !ok {
+		return errors.New("selected backend does not support the glance row")
+	}
+	return controller.Glance(ctx, action)
 }
