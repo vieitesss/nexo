@@ -192,28 +192,6 @@ func (c *Catalog) Snapshot() CatalogSnapshot {
 	}
 }
 
-// AgentsFor returns the associated agents for one container in the current
-// coherent snapshot. Stable IDs win; a unique label is handled by the same
-// source-scoped policy used while decorating Places.
-func (c *Catalog) AgentsFor(place Place) []capabilities.Agent {
-	if c == nil {
-		return nil
-	}
-	machine := NormalizeMachine(place.Machine)
-	for _, candidate := range c.Snapshot().Places {
-		if candidate.Kind != ContainerKind || NormalizeMachine(candidate.Machine) != machine {
-			continue
-		}
-		if strings.TrimSpace(place.ContainerID) != "" && strings.TrimSpace(candidate.ContainerID) == strings.TrimSpace(place.ContainerID) {
-			return append([]capabilities.Agent(nil), candidate.Agents...)
-		}
-		if strings.TrimSpace(place.ContainerID) == "" && strings.TrimSpace(candidate.ContainerName) == strings.TrimSpace(place.ContainerName) {
-			return append([]capabilities.Agent(nil), candidate.Agents...)
-		}
-	}
-	return nil
-}
-
 // Marked returns marked container identities in source order from the current
 // coherent snapshot. Machine normalization keeps marks stable across remote
 // spellings and refreshes.

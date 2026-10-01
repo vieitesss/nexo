@@ -636,11 +636,21 @@ func nearestCursorable(rows []row, index int) (string, bool) {
 	return "", false
 }
 
-func (m Model) sourcePlaces() []picker.Place {
+// catalogSnapshot materializes one coherent catalog view. Callers that need
+// several projections during the same rebuild should reuse the returned value
+// instead of asking the catalog to materialize again.
+func (m Model) catalogSnapshot() picker.CatalogSnapshot {
 	if m.catalog == nil {
-		return append([]picker.Place(nil), m.deps.Projects...)
+		return picker.CatalogSnapshot{
+			Places:   append([]picker.Place(nil), m.deps.Projects...),
+			Machines: []string{picker.LocalMachine()},
+			Status:   map[string]picker.MachineStatus{},
+		}
 	}
-	return append([]picker.Place(nil), m.catalog.Snapshot().Places...)
+	return m.catalog.Snapshot()
+}
+func (m Model) sourcePlaces() []picker.Place {
+	return append([]picker.Place(nil), m.catalogSnapshot().Places...)
 }
 func (m Model) projectPlaces() []picker.Place {
 	places := m.sourcePlaces()
@@ -735,21 +745,17 @@ func (m Model) matchCount(tab Tab) int {
 }
 
 func (m Model) containerPlaces() []picker.Place {
-	places := m.sourcePlaces()
-	out := places[:0]
+	return containerPlacesFrom(m.catalogSnapshot().Places)
+}
+
+func containerPlacesFrom(places []picker.Place) []picker.Place {
+	out := make([]picker.Place, 0, len(places))
 	for _, place := range places {
 		if place.Kind == picker.ContainerKind {
 			out = append(out, place)
 		}
 	}
 	return out
-}
-
-func (m Model) agentsFor(place picker.Place) []capabilities.Agent {
-	if m.catalog == nil {
-		return nil
-	}
-	return m.catalog.AgentsFor(place)
 }
 
 func (m Model) rowsForTab(tab Tab) []row {
@@ -815,18 +821,17 @@ func agentIdentity(record agentRecord) string {
 }
 
 func (m Model) machineNames() []string {
-	if m.catalog == nil {
-		return []string{picker.LocalMachine()}
-	}
-	return append([]string(nil), m.catalog.Snapshot().Machines...)
+	return append([]string(nil), m.catalogSnapshot().Machines...)
 }
 
 func (m Model) containerRows() []row {
 	rows := []row{}
-	machines := m.machineNames()
+	snapshot := m.catalogSnapshot()
+	machines := append([]string(nil), snapshot.Machines...)
+	places := containerPlacesFrom(snapshot.Places)
 	if string(m.query) != "" {
 		sort.SliceStable(machines, func(i, j int) bool {
-			left, right := m.machineMatchScore(machines[i]), m.machineMatchScore(machines[j])
+			left, right := m.machineMatchScore(places, machines[i]), m.machineMatchScore(places, machines[j])
 			if left != right {
 				return left > right
 			}
@@ -835,7 +840,7 @@ func (m Model) containerRows() []row {
 	}
 	for machineIndex, machine := range machines {
 		children := []row{}
-		for _, place := range m.containerPlaces() {
+		for _, place := range places {
 			if place.Machine != machine {
 				continue
 			}
@@ -890,9 +895,9 @@ func (m Model) containerRows() []row {
 	return rows
 }
 
-func (m Model) machineMatchScore(machine string) int {
+func (m Model) machineMatchScore(places []picker.Place, machine string) int {
 	best := -1
-	for _, place := range m.containerPlaces() {
+	for _, place := range places {
 		if place.Machine != machine {
 			continue
 		}
@@ -907,8 +912,8 @@ func (m Model) machineMatchScore(machine string) int {
 }
 
 func (m Model) containerBefore(left, right row) bool {
-	leftUrgent := hasUnseenStopped(m.containerAgents(left.place))
-	rightUrgent := hasUnseenStopped(m.containerAgents(right.place))
+	leftUrgent := hasUnseenStopped(left.place.Agents)
+	rightUrgent := hasUnseenStopped(right.place.Agents)
 	if leftUrgent != rightUrgent {
 		return leftUrgent
 	}
@@ -923,7 +928,6 @@ func (m Model) containerBefore(left, right row) bool {
 	}
 	return left.label < right.label
 }
-func (m Model) containerAgents(place picker.Place) []capabilities.Agent { return m.agentsFor(place) }
 func hasUnseenStopped(agents []capabilities.Agent) bool {
 	for _, agent := range agents {
 		if strings.EqualFold(sanitize(agent.State), "stopped") && !agent.Seen {
@@ -2055,7 +2059,7 @@ func (m Model) containerText(row row, marker string, selected bool) (string, str
 		name = highlightText(name, string(m.query), selected)
 	}
 	name = nameGutter + name
-	agents := m.containerAgents(row.place)
+	agents := row.place.Agents
 	dots := make([]string, 0, len(agents))
 	for _, agent := range agents {
 		dots = append(dots, stateText(agent, "●", selected))

@@ -228,6 +228,17 @@ func TestRemoteSnapshotsReplaceOpaqueAgentRecords(t *testing.T) {
 	}
 }
 
+// snapshotAgents reads agent association from the materialized place snapshot
+// the container rows render from.
+func snapshotAgents(model Model, machine, id string) []capabilities.Agent {
+	for _, place := range model.containerPlaces() {
+		if place.Machine == machine && place.ContainerID == id {
+			return place.Agents
+		}
+	}
+	return nil
+}
+
 func TestRemoteLoadCompletionAndMachineScopedAgents(t *testing.T) {
 	model := NewModel(context.Background(), Deps{
 		Containers:     []capabilities.Container{{ID: "1", Name: "local"}, {ID: "1", Name: "remote", Machine: "dev"}},
@@ -239,10 +250,10 @@ func TestRemoteLoadCompletionAndMachineScopedAgents(t *testing.T) {
 	if len(model.remoteAgents) != 1 || model.remoteAgents[0].agent.State != "stopped" {
 		t.Fatalf("nonempty remote snapshot was not replaced: %#v", model.remoteAgents)
 	}
-	if got := len(model.agentsFor(picker.Place{Kind: picker.ContainerKind, Machine: "dev", ContainerID: "1", ContainerName: "remote"})); got != 1 {
+	if got := len(snapshotAgents(model, "dev", "1")); got != 1 {
 		t.Fatalf("remote association count = %d", got)
 	}
-	if got := len(model.agentsFor(picker.Place{Kind: picker.ContainerKind, Machine: picker.LocalMachine(), ContainerID: "1", ContainerName: "local"})); got != 1 {
+	if got := len(snapshotAgents(model, picker.LocalMachine(), "1")); got != 1 {
 		t.Fatalf("local association count = %d", got)
 	}
 	model.SetSize(100, 12)
