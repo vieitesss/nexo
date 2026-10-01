@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -80,7 +79,11 @@ func TestCtrlTMarksContainer(t *testing.T) {
 	}
 }
 
-func TestMarkedNameKeepsMagentaForegroundWhenUnselected(t *testing.T) {
+func TestMarkedNameKeepsAccentForegroundWhenUnselected(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	previous := lipgloss.HasDarkBackground()
+	t.Cleanup(func() { lipgloss.SetHasDarkBackground(previous) })
+	lipgloss.SetHasDarkBackground(true)
 	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
 	model = updateModel(t, model, keyMsg(tea.KeyCtrlT))
 	model.SetQuery("one")
@@ -98,66 +101,27 @@ func TestMarkedNameKeepsMagentaForegroundWhenUnselected(t *testing.T) {
 	if line == "" {
 		t.Fatal("marked container line was not rendered")
 	}
-	styled := styledRunes(line)
-	for index := 0; index+2 < len(styled); index++ {
-		if styled[index].r == 'o' && styled[index+1].r == 'n' && styled[index+2].r == 'e' {
-			for _, value := range styled[index : index+3] {
-				if value.fg != 5 {
-					t.Fatalf("name rune %q has foreground %d, want magenta (5): %q", value.r, value.fg, line)
-				}
-			}
-			return
-		}
+	runes := []rune(shell.Plain(line))
+	tokens := foregroundTokens(line)
+	if len(tokens) != len(runes) {
+		t.Fatalf("parsed %d foreground tokens for %d runes: %q", len(tokens), len(runes), line)
 	}
-	t.Fatalf("marked name not found in styled line: %q", line)
-}
-
-type styledRune struct {
-	r  rune
-	fg int
-}
-
-func styledRunes(value string) []styledRune {
-	foreground := -1
-	result := []styledRune{}
-	for index := 0; index < len(value); {
-		if value[index] == '\x1b' && index+1 < len(value) && value[index+1] == '[' {
-			end := strings.IndexByte(value[index+2:], 'm')
-			if end < 0 {
-				break
-			}
-			end += index + 2
-			params := value[index+2 : end]
-			codes := strings.Split(params, ";")
-			for position := 0; position < len(codes); position++ {
-				code, err := strconv.Atoi(codes[position])
-				if err != nil {
-					continue
-				}
-				switch {
-				case code == 0:
-					foreground = -1
-				case code == 39:
-					foreground = -1
-				case code >= 30 && code <= 37:
-					foreground = code - 30
-				case code >= 90 && code <= 97:
-					foreground = code - 90 + 8
-				case code == 38 && position+2 < len(codes) && codes[position+1] == "5":
-					if color, err := strconv.Atoi(codes[position+2]); err == nil {
-						foreground = color
-					}
-					position += 2
-				}
-			}
-			index = end + 1
+	expected := foregroundTokens(accent().Render("x"))
+	if len(expected) == 0 || expected[0] == "" {
+		t.Fatal("accent rendered no foreground")
+	}
+	for index := 0; index+2 < len(runes); index++ {
+		if string(runes[index:index+3]) != "one" {
 			continue
 		}
-		r, size := utf8.DecodeRuneInString(value[index:])
-		result = append(result, styledRune{r: r, fg: foreground})
-		index += size
+		for _, token := range tokens[index : index+3] {
+			if token != expected[0] {
+				t.Fatalf("marked name has foreground %q, want the accent %q: %q", token, expected[0], line)
+			}
+		}
+		return
 	}
-	return result
+	t.Fatalf("marked name not found in styled line: %q", line)
 }
 
 func backgroundCells(value string) []bool {
@@ -281,10 +245,10 @@ func TestSelectedRowHasTheOnlyBackgroundSGR(t *testing.T) {
 	model.SetSize(80, 24)
 	frame := model.View()
 	lines := strings.Split(frame, "\n")
-	background := regexp.MustCompile(`\x1b\[[0-9;:]*([47][0-9]|10[0-7]|48)[^m]*m`)
 	count := 0
 	for lineNumber, line := range lines {
-		if matches := background.FindAllString(line, -1); len(matches) > 0 {
+		matches := backgroundSGRs(line)
+		if len(matches) > 0 {
 			if lineNumber < 2 || lineNumber == len(lines)-1 {
 				t.Fatalf("background painted outside the body: %q", frame)
 			}

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -41,25 +40,65 @@ func richDeps() Deps {
 	}
 }
 
-func noBackgroundSGR(t *testing.T, frame string) {
-	t.Helper()
-	re := regexp.MustCompile(`\x1b\[([0-9;:]*)m`)
-	lines := strings.Split(frame, "\n")
-	for lineNumber, line := range lines {
-		for _, match := range re.FindAllStringSubmatch(line, -1) {
-			for _, parameter := range strings.FieldsFunc(match[1], func(r rune) bool { return r == ';' || r == ':' }) {
-				if parameter == "" {
-					continue
-				}
-				var value int
-				if _, err := fmt.Sscanf(parameter, "%d", &value); err != nil {
-					continue
-				}
-				background := value == 7 || value == 48 || value == 49 || (value >= 40 && value <= 47) || (value >= 100 && value <= 107)
-				if background && (lineNumber < 2 || lineNumber == len(lines)-1) {
-					t.Fatalf("frame contains an unexpected background SGR %q on line %d in %q", match[0], lineNumber, frame)
+// backgroundSGRs returns every SGR escape in value that paints a background,
+// skipping the payload of extended colours so a 256-colour or truecolour
+// foreground component is never mistaken for a background code.
+func backgroundSGRs(value string) []string {
+	found := []string{}
+	for index := 0; index < len(value); {
+		if value[index] != '\x1b' || index+1 >= len(value) || value[index+1] != '[' {
+			index++
+			continue
+		}
+		end := strings.IndexByte(value[index+2:], 'm')
+		if end < 0 {
+			break
+		}
+		end += index + 2
+		if sgrPaintsBackground(value[index+2 : end]) {
+			found = append(found, value[index:end+1])
+		}
+		index = end + 1
+	}
+	return found
+}
+
+func sgrPaintsBackground(params string) bool {
+	parts := strings.FieldsFunc(params, func(r rune) bool { return r == ';' || r == ':' })
+	for position := 0; position < len(parts); position++ {
+		code, err := strconv.Atoi(parts[position])
+		if err != nil {
+			continue
+		}
+		switch {
+		case code == 38 || code == 48:
+			if position+1 < len(parts) {
+				switch parts[position+1] {
+				case "5":
+					position += 2
+				case "2":
+					position += 4
 				}
 			}
+			if code == 48 {
+				return true
+			}
+		case code == 7, code == 49, code >= 40 && code <= 47, code >= 100 && code <= 107:
+			return true
+		}
+	}
+	return false
+}
+
+func noBackgroundSGR(t *testing.T, frame string) {
+	t.Helper()
+	lines := strings.Split(frame, "\n")
+	for lineNumber, line := range lines {
+		if len(backgroundSGRs(line)) == 0 {
+			continue
+		}
+		if lineNumber < 2 || lineNumber == len(lines)-1 {
+			t.Fatalf("frame contains an unexpected background SGR on line %d in %q", lineNumber, frame)
 		}
 	}
 }
@@ -559,5 +598,57 @@ func TestSelectedRowHasOnlySelectionForeground(t *testing.T) {
 				t.Fatalf("dark=%v tab %q did not render cue %q on the selected rows", dark, tab, cue)
 			}
 		}
+	}
+}
+
+// TestPaletteMatchesTheIcon pins every brand colour to assets/logo.svg.
+func TestPaletteMatchesTheIcon(t *testing.T) {
+	got := map[string]string{
+		"ground":      palette.Ground.Dark,
+		"tile":        palette.Tile.Dark,
+		"tile-border": palette.TileBorder.Dark,
+		"fg":          palette.Fg.Dark,
+		"muted":       palette.Muted.Dark,
+		"accent":      palette.Accent.Dark,
+	}
+	want := map[string]string{
+		"ground":      "#0F1115",
+		"tile":        "#171A21",
+		"tile-border": "#2A2F3A",
+		"fg":          "#E8EAED",
+		"muted":       "#8A919E",
+		"accent":      "#B8F15A",
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Fatalf("%s dark = %q, want %q", name, got[name], value)
+		}
+	}
+	// The colours that would be unreadable on a light terminal need their own
+	// light variant: an olive accent, a darker muted grey and a near-black fg.
+	for name, pair := range map[string]lipgloss.AdaptiveColor{"fg": palette.Fg, "muted": palette.Muted, "accent": palette.Accent} {
+		if pair.Light == pair.Dark {
+			t.Fatalf("%s light variant equals the dark variant %q", name, pair.Light)
+		}
+	}
+}
+
+// TestAccentRendersTheIconLimeInTrueColor pins the brand accent on a dark
+// background: the highlight glyph and key hints use the icon lime instead of an
+// ANSI colour.
+func TestAccentRendersTheIconLimeInTrueColor(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	previous := lipgloss.HasDarkBackground()
+	t.Cleanup(func() { lipgloss.SetHasDarkBackground(previous) })
+	lipgloss.SetHasDarkBackground(true)
+	tokens := foregroundTokens(accent().Render("x"))
+	icon := foregroundTokens(lipgloss.NewStyle().Foreground(lipgloss.Color("#B8F15A")).Render("x"))
+	if len(tokens) == 0 || len(icon) == 0 || tokens[0] != icon[0] {
+		t.Fatalf("accent foreground = %v, want the icon lime #B8F15A = %v", tokens, icon)
+	}
+	model := NewModel(context.Background(), richDeps(), AgentsTab)
+	model.SetSize(100, 24)
+	if view := model.View(); !strings.Contains(view, "\x1b["+icon[0]+"m⌕ ") {
+		t.Fatalf("search glyph did not use the icon lime: %q", view)
 	}
 }

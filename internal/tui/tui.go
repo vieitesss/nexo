@@ -1782,7 +1782,7 @@ func (m Model) rowText(row row) (string, string) {
 		if row.remoteErr != "" {
 			value += muted().Render("  " + sanitize(row.remoteErr))
 		} else if row.loading {
-			value += muted().Faint(true).Render("  loading…")
+			value += muted().Render("  loading…")
 		}
 		return marker + value, ""
 	case groupRow:
@@ -1857,7 +1857,7 @@ func (m Model) containerText(row row, marker string, selected bool) (string, str
 	nameGutter := "  "
 	marked := m.marked[picker.ContainerRef{Machine: row.place.Machine, ID: row.place.ContainerID}]
 	if marked {
-		nameGutter = magenta().Render("◆ ")
+		nameGutter = accent().Render("◆ ")
 		name = highlightMarkedText(name, string(m.query), selected)
 	} else {
 		name = highlightText(name, string(m.query), selected)
@@ -2216,7 +2216,7 @@ func (m Model) footer() string {
 	}
 	right := ""
 	if count := len(m.markedTargets()); count > 0 {
-		right = magenta().Render(fmt.Sprintf("%d marked", count))
+		right = accent().Render(fmt.Sprintf("%d marked", count))
 	}
 	available := m.width
 	if right != "" {
@@ -2249,7 +2249,7 @@ func wholeHints(hints []string, width int) string {
 	return strings.Join(parts, "  ")
 }
 func hint(keyValue, label string) string {
-	return accent().Bold(true).Render(keyValue) + " " + muted().Faint(true).Render(label)
+	return accent().Bold(true).Render(keyValue) + " " + muted().Render(label)
 }
 
 func sanitize(value string) string { return shell.Plain(value) }
@@ -2404,12 +2404,36 @@ func stateColorFor(agent capabilities.Agent, selected bool) lipgloss.Style {
 	}
 	return stateColor(agent)
 }
-func normal() lipgloss.Style      { return lipgloss.NewStyle().Foreground(lipgloss.Color("default")) }
-func muted() lipgloss.Style       { return normal().Faint(true) }
-func foldStyle() lipgloss.Style   { return muted() }
-func accent() lipgloss.Style      { return lipgloss.NewStyle().Foreground(lipgloss.Color("6")) }
+
+// palette holds the brand colours of assets/logo.svg. Ground, tile and
+// tileBorder are the icon frame; the TUI never paints a background, so on
+// screen only Fg, Muted and Accent are used. Every entry carries a light and a
+// dark variant, because the lime accent is unreadable on a light terminal: the
+// light variants are an olive accent and a near-black foreground.
+var palette = struct {
+	Ground     lipgloss.AdaptiveColor
+	Tile       lipgloss.AdaptiveColor
+	TileBorder lipgloss.AdaptiveColor
+	Fg         lipgloss.AdaptiveColor
+	Muted      lipgloss.AdaptiveColor
+	Accent     lipgloss.AdaptiveColor
+}{
+	Ground:     lipgloss.AdaptiveColor{Light: "#0F1115", Dark: "#0F1115"},
+	Tile:       lipgloss.AdaptiveColor{Light: "#171A21", Dark: "#171A21"},
+	TileBorder: lipgloss.AdaptiveColor{Light: "#2A2F3A", Dark: "#2A2F3A"},
+	Fg:         lipgloss.AdaptiveColor{Light: "#1F2329", Dark: "#E8EAED"},
+	Muted:      lipgloss.AdaptiveColor{Light: "#5F6774", Dark: "#8A919E"},
+	Accent:     lipgloss.AdaptiveColor{Light: "#4E7A00", Dark: "#B8F15A"},
+}
+
+func normal() lipgloss.Style    { return lipgloss.NewStyle().Foreground(palette.Fg) }
+func muted() lipgloss.Style     { return lipgloss.NewStyle().Foreground(palette.Muted) }
+func foldStyle() lipgloss.Style { return muted() }
+func accent() lipgloss.Style    { return lipgloss.NewStyle().Foreground(palette.Accent) }
+
+// Semantic colours stay terminal ANSI codes, so agent state, Git summary and
+// errors follow the user's terminal theme instead of the brand palette.
 func divergence() lipgloss.Style  { return lipgloss.NewStyle().Foreground(lipgloss.Color("6")) }
-func magenta() lipgloss.Style     { return lipgloss.NewStyle().Foreground(lipgloss.Color("5")) }
 func red() lipgloss.Style         { return lipgloss.NewStyle().Foreground(lipgloss.Color("1")) }
 func green() lipgloss.Style       { return lipgloss.NewStyle().Foreground(lipgloss.Color("2")) }
 func yellow() lipgloss.Style      { return lipgloss.NewStyle().Foreground(lipgloss.Color("3")) }
@@ -2429,7 +2453,7 @@ func highlightText(text, query string, selected bool) string {
 	out := strings.Builder{}
 	for i, r := range runes {
 		if positions[i] {
-			style := yellow().Bold(true)
+			style := accent().Bold(true)
 			if selected {
 				// The selected row has no per-segment colour, so the match
 				// relies on bold and underline alone to stay visible.
@@ -2443,18 +2467,17 @@ func highlightText(text, query string, selected bool) string {
 	return out.String()
 }
 
-// highlightMarkedText keeps the required magenta foreground for every name
-// character on an unselected row. Matching characters use bold and underline
-// instead of a yellow foreground so the query remains visible without changing
-// the mark colour. A selected row drops the magenta and keeps the mark cue as
-// bold weight instead.
+// highlightMarkedText paints every name character of a marked row with the
+// accent colour. Matching characters add bold and underline, so the query
+// stays visible without a second colour. A selected row drops the accent and
+// keeps the mark cue as bold weight instead.
 func highlightMarkedText(text, query string, selected bool) string {
 	match, ok := picker.Rank(query, text)
 	if !ok || len(match.Positions) == 0 {
 		if selected {
 			return bold().Render(text)
 		}
-		return magenta().Render(text)
+		return accent().Render(text)
 	}
 	positions := map[int]bool{}
 	for _, pos := range match.Positions {
@@ -2462,7 +2485,7 @@ func highlightMarkedText(text, query string, selected bool) string {
 	}
 	out := strings.Builder{}
 	for i, r := range []rune(text) {
-		style := magenta()
+		style := accent()
 		if selected {
 			// The selected row keeps the mark cue as weight rather than colour.
 			style = bold()
