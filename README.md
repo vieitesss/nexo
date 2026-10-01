@@ -297,8 +297,9 @@ folders, and shows the containing folder before the name as a path. Name matches
 rank ahead of branch matches, then folder matches; ties are ordered by shorter
 name, checkout before worktree, and finally name. A branch with a pull request
 shows `#123` in green, magenta, or red for open, merged, and closed; the badge
-loads in the background and is shown only when `gh` and the checkout's GitHub
-upstream agree on the head owner and branch.
+loads in the background, is shown only when `gh` and the checkout's GitHub
+upstream agree on the head owner and branch, and is refreshed in the background
+while the TUI stays open.
 
 See [docs/tui.md](docs/tui.md) for the complete row and search behavior.
 

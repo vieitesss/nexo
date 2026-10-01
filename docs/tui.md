@@ -54,13 +54,26 @@ highlighted independently within their cells.
 
 The Projects tab shows `#123` beside the branch when the checkout's upstream
 branch has a pull request: green for open, magenta for merged, and red for
-closed, as terminal ANSI colours. The badge loads asynchronously after the
-local Git context and is cached by checkout and upstream identity, so it never
+closed. The badge loads asynchronously after the local Git context and never
 delays the first frame, a search keystroke, or a refresh. The badge appears
-only when `gh` is on `PATH`, the checkout's remote is on github.com, and the
-request's head owner and branch match the upstream. No request, a fork-owned or
-mismatched head, missing authentication, a network failure, and a missing `gh`
-all leave the row unchanged and show no error.
+only when `gh` is on `PATH`, the branch tracks an upstream whose remote is on
+github.com, and the request's head owner and branch match that upstream; a
+branch without an upstream shows nothing instead of guessing `origin`. No
+request, a fork-owned or mismatched head, missing authentication, a network
+failure, and a missing `gh` all leave the row unchanged and show no error.
+
+Answers, the absence of a request included, are cached for 30 seconds. While
+the TUI is open it checks the project rows around the cursor every 5 seconds
+and asks `gh` again only for a checkout whose cached answer expired, so a
+merged request or a request created after the first look appears within about
+half a minute without one query per row per tick. The selected row keeps the
+badge's state colour; only the selection background is painted, never the
+badge.
+
+The colours are terminal ANSI palette entries with a light and a dark variant,
+so the terminal's own palette decides the exact contrast. Against the
+conventional xterm palette both variants reach the WCAG AA 4.5:1 ratio on the
+row background and on the TUI's selection background.
 
 ## Keys
 
