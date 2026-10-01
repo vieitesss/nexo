@@ -40,6 +40,14 @@ type AgentRef struct {
 	Backend string
 }
 
+// RemoteTarget is a reachable remote machine plus the multiplexer kind its
+// listing resolved. The new-container row carries it so an action never probes
+// the machine again.
+type RemoteTarget struct {
+	Machine string
+	Backend string
+}
+
 // Deps is the deliberately small seam between the TUI and command wiring.
 // Places and agents are snapshots; optional commands keep slow discovery out
 // of Update and let a caller retain its backend-specific command runner.
@@ -93,11 +101,14 @@ type Deps struct {
 	ExtractWorktree     func(context.Context, string, string, string) (capabilities.Worktree, error)
 	ExtractReturnBranch func(context.Context, string) (string, error)
 	AddProjectPath      func(context.Context, string) error
-	CloneConfig         config.CloneConfig
-	ProjectPaths        []string
-	Home                string
-	KillContainers      func(context.Context, []picker.ContainerRef) error
-	RenameContainer     func(context.Context, picker.ContainerRef, string) error
+	// NewRemoteContainer creates and focuses a container on a reachable
+	// remote machine using the backend its listing resolved.
+	NewRemoteContainer func(context.Context, RemoteTarget, string) error
+	CloneConfig        config.CloneConfig
+	ProjectPaths       []string
+	Home               string
+	KillContainers     func(context.Context, []picker.ContainerRef) error
+	RenameContainer    func(context.Context, picker.ContainerRef, string) error
 
 	Input      io.Reader
 	Output     io.Writer
@@ -206,6 +217,10 @@ const (
 	separatorRow
 )
 
+// newContainerLabel is the action row shown under every reachable remote
+// machine.
+const newContainerLabel = "+ new container…"
+
 type row struct {
 	id           string
 	kind         rowKind
@@ -230,6 +245,7 @@ type row struct {
 	activity     *time.Time
 	nameWidth    int
 	treePrefix   string
+	backend      string
 }
 
 type projectsMsg struct {
@@ -254,6 +270,13 @@ type containersMsg struct {
 type remoteMsg struct {
 	generation int
 	batch      picker.RemoteBatch
+}
+
+// remoteNewMsg carries a validated name from the remote new-container form to
+// the coordinator, which closes the TUI and runs the accepted action.
+type remoteNewMsg struct {
+	target RemoteTarget
+	name   string
 }
 
 type pullRequestMsg struct {
@@ -370,7 +393,7 @@ func projectPathIdentity(path string) string {
 
 func hasItemRows(rows []row) bool {
 	for _, candidate := range rows {
-		if candidate.kind == itemRow && candidate.cursorable {
+		if candidate.cursorable && (candidate.kind == itemRow || candidate.kind == newContainerRow) {
 			return true
 		}
 	}
@@ -396,6 +419,12 @@ func (m Model) SelectedAgent() (capabilities.Agent, bool) {
 func (m Model) execute(ctx context.Context) error {
 	if m.input.cancelled {
 		return nil
+	}
+	if m.input.selectedRemoteTarget != nil {
+		if m.deps.NewRemoteContainer == nil {
+			return errors.New("remote container creation is not supported")
+		}
+		return m.deps.NewRemoteContainer(ctx, *m.input.selectedRemoteTarget, m.input.selectedRemoteName)
 	}
 	if place, ok := m.SelectedPlace(); ok {
 		if place.OpenAction != nil {
@@ -602,6 +631,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ToastMsg:
 		m.toast = msg.Text
 		return m, nil
+	case remoteNewMsg:
+		target := msg.target
+		m.input.selectedRemoteTarget = &target
+		m.input.selectedRemoteName = msg.name
+		m.input.form = nil
+		m.cancelBackgroundLoads()
+		return m, tea.Quit
 	}
 	if update, ok := m.source.Accept(msg); ok {
 		if _, projectError := msg.(projectsMsg); projectError && update.projects == nil {

@@ -254,6 +254,9 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 		return nil
 	}
 	remoteOrchestrator := newRemoteOrchestrator(invocation, resolver)
+	deps.NewRemoteContainer = func(actionCtx context.Context, target tui.RemoteTarget, name string) error {
+		return remoteOrchestrator.New(actionCtx, remote.MachineResult{Machine: target.Machine, Kind: remote.Kind(target.Backend)}, name)
+	}
 	deps.FocusAgent = func(focusCtx context.Context, ref tui.AgentRef) error {
 		if ref.Machine != "" && ref.Machine != picker.LocalMachine() {
 			return remoteOrchestrator.FocusAgent(focusCtx, remote.MachineResult{

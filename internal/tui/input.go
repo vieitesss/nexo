@@ -43,7 +43,10 @@ type inputState struct {
 	selectedPlace    *picker.Place
 	selectedAgent    *capabilities.Agent
 	selectedAgentRef AgentRef
-	cancelled        bool
+
+	selectedRemoteTarget *RemoteTarget
+	selectedRemoteName   string
+	cancelled            bool
 }
 
 type inputEffect struct {
@@ -656,8 +659,23 @@ func foldParent(current row) string {
 }
 
 func (s *inputState) accept(rows []row) inputEffect {
-	current, ok := s.currentItem(rows)
+	current, ok := s.currentRow(rows)
 	if !ok {
+		return inputEffect{}
+	}
+	if current.kind == newContainerRow {
+		name := strings.TrimSpace(string(s.query))
+		target := RemoteTarget{Machine: current.machine, Backend: current.backend}
+		if name != "" {
+			s.selectedRemoteTarget = &target
+			s.selectedRemoteName = name
+			s.cancelled = false
+			return inputEffect{quit: true}
+		}
+		s.form = newRemoteNewForm(s.ctx, target)
+		return inputEffect{rebuild: true}
+	}
+	if current.kind != itemRow {
 		return inputEffect{}
 	}
 	if current.itemKind == "agent" {

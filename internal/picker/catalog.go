@@ -20,6 +20,9 @@ type MachineStatus struct {
 	Loaded  bool
 	Warning string
 	Error   string
+	// Backend is the multiplexer kind a successful remote listing resolved.
+	// It lets a row carry the resolved kind so an action never probes again.
+	Backend string
 }
 
 // CatalogSnapshot is the coherent read interface of a Catalog. Places are
@@ -181,7 +184,12 @@ func (c *Catalog) Snapshot() CatalogSnapshot {
 	status := make(map[string]MachineStatus, len(c.remote)+1)
 	status[localMachine] = MachineStatus{Loaded: true}
 	for machine, source := range c.remote {
-		status[machine] = source.status
+		status[machine] = MachineStatus{
+			Loaded:  source.status.Loaded,
+			Warning: source.status.Warning,
+			Error:   source.status.Error,
+			Backend: source.backend,
+		}
 	}
 	machines := c.snapshotMachines(places, agents)
 	return CatalogSnapshot{

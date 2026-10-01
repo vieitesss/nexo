@@ -17,6 +17,14 @@ Container rows show the container name followed by one coloured state dot per
 agent. They do not repeat harness names, state words, ages, activity ages, or
 proxy labels. Agent rows show the container name without a machine prefix.
 
+Every remote machine whose listing succeeded ends its section with a selectable
+`+ new container…` row. The row carries the multiplexer kind the listing
+resolved, so choosing it never probes the machine again. `Enter` creates the
+container named after the current search query; an empty query opens the
+staged name form as an inline prompt instead. Creation runs the shared remote
+`new` flow and focuses the created container. A machine that is still loading,
+a machine whose listing failed, and the local machine have no such row.
+
 ## Projects
 
 Projects are grouped by their containing folder. On an empty query every folder
