@@ -24,6 +24,18 @@ markers (`projects-start/done`, `containers-start/done`, `agents-start/done`,
 `remote-start/done`, and `git-start/done`) bracket their worker calls. The
 markers are diagnostic measurements, not an output-boundary measurement.
 
+The adaptive `[tui] theme = "auto"` (the default) asks the controlling terminal
+for its background over OSC 11. That probe runs synchronously before Bubble Tea
+starts, while the terminal still has a single reader, so it can never consume
+keys or terminal responses the program is expecting. It does delay the first
+frame by one terminal round trip. On this Pi, measured in a pane of an isolated
+`tmux -L` server whose terminal answers OSC 11, the probe adds a median of about
+0.4 ms to the first frame (auto 1.2 ms versus 0.5 ms for an explicit theme;
+the pre-program probe phase is 0.56 ms versus 0.16 ms). When the terminal never
+answers, the probe falls back to tmux's client theme (inside tmux only), then
+`COLORFGBG`, then dark, which costs about 2-3 ms for the client-theme query. Set
+`[tui] theme = "light"` or `[tui] theme = "dark"` to skip the probe entirely.
+
 For repeatable local measurements, use a throwaway multiplexer server and a
 wrapper in `PATH` that forwards commands to that server. A fake command runner
 can supply responses for a remote backend without contacting a real machine.

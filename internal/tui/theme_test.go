@@ -2,9 +2,13 @@ package tui
 
 import (
 	"bytes"
+	"io"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
 	"github.com/muesli/termenv"
 )
 
@@ -23,6 +27,126 @@ func TestParseOSC11Reply(t *testing.T) {
 				t.Fatalf("parseOSC11Reply() = %q, %v; want %q, true", got, ok, test.want)
 			}
 		})
+	}
+}
+
+func TestQueryDarkBackgroundNoAnswerTimesOut(t *testing.T) {
+	terminal, _ := openThemePTY(t)
+	restorePTYMode(t, terminal)
+
+	const timeout = 30 * time.Millisecond
+	started := time.Now()
+	dark, answered := queryDarkBackground(terminal, timeout)
+	elapsed := time.Since(started)
+	if answered || dark {
+		t.Fatalf("queryDarkBackground() = %v, %v; want false, false", dark, answered)
+	}
+	if elapsed > timeout+50*time.Millisecond {
+		t.Fatalf("queryDarkBackground took %s, want no more than %s", elapsed, timeout+50*time.Millisecond)
+	}
+}
+
+func TestQueryDarkBackgroundOnlyDA1FallsBack(t *testing.T) {
+	terminal, peer := openThemePTY(t)
+	restorePTYMode(t, terminal)
+	done := make(chan struct{})
+	go respondToThemeQuery(t, peer, "\x1b[?1;2c", done)
+
+	started := time.Now()
+	if dark, answered := queryDarkBackground(terminal, time.Second); answered || dark {
+		t.Fatalf("queryDarkBackground() = %v, %v; want false, false", dark, answered)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second/2 {
+		t.Fatalf("DA1 sentinel took %s, want an immediate response", elapsed)
+	}
+	<-done
+}
+
+func TestQueryDarkBackgroundConsumesOSC11AndDA1(t *testing.T) {
+	terminal, peer := openThemePTY(t)
+	restorePTYMode(t, terminal)
+	done := make(chan struct{})
+	go respondToThemeQuery(t, peer, "\x1b]11;rgb:ffff/ffff/ffff\x07\x1b[?1;2c", done)
+
+	if dark, answered := queryDarkBackground(terminal, time.Second); answered != true || dark {
+		t.Fatalf("queryDarkBackground() = %v, %v; want false, true", dark, answered)
+	}
+	<-done
+	assertThemePTYEmpty(t, terminal)
+}
+
+func TestQueryDarkBackgroundHandlesSplitReply(t *testing.T) {
+	terminal, peer := openThemePTY(t)
+	restorePTYMode(t, terminal)
+	done := make(chan struct{})
+	go respondToThemeQueryInParts(t, peer, []string{
+		"\x1b]11;rgb:ffff/",
+		"ffff/ffff\x07\x1b[?1;",
+		"2c",
+	}, done)
+
+	if dark, answered := queryDarkBackground(terminal, time.Second); answered != true || dark {
+		t.Fatalf("queryDarkBackground() = %v, %v; want false, true", dark, answered)
+	}
+	<-done
+	assertThemePTYEmpty(t, terminal)
+}
+
+func respondToThemeQuery(t *testing.T, peer io.ReadWriter, response string, done chan<- struct{}) {
+	t.Helper()
+	defer close(done)
+	request := make([]byte, len(osc11Query)+len(da1Query))
+	if _, err := io.ReadFull(peer, request); err != nil {
+		t.Errorf("read query: %v", err)
+		return
+	}
+	if string(request) != osc11Query+da1Query {
+		t.Errorf("query = %q, want %q", request, osc11Query+da1Query)
+		return
+	}
+	if _, err := io.WriteString(peer, response); err != nil {
+		t.Errorf("write response: %v", err)
+	}
+}
+
+func respondToThemeQueryInParts(t *testing.T, peer io.ReadWriter, responses []string, done chan<- struct{}) {
+	t.Helper()
+	defer close(done)
+	request := make([]byte, len(osc11Query)+len(da1Query))
+	if _, err := io.ReadFull(peer, request); err != nil {
+		t.Errorf("read query: %v", err)
+		return
+	}
+	if string(request) != osc11Query+da1Query {
+		t.Errorf("query = %q, want %q", request, osc11Query+da1Query)
+		return
+	}
+	for _, response := range responses {
+		if _, err := io.WriteString(peer, response); err != nil {
+			t.Errorf("write response: %v", err)
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func restorePTYMode(t *testing.T, terminal *os.File) {
+	t.Helper()
+	state, err := term.MakeRaw(terminal.Fd())
+	if err != nil {
+		t.Skipf("pty cannot enter raw mode: %v", err)
+	}
+	t.Cleanup(func() { _ = term.Restore(terminal.Fd(), state) })
+}
+
+func assertThemePTYEmpty(t *testing.T, terminal *os.File) {
+	t.Helper()
+	ready, err := waitForData(terminal.Fd(), time.Now())
+	if err != nil {
+		t.Fatalf("select pty: %v", err)
+	}
+	if ready {
+		t.Fatal("query left bytes unread on pty")
 	}
 }
 
@@ -56,8 +180,8 @@ func TestFallbackDarkBackgroundAsksTmuxFirst(t *testing.T) {
 		colorFGBG string
 		want      bool
 	}{
-		{name: "COLORFGBG light hint wins", tmux: "/tmp/tmux,1,0", theme: "light", colorFGBG: "15;0", want: true},
-		{name: "COLORFGBG dark hint wins", tmux: "/tmp/tmux,1,0", theme: "dark", colorFGBG: "0;15", want: false},
+		{name: "tmux light beats dark COLORFGBG", tmux: "/tmp/tmux,1,0", theme: "light", colorFGBG: "15;0", want: false},
+		{name: "tmux dark beats light COLORFGBG", tmux: "/tmp/tmux,1,0", theme: "dark", colorFGBG: "0;15", want: true},
 		{name: "unknown tmux theme uses COLORFGBG", tmux: "/tmp/tmux,1,0", theme: "", colorFGBG: "0;15", want: false},
 		{name: "outside tmux ignores tmux", tmux: "", theme: "light", colorFGBG: "", want: true},
 	} {
@@ -69,6 +193,26 @@ func TestFallbackDarkBackgroundAsksTmuxFirst(t *testing.T) {
 				t.Fatalf("fallbackDarkBackground() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+// TestAutoThemeFallsBackWithoutAnswerOrHints covers the auto-mode composition:
+// when the tty stays silent and no hint is available the theme is dark, while
+// a real tty answer wins over the fallback chain.
+func TestAutoThemeFallsBackWithoutAnswerOrHints(t *testing.T) {
+	previous := tmuxClientTheme
+	t.Cleanup(func() { tmuxClientTheme = previous })
+	tmuxClientTheme = func() string { return "" }
+	t.Setenv("TMUX", "")
+	t.Setenv("COLORFGBG", "")
+
+	if got := resolveAutoTheme(func() (bool, bool) { return false, false }); !got {
+		t.Fatal("auto theme without an answer or hints = light, want dark")
+	}
+
+	t.Setenv("COLORFGBG", "15;0")
+	if got := resolveAutoTheme(func() (bool, bool) { return false, true }); got {
+		t.Fatal("auto theme with a light tty answer = dark, want light")
 	}
 }
 
