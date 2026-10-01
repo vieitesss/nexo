@@ -141,8 +141,8 @@ bind -n C-s display-popup -E -B -w 100% -h 100% "nexo tui"
 bind a display-popup -E -B -w 100% -h 100% "nexo tui agents"
 ```
 
-See [docs/agents.md](docs/agents.md) for watcher behavior and notification
-details.
+See [docs/agents.md](docs/agents.md) for watcher behavior, the unseen
+window highlight, and notification details.
 
 ### Herdr adapter
 
@@ -324,6 +324,7 @@ poll-interval = 2
 notify = true
 sound = false
 working-pattern = { pi = "⠋" }
+highlight-color = "red"
 
 [tui]
 # Theme selection: auto, dark, or light. A running TUI follows changes live.
@@ -361,6 +362,7 @@ machine and each remote machine need.
 | `agents.working-pattern` | `{}` | Per-harness literal screen substring used as the working indicator; configured patterns take precedence over built-ins. |
 | `agents.notify` | `true` | Queue tmux working-to-stopped desktop notifications. Herdr notifications are native and unaffected. |
 | `agents.sound` | `false` | Play a short sound with tmux notifications. |
+| `agents.highlight-color` | `red` | tmux window-list colour for a window holding an unseen stopped agent. A value with a `=` is used as a full style (for example `bg=red,bold`); otherwise it becomes `fg=<colour>`. Herdr uses its native agent state instead. |
 | `tui.theme` | `auto` | Select `auto`, `dark`, or `light`; auto queries the terminal background and falls back to `COLORFGBG`, then dark. A running TUI polls the config and follows `dark`/`light` changes without a restart; `auto` is not re-probed mid-session. |
 | `remote.machines` | `[]` | SSH aliases to list and open. `local`, the local hostname, and aliases beginning with `-` are rejected. |
 | `remote.backends` | `{}` | Optional per-machine backend table. Each key must be in `remote.machines`; values are `auto`, `tmux`, or `herdr`. Unlisted machines use `auto`. |
@@ -378,7 +380,7 @@ config key, and an empty or `auto` selection detects the inner multiplexer.
 
 | Backend | v1 status | Implemented or checked capabilities |
 | --- | --- | --- |
-| **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, focuses panes, creates and extracts Git worktrees, detects agents by process and screen polling, watches and notifies, and proxies remote tmux containers over SSH/mosh/et. |
+| **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, focuses panes, creates and extracts Git worktrees, detects agents by process and screen polling, watches, notifies and highlights unseen windows, and proxies remote tmux containers over SSH/mosh/et. |
 | **Herdr** | Implemented | Opens and manages native workspaces, reads pane screens, focuses panes, creates and extracts Git worktrees, consumes Herdr's native agent state and notifications, registers Herdr remote machines for its native sidebar, and fills the tmux-remote gap with a workspace proxy. The plugin manifest supplies the popup surface. |
 | **Zellij** | Planned | Capability interfaces checked on paper: native project/session actions, pane listing, screen reads, focus, and floating panes; nexo would fill agent, notification, and remote-proxy gaps. |
 | **WezTerm** | Planned | Capability interfaces checked on paper: native spawn/list/read/focus; no popup CLI operation, and workspace switching needs a Lua/user action. |

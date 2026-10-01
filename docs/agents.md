@@ -48,6 +48,27 @@ server options. If `focus-events` is off, it shows a message explaining that
 agent seen-marking needs `set -g focus-events on`; users may enable that option
 themselves when they want focus transitions to mark the exact pane seen.
 
+## Unseen window highlight
+
+The tmux watcher keeps a window highlighted in the window list while it holds
+an unseen stopped agent. The highlight is the `[agents] highlight-color`
+setting, `red` by default, and it never touches `status-left`, a key binding
+or `window-status-format`: nexo sets the `window-status-style` and
+`window-status-current-style` window options for that window and records a
+private `@nexo-unseen` marker on it.
+
+Seen state is per exact pane, so highlighting a window is not the same as
+focusing it. Focusing one of several panes that share a window marks only that
+pane seen; the window stays highlighted until the last unseen pane in it
+receives focus. Marking a pane in another window never clears this one. When a
+window clears, nexo unsets the two style options so the window returns to your
+global window list style; a per-window style you set yourself on a window nexo
+highlighted is replaced for the duration of the highlight. Changing the
+configured colour re-renders highlighted windows on the next poll. A window
+with a working agent is never highlighted. The highlight clears through the
+same focus hooks as seen-marking, so it needs `focus-events on` as described
+above. Herdr owns this natively, so nexo never highlights Herdr windows.
+
 ## Notifications
 
 On tmux, only `nexo agents watch` sends desktop notifications; plain agent
