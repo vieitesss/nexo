@@ -33,13 +33,18 @@ working tree moves, and the original checkout is freed for another branch.
 
 The whole preflight runs before anything is mutated:
 
-- `REPO` is clean, with no staged, unstaged, or untracked changes.
-- `DESTINATION` does not exist.
+- `REPO` is clean, with no staged, unstaged, or untracked changes. The check
+  explicitly includes all untracked files and ignores neither submodule
+  changes nor the user's status display configuration.
+- `DESTINATION` does not exist and is not inside any registered Git worktree;
+  this includes destinations reached through symlinked ancestors.
 - The branch being extracted is not checked out in another worktree.
 - A return branch is eligible. The explicit `--return-branch` wins when given;
-  otherwise nexo prefers the previous named branch, then the repository
-  default branch. An occupied candidate is skipped unless it was requested
-  explicitly.
+  otherwise nexo searches checkout history for the nearest distinct, existing
+  named branch (skipping detached, repeated, and deleted entries), then tries
+  an existing remote default, configured initialization default, `main`, and
+  `master`, in that order. An occupied candidate is skipped unless it was
+  requested explicitly.
 
 The return branch must exist locally and must not be checked out in another
 worktree. When no eligible return branch can be found, pass `--return-branch`
@@ -47,8 +52,14 @@ to choose one.
 
 After preflight, nexo switches `REPO` to the return branch, creates the
 worktree for the extracted branch, and opens it with the same focus and
-`--no-focus` policy as `create`. If creation or opening fails, the worktree is
-removed and `REPO` is switched back to the extracted branch.
+`--no-focus` policy as `create`. Branch switches refuse to overwrite ignored
+files. If a switch hook fails after Git has changed `HEAD`, nexo verifies and
+restores the original branch. If creation or opening fails, any native partial
+creation is cleaned up, the worktree is removed, and `REPO` is switched back to
+the extracted branch. Output failures perform the same extraction-aware
+cleanup and branch restoration. Recovery commands use a bounded context that
+is independent of caller cancellation; if native cleanup itself cannot
+complete, the error reports that recovery failure rather than claiming success.
 
 ## JSON output
 

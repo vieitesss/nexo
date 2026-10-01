@@ -319,10 +319,13 @@ session name fields that the container now carries.
 `worktree extract <repo> <destination>` is the inverse: it moves the branch
 currently checked out in `<repo>` into a new worktree at `<destination>` and
 leaves a return branch checked out in `<repo>`. It preflights a clean
-`<repo>`, a non-existing destination, branch ownership, and an eligible
-return branch before mutating anything. `--return-branch` chooses that branch
-explicitly; otherwise nexo prefers the previous named branch and then the
-repository default. The output adds `return_branch`:
+`<repo>`, a non-existing destination outside every registered worktree,
+branch ownership, and an eligible return branch before mutating anything. The
+clean check includes all untracked files and submodule changes regardless of
+Git status configuration. `--return-branch` chooses the return branch
+explicitly; otherwise nexo searches checkout history for the nearest distinct,
+existing named branch, then existing remote-default, configured, `main`, and
+`master` candidates. The output adds `return_branch`:
 
 ```console
 nexo --backend=tmux --json worktree extract --return-branch main \
@@ -343,6 +346,13 @@ nexo --backend=tmux --json worktree extract --return-branch main \
   }
 }
 ```
+
+Branch switches refuse to overwrite ignored files. If a switch hook fails
+after Git changes `HEAD`, extraction verifies and restores the original branch.
+Native creation and opening failures clean up partial worktrees before
+restoring that branch, and output failures perform the same extraction-aware
+rollback. Recovery uses a bounded context independent of caller cancellation;
+cleanup errors are returned rather than hidden.
 
 ## Global flags and errors
 
