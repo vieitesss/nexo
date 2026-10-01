@@ -52,26 +52,6 @@ func NewAgentSource(r runner.CommandRunner) *Source {
 	}
 }
 
-// SetClock replaces the clock used for stopped_since timestamps. It is useful
-// for deterministic tests.
-func (s *Source) SetClock(now func() time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if now == nil {
-		s.now = time.Now
-		return
-	}
-	s.now = now
-}
-
-// SetStateDir selects where this source stores per-server state and locks.
-// It is intended for deterministic tests and does not alter the XDG default.
-func (s *Source) SetStateDir(dir string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.stateDir = dir
-}
-
 // ListAgents implements capabilities.AgentSource using Herdr's native state.
 func (s *Source) ListAgents(ctx context.Context) ([]capabilities.Agent, error) {
 	s.mu.Lock()

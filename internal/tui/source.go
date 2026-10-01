@@ -273,16 +273,6 @@ func (s *sourceState) Accept(msg tea.Msg) (sourceUpdate, bool) {
 		s.applyRemote(msg.batch)
 		s.finishReload("remotes")
 		return sourceUpdate{changed: true, reloadDone: pendingBefore && !s.pending()}, true
-	case picker.AgentBatch:
-		if msg.Error != "" {
-			return sourceUpdate{}, true
-		}
-		s.agents = newAgentRecords(msg.Agents, "")
-		if s.catalog != nil {
-			s.catalog.ReplaceLocalAgents(msg.Agents)
-			s.syncCatalog()
-		}
-		return sourceUpdate{changed: true}, true
 	case picker.RemoteBatch:
 		pendingBefore := s.pending()
 		s.applyRemote(msg)
@@ -332,13 +322,5 @@ func (s *sourceState) syncCatalog() {
 		s.remoteLoaded[machine] = status.Loaded
 		s.groupErrors[machine] = sanitize(status.Error)
 		s.groupWarnings[machine] = sanitize(status.Warning)
-	}
-}
-
-func (s *sourceState) setAgents(agents []capabilities.Agent) {
-	s.agents = newAgentRecords(agents, "")
-	if s.catalog != nil {
-		s.catalog.ReplaceLocalAgents(agents)
-		s.syncCatalog()
 	}
 }

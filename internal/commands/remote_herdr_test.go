@@ -8,13 +8,12 @@ import (
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/backend/herdr"
 	"github.com/vieitesss/nexo/internal/config"
-	"github.com/vieitesss/nexo/internal/runner"
 )
 
 func TestFinishHerdrProxyAttachClosesWorkspaceFromPane(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "pane-1")
 	var calls []string
-	fake := runner.Func(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	fake := funcRunner(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		if ctx.Err() != nil {
 			t.Fatalf("cleanup command context = %v, want fresh context", ctx.Err())
 		}
@@ -35,7 +34,7 @@ func TestFinishHerdrProxyAttachClosesWorkspaceFromPane(t *testing.T) {
 func TestRemoteOpenHerdrUsesNativeMachineSupport(t *testing.T) {
 	var output strings.Builder
 	calls := make([]string, 0)
-	fake := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+	fake := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		calls = append(calls, name+" "+strings.Join(args, " "))
 		if name == "ssh" {
 			return []byte("__NEXO_REMOTE_KIND__herdr" + "\n{\"result\":{\"type\":\"workspace_list\",\"workspaces\":[{\"workspace_id\":\"w1\",\"label\":\"api\"}]}}\n"), nil
@@ -68,7 +67,7 @@ func TestRemoteOpenHerdrUsesNativeMachineSupport(t *testing.T) {
 func TestRemoteOpenHerdrPreservesNativeContainerSpelling(t *testing.T) {
 	var output strings.Builder
 	adapter := &recordingRemoteProxy{}
-	fake := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+	fake := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name == "ssh" {
 			return []byte("__NEXO_REMOTE_KIND__herdr\n{\"result\":{\"type\":\"workspace_list\",\"workspaces\":[]}}\n"), nil
 		}
@@ -110,7 +109,7 @@ func TestHerdrMachineSavedMatchesEnabledSSHTargetOnly(t *testing.T) {
 
 func TestRemoteOpenHerdrIsUnsupportedFromTmux(t *testing.T) {
 	proxies := &recordingRemoteProxy{}
-	fake := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+	fake := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name != "ssh" {
 			t.Fatalf("command = %q, want listing over ssh", name)
 		}

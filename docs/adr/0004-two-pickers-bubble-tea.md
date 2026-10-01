@@ -1,5 +1,7 @@
 # Two pickers, built with Bubble Tea
 
+- Status: superseded by 0005
+
 nexo is one binary with two pickers: the place picker (project candidates,
 local containers, remote containers) and the agent navigator (ranked by
 urgency, not location). Subcommands expose the same operations for scripting,

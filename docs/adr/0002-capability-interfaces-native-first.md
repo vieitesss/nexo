@@ -1,9 +1,10 @@
 # Capability interfaces, native first
 
 Backends are described by small Go capability interfaces (`ProjectOpener`,
-`PaneLister`, `ScreenReader`, `PaneFocuser`, `Popup`, `AgentSource`,
-`Notifier`, `RemoteProxy`, …) rather than one large interface returning
-`ErrUnsupported`. Features discover capabilities with type assertions.
+`WorktreeCreator`, `ContainerOpener`, `ContainerLister`, `ContainerRenamer`,
+`ContainerKiller`, `ScreenReader`, `PaneFocuser`, `AgentSource`, `Notifier`,
+`RemoteProxy`, …) rather than one large interface returning `ErrUnsupported`.
+Features discover capabilities with type assertions.
 
 When a multiplexer natively provides a capability, nexo uses it instead of its
 own implementation. Example: on Herdr, `AgentSource` reads Herdr's agent

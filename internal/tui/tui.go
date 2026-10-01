@@ -127,7 +127,6 @@ const (
 	machineRow rowKind = iota
 	groupRow
 	itemRow
-	newContainerRow
 	separatorRow
 )
 
@@ -186,9 +185,6 @@ type agentRecord struct {
 }
 
 type refreshTickMsg struct{}
-
-// ToastMsg replaces footer hints with a short status message.
-type ToastMsg struct{ Text string }
 
 // Model is the complete tabbed Bubble Tea model. Tests can drive it through
 // Update and inspect View without starting a terminal or a multiplexer.
@@ -249,37 +245,6 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	return m
 }
 
-// Tab reports the currently visible tab.
-func (m Model) Tab() Tab { return m.input.tab }
-
-// Query reports the current search query.
-func (m Model) Query() string { return string(m.input.query) }
-
-// Rows returns a compact copy of the visible row identities for model tests.
-func (m Model) Rows() []string {
-	rows := make([]string, 0, len(m.rows))
-	for _, row := range m.rows {
-		rows = append(rows, row.id)
-	}
-	return rows
-}
-
-// Cursor reports the stable identity under the cursor.
-func (m Model) Cursor() string { return m.input.cursor }
-
-// Marked returns marked container IDs in visible source order.
-func (m Model) Marked() []string {
-	refs := m.input.markedTargetsCatalog(m.catalog)
-	ids := make([]string, 0, len(refs))
-	for _, ref := range refs {
-		ids = append(ids, ref.ID)
-	}
-	return ids
-}
-
-// Cancelled reports whether the model closed without an action.
-func (m Model) Cancelled() bool { return m.input.cancelled }
-
 // SelectedPlace reports an accepted project or container.
 func (m Model) SelectedPlace() (picker.Place, bool) {
 	if m.input.selectedPlace == nil {
@@ -330,9 +295,6 @@ func (m *Model) SetSize(width, height int) {
 	m.width, m.height, m.sized = width, height, true
 	m.rebuild(false)
 }
-
-// SetToast displays a status message in place of the normal footer hints.
-func (m *Model) SetToast(text string) { m.toast = text }
 
 // SetQuery is useful to embedding callers and model tests. Entering a query
 // selects its best match; refining one keeps the current identity when it
@@ -435,9 +397,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, effect.cmd
-	case ToastMsg:
-		m.toast = msg.Text
-		return m, nil
 	}
 	if update, ok := m.source.Accept(msg); ok {
 		if update.toast != "" {
@@ -510,10 +469,5 @@ func (m *Model) applyGit(msg picker.GitContextMsg) {
 	if m.catalog != nil {
 		m.catalog.SetProjects(m.deps.Projects)
 	}
-	m.rebuild(false)
-}
-
-func (m *Model) SetAgents(agents []capabilities.Agent) {
-	m.source.setAgents(agents)
 	m.rebuild(false)
 }

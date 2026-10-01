@@ -395,9 +395,6 @@ func (p rowProjection) containerRows() []row {
 			rows = append(rows, row{kind: separatorRow})
 		}
 	}
-	if string(p.query) != "" {
-		rows = append(rows, row{id: "new:local", kind: newContainerRow, label: "+ new container…", depth: 1})
-	}
 	return rows
 }
 

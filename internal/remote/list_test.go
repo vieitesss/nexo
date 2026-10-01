@@ -46,7 +46,7 @@ func TestListMachineUsesSSHBatchModeAndOptionalConfig(t *testing.T) {
 		return []byte("$1\tdev\n"), nil
 	}), backend.Tmux, "/tmp/ssh config")
 
-	result := orchestrator.ListMachine(context.Background(), "devbox")
+	result := listMachine(orchestrator, "devbox")
 	if result.Error != "" || len(result.Containers) != 1 || result.Containers[0].Machine != "devbox" {
 		t.Fatalf("result = %#v, want one remote container", result)
 	}
@@ -67,7 +67,7 @@ func TestListMachineUsesExplicitTmuxBackendWithoutProbe(t *testing.T) {
 		}
 		return []byte(remoteKindFrameStart + "tmux\n$1\tapi\n"), nil
 	}), ListingConfig{Backend: backend.Herdr, DetectKind: true, Backends: map[string]string{"devbox": "tmux"}})
-	result := orchestrator.ListMachine(context.Background(), "devbox")
+	result := listMachine(orchestrator, "devbox")
 	if result.Error != "" || result.Kind != KindTmux || len(result.Containers) != 1 || result.Containers[0].Name != "api" {
 		t.Fatalf("result = %#v, want explicit tmux listing", result)
 	}
@@ -81,7 +81,7 @@ func TestListMachineUsesExplicitHerdrBackendWithoutProbe(t *testing.T) {
 		}
 		return []byte(remoteKindFrameStart + "herdr\n{\"result\":{\"type\":\"workspace_list\",\"workspaces\":[]}}\n"), nil
 	}), ListingConfig{Backend: backend.Tmux, DetectKind: true, Backends: map[string]string{"gpu1": "herdr"}})
-	result := orchestrator.ListMachine(context.Background(), "gpu1")
+	result := listMachine(orchestrator, "gpu1")
 	if result.Error != "" || result.Kind != KindHerdr || len(result.Containers) != 0 {
 		t.Fatalf("result = %#v, want explicit Herdr listing", result)
 	}
@@ -272,7 +272,7 @@ func TestListMachineTreatsTmuxNoServerStderrAsEmpty(t *testing.T) {
 	orchestrator := newTestOrchestrator(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return nil, &exec.ExitError{Stderr: []byte("no server running on /tmp/tmux-1000/default\n")}
 	}), backend.Tmux, "")
-	result := orchestrator.ListMachine(context.Background(), "devbox")
+	result := listMachine(orchestrator, "devbox")
 	if result.Error != "" || len(result.Containers) != 0 {
 		t.Fatalf("result = %#v, want empty successful result", result)
 	}
@@ -282,7 +282,7 @@ func TestListMachineNormalizesMultilineErrors(t *testing.T) {
 	orchestrator := newTestOrchestrator(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("first reason\nsecond reason\n"), errors.New("command failed")
 	}), backend.Tmux, "")
-	result := orchestrator.ListMachine(context.Background(), "devbox")
+	result := listMachine(orchestrator, "devbox")
 	if result.Error != "ssh devbox: first reason" {
 		t.Fatalf("error = %q, want first normalized line", result.Error)
 	}
@@ -292,7 +292,7 @@ func TestListMachineDecodesHerdrWorkspaces(t *testing.T) {
 	orchestrator := newTestOrchestrator(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"api"}]}}`), nil
 	}), backend.Herdr, "")
-	result := orchestrator.ListMachine(context.Background(), "gpu1")
+	result := listMachine(orchestrator, "gpu1")
 	if result.Error != "" || len(result.Containers) != 1 || result.Containers[0].ID != "w1" || result.Containers[0].Machine != "gpu1" {
 		t.Fatalf("result = %#v, want one Herdr container", result)
 	}
@@ -342,7 +342,7 @@ func TestListMachineReportsTimeoutAsMachineError(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}), ListingConfig{Backend: backend.Tmux, DetectKind: true, Timeout: 5 * time.Millisecond}, OperationPolicy{Backend: backend.Tmux})
-	result := orchestrator.ListMachine(context.Background(), "offline")
+	result := listMachine(orchestrator, "offline")
 	if !strings.Contains(result.Error, "timed out") {
 		t.Fatalf("error = %q, want timeout reason", result.Error)
 	}
@@ -352,4 +352,9 @@ type fakeRunner func(context.Context, string, ...string) ([]byte, error)
 
 func (f fakeRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return f(ctx, name, args...)
+}
+
+// listMachine is the test-only entry point for a single-machine listing.
+func listMachine(orchestrator Orchestrator, machine string) MachineResult {
+	return orchestrator.listing.listMachine(context.Background(), machine, false)
 }

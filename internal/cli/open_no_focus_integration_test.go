@@ -10,9 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/vieitesss/nexo/internal/backend"
-	"github.com/vieitesss/nexo/internal/runner"
 )
 
 // TestRunOpenNoFocusJSONCreatesDetachedSession exercises `nexo open --no-focus
@@ -32,7 +29,7 @@ func TestRunOpenNoFocusJSONCreatesDetachedSession(t *testing.T) {
 	if output, err := exec.Command("tmux", "-L", server, "-f", "/dev/null", "new-session", "-d", "-s", "warmup", "sleep", "30").CombinedOutput(); err != nil {
 		t.Fatalf("start throwaway tmux server: %v\n%s", err, output)
 	}
-	tmuxRunner := runner.Func(func(ctx context.Context, _ string, args ...string) ([]byte, error) {
+	tmuxRunner := funcRunner(func(ctx context.Context, _ string, args ...string) ([]byte, error) {
 		full := append([]string{"-L", server, "-f", "/dev/null"}, args...)
 		return exec.CommandContext(ctx, "tmux", full...).CombinedOutput()
 	})
@@ -64,7 +61,7 @@ func TestRunOpenNoFocusJSONCreatesDetachedSession(t *testing.T) {
 		var stdout, stderr strings.Builder
 		status := RunWith(
 			[]string{"--backend=tmux", "-c", configPath, "--json", "open", candidate, "--no-focus"},
-			&stdout, &stderr, tmuxRunner, backend.MapEnvironment{}, "",
+			&stdout, &stderr, tmuxRunner, mapEnvironment{}, "",
 		)
 		if status != 0 {
 			t.Fatalf("status = %d, stdout = %q, stderr = %q", status, stdout.String(), stderr.String())

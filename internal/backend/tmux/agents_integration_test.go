@@ -54,13 +54,13 @@ func TestTmuxAgentPathWithTab(t *testing.T) {
 		t.Fatalf("create session: %v: %s", err, output)
 	}
 
-	source := NewAgentSource(runner.Func(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	source := NewAgentSource(funcRunner(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		if name == "tmux" {
 			args = append([]string{"-L", server, "-f", "/dev/null"}, args...)
 		}
 		return runner.ExecRunner{}.Run(ctx, name, args...)
 	}))
-	source.SetStateDir(t.TempDir())
+	setStateDir(source, t.TempDir())
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 1, PollInterval: 1})
 	agents, err := source.ListAgents(ctx)
 	if err != nil {
@@ -125,7 +125,7 @@ func TestTmuxAgentIntegration(t *testing.T) {
 		_, _ = runTmux("kill-server")
 	}()
 
-	source := NewAgentSource(runner.Func(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	source := NewAgentSource(funcRunner(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		if name == "tmux" {
 			args = append([]string{"-L", server, "-f", "/dev/null"}, args...)
 		}
@@ -209,13 +209,13 @@ func TestTmuxAgentFindsHarnessInDescendantProcess(t *testing.T) {
 		t.Fatalf("start descendant: %v: %s", err, output)
 	}
 
-	source := NewAgentSource(runner.Func(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	source := NewAgentSource(funcRunner(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		if name == "tmux" {
 			args = append([]string{"-L", server, "-f", "/dev/null"}, args...)
 		}
 		return runner.ExecRunner{}.Run(ctx, name, args...)
 	}))
-	source.SetStateDir(t.TempDir())
+	setStateDir(source, t.TempDir())
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 1, PollInterval: 1})
 	deadline := time.Now().Add(5 * time.Second)
 	for {

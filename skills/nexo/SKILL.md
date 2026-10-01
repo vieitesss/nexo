@@ -63,7 +63,6 @@ interfaces on that backend (empty for `none`).
     "ContainerRenamer",
     "Notifier",
     "PaneFocuser",
-    "Popup",
     "ProjectOpener",
     "RemoteProxy",
     "ScreenReader",

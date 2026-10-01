@@ -314,8 +314,6 @@ func (m renderFrame) rowText(row row) (string, string) {
 			labelStyle = normal()
 		}
 		return marker + foldPrefixStyled(row) + labelStyle.Render(abbreviateHome(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
-	case newContainerRow:
-		return "  " + strings.Repeat("  ", row.depth) + muted().Render(sanitize(row.label)), ""
 	case separatorRow:
 		return "", ""
 	case itemRow:

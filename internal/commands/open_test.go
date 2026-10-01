@@ -13,7 +13,6 @@ import (
 	"github.com/vieitesss/nexo/internal/backend/herdr"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
-	"github.com/vieitesss/nexo/internal/runner"
 )
 
 type fakeProjectOpener struct {
@@ -181,7 +180,7 @@ func TestOpenCommandJSONPreservesUnlabeledExplicitWorkspace(t *testing.T) {
 	if err := osMkdir(candidate); err != nil {
 		t.Fatal(err)
 	}
-	fake := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+	fake := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name == "herdr" && strings.Join(args, " ") == "workspace list" {
 			return []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-1","label":""}]}}`), nil
 		}

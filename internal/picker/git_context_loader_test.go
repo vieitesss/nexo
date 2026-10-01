@@ -7,14 +7,12 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/vieitesss/nexo/internal/runner"
 )
 
 func TestGitContextLoaderHandlesDetachedWorktreeAndFailures(t *testing.T) {
 	root := t.TempDir()
 	worktree := filepath.Join(root, "worktree")
-	gitRunner := runner.Func(func(_ context.Context, command string, args ...string) ([]byte, error) {
+	gitRunner := funcRunner(func(_ context.Context, command string, args ...string) ([]byte, error) {
 		call := strings.Join(append([]string{command}, args...), " ")
 		switch call {
 		case "git -C " + worktree + " status --porcelain=v2 --branch":
@@ -37,7 +35,7 @@ func TestGitContextLoaderHandlesDetachedWorktreeAndFailures(t *testing.T) {
 		t.Fatalf("detached worktree context = %#v", value)
 	}
 
-	failed := runner.Func(func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("denied") })
+	failed := funcRunner(func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("denied") })
 	if _, err := NewGitContextLoader(failed).Load(context.Background(), worktree); err == nil {
 		t.Fatal("failed Git status returned nil error")
 	}
@@ -45,7 +43,7 @@ func TestGitContextLoaderHandlesDetachedWorktreeAndFailures(t *testing.T) {
 
 func TestGitContextLoaderHonorsParentCancellationAndTimeout(t *testing.T) {
 	started := make(chan struct{})
-	blockedRunner := runner.Func(func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+	blockedRunner := funcRunner(func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
 		close(started)
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -61,7 +59,7 @@ func TestGitContextLoaderHonorsParentCancellationAndTimeout(t *testing.T) {
 
 func TestGitContextLoaderUsesOnlyLocalGitCommands(t *testing.T) {
 	var calls []string
-	r := runner.Func(func(_ context.Context, command string, args ...string) ([]byte, error) {
+	r := funcRunner(func(_ context.Context, command string, args ...string) ([]byte, error) {
 		call := strings.Join(append([]string{command}, args...), " ")
 		calls = append(calls, call)
 		switch call {

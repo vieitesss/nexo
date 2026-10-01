@@ -40,17 +40,6 @@ func (e *InteractiveError) Error() string {
 // Unwrap preserves the process error for errors.Is and errors.As.
 func (e *InteractiveError) Unwrap() error { return e.Err }
 
-// Runner is the short name for CommandRunner.
-type Runner = CommandRunner
-
-// Func adapts a function to CommandRunner.
-type Func func(context.Context, string, ...string) ([]byte, error)
-
-// Run implements CommandRunner.
-func (f Func) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return f(ctx, name, args...)
-}
-
 // ExecRunner runs commands using os/exec.
 type ExecRunner struct{}
 

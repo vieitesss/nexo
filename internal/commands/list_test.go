@@ -11,7 +11,6 @@ import (
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
-	"github.com/vieitesss/nexo/internal/runner"
 )
 
 type fakeContainerAdapter struct {
@@ -88,7 +87,7 @@ func TestListPlacesKeepsSameLabelContainers(t *testing.T) {
 
 func TestListPlacesMergesLocalProxyWithRemoteContainer(t *testing.T) {
 	var output, stderr strings.Builder
-	runner := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+	runner := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name != "ssh" {
 			t.Fatalf("runner = %q, want ssh", name)
 		}

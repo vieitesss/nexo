@@ -12,7 +12,7 @@ func TestResolveFlagOverridesConfigAndDetection(t *testing.T) {
 	got, err := Resolve(context.Background(), ResolveInput{
 		Flag:   &flag,
 		Config: config.Config{Backend: "herdr"},
-		Env:    MapEnvironment{"TMUX": "yes"},
+		Env:    mapEnvironment{"TMUX": "yes"},
 	})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -25,7 +25,7 @@ func TestResolveFlagOverridesConfigAndDetection(t *testing.T) {
 func TestResolveConfigOverridesDetection(t *testing.T) {
 	got, err := Resolve(context.Background(), ResolveInput{
 		Config: config.Config{Backend: "herdr"},
-		Env:    MapEnvironment{"TMUX": "yes"},
+		Env:    mapEnvironment{"TMUX": "yes"},
 	})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -40,7 +40,7 @@ func TestResolveAutoFlagSkipsConfig(t *testing.T) {
 	got, err := Resolve(context.Background(), ResolveInput{
 		Flag:   &flag,
 		Config: config.Config{Backend: "herdr"},
-		Env:    MapEnvironment{"TMUX": "yes"},
+		Env:    mapEnvironment{"TMUX": "yes"},
 	})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)

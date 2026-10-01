@@ -18,13 +18,9 @@ func TestRankAndPlaceConversion(t *testing.T) {
 	}
 }
 
-func TestAgentDotsAndHelpers(t *testing.T) {
+func TestAgentHelpers(t *testing.T) {
 	since := time.Now().Add(-3 * time.Minute)
 	agents := []capabilities.Agent{{Harness: "pi", State: "stopped", Seen: false, StoppedSince: &since}, {Harness: "claude", State: "working"}}
-	dot, ok := AgentDot(agents)
-	if !ok || dot.Style != DecorationRed {
-		t.Fatalf("dot = %#v,%v", dot, ok)
-	}
 	if AttentionRank(agents[0]) >= AttentionRank(agents[1]) {
 		t.Fatal("unseen stopped should rank first")
 	}

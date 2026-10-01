@@ -25,9 +25,11 @@ active per invocation; nexo never controls one multiplexer from another.
 
 **Capability**:
 A small Go interface for one thing a backend can do (open a project
-container, list panes, read a pane's screen, focus a pane, show a popup,
-provide agent state, notify, proxy a remote session). A backend implements
-only the capabilities it supports; features check for them.
+container, list containers, read a pane's screen, focus a pane, provide agent
+state, notify, proxy a remote session). A backend implements only the
+capabilities it supports; features check for them. Native popup surfaces are
+manifest-owned: Herdr's popup integration lives in its plugin manifest, not
+in a Go capability.
 
 **Native capability**:
 A capability the multiplexer already provides itself (for example, Herdr's own

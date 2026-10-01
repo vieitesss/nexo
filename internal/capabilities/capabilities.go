@@ -24,17 +24,11 @@ func Names(backend any) []string {
 	if _, ok := backend.(ContainerKiller); ok {
 		names = append(names, "ContainerKiller")
 	}
-	if _, ok := backend.(PaneLister); ok {
-		names = append(names, "PaneLister")
-	}
 	if _, ok := backend.(ScreenReader); ok {
 		names = append(names, "ScreenReader")
 	}
 	if _, ok := backend.(PaneFocuser); ok {
 		names = append(names, "PaneFocuser")
-	}
-	if _, ok := backend.(Popup); ok {
-		names = append(names, "Popup")
 	}
 	if _, ok := backend.(AgentSource); ok {
 		names = append(names, "AgentSource")

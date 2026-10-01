@@ -23,20 +23,6 @@ const (
 	ContainerKind PlaceKind = "container"
 )
 
-// Decoration is an optional piece of metadata supplied by a future place
-// source. The project picker currently has no decorations.
-type Decoration struct {
-	Text  string
-	Style DecorationStyle
-}
-
-// DecorationStyle describes how a decoration should be drawn.
-type DecorationStyle string
-
-const (
-	DecorationMuted DecorationStyle = "muted"
-)
-
 // OpenAction is an optional action owned by a place source. Project places
 // leave it nil so the active backend can open them; future place kinds can
 // carry their own action without changing the picker model.
@@ -45,10 +31,6 @@ type OpenAction func(context.Context, Place) error
 type ContainerRef struct {
 	Machine string `json:"machine"`
 	ID      string `json:"id"`
-}
-
-type PreviewBatch struct {
-	Previews map[ContainerRef]string
 }
 
 // RemoteBatch is one asynchronous machine listing. Error keeps an unreachable
@@ -61,12 +43,6 @@ type RemoteBatch struct {
 	Agents  []capabilities.Agent
 	Warning string
 	Error   string
-}
-
-// AgentBatch is the asynchronous local agent listing used for container dots.
-type AgentBatch struct {
-	Agents []capabilities.Agent
-	Error  string
 }
 
 // Place is the additive item model used by the picker. SearchText and
@@ -89,7 +65,6 @@ type Place struct {
 	Preview           string     `json:"preview,omitempty"`
 	Activity          *time.Time `json:"activity,omitempty"`
 	Proxy             bool       `json:"proxy,omitempty"`
-	Payload           any        `json:"-"`
 	OpenAction        OpenAction `json:"-"`
 	Git               bool       `json:"git,omitempty"`
 	LinkedWorktree    bool       `json:"linked_worktree,omitempty"`
@@ -98,8 +73,7 @@ type Place struct {
 	// Agents is the latest asynchronous agent snapshot for a container.
 	Agents []capabilities.Agent `json:"-"`
 	// ParentPath is the primary checkout path for a linked worktree.
-	ParentPath  string       `json:"-"`
-	Decorations []Decoration `json:"decorations,omitempty"`
+	ParentPath string `json:"-"`
 }
 
 // ProjectPlaces converts project discovery results into picker places while
@@ -113,7 +87,6 @@ func ProjectPlaces(candidates []projects.Candidate) []Place {
 			Group:            candidate.Group,
 			SearchText:       candidate.Path,
 			DisplayRemainder: projectRemainder(candidate.Path, candidate.Group),
-			Payload:          candidate,
 			Git:              candidate.Git,
 			LinkedWorktree:   candidate.LinkedWorktree,
 		})
@@ -151,7 +124,6 @@ func ContainerPlaces(containers []capabilities.Container) []Place {
 			Preview:          container.Preview,
 			Activity:         container.Activity,
 			Proxy:            container.Proxy,
-			Payload:          container,
 		})
 	}
 	return places

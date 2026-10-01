@@ -51,11 +51,6 @@ func NewOrchestrator(commandRunner runner.CommandRunner, config ListingConfig, p
 	return Orchestrator{listing: newMachineListing(commandRunner, config), policy: policy}
 }
 
-// ListMachine returns one normalized result for a machine.
-func (o Orchestrator) ListMachine(ctx context.Context, machine string) MachineResult {
-	return o.listing.listMachine(ctx, machine, false)
-}
-
 // ListMachineWithAgents returns one normalized result with optional agent data.
 func (o Orchestrator) ListMachineWithAgents(ctx context.Context, machine string) MachineResult {
 	return o.listing.listMachine(ctx, machine, true)

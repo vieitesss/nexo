@@ -13,28 +13,35 @@ func (f fakeRunner) Run(ctx context.Context, name string, args ...string) ([]byt
 	return f(ctx, name, args...)
 }
 
+type mapEnvironment map[string]string
+
+func (m mapEnvironment) LookupEnv(key string) (string, bool) {
+	value, ok := m[key]
+	return value, ok
+}
+
 func TestDetectHerdrFromEnvironment(t *testing.T) {
-	selection, err := Detect(context.Background(), MapEnvironment{"HERDR_ENV": "1"}, "/dev/pts/4", nil)
+	kind, reason, err := detect(context.Background(), mapEnvironment{"HERDR_ENV": "1"}, "/dev/pts/4", nil)
 	if err != nil {
-		t.Fatalf("Detect() error = %v", err)
+		t.Fatalf("detect() error = %v", err)
 	}
-	if selection.Kind != Herdr || !strings.Contains(selection.Reason, "HERDR_ENV") {
-		t.Fatalf("selection = %#v, want Herdr detected from HERDR_ENV", selection)
+	if kind != Herdr || !strings.Contains(reason, "HERDR_ENV") {
+		t.Fatalf("detect() = %q, %q, want Herdr detected from HERDR_ENV", kind, reason)
 	}
 }
 
 func TestDetectTmuxFromEnvironment(t *testing.T) {
-	selection, err := Detect(context.Background(), MapEnvironment{"TMUX": "/tmp/tmux", "TMUX_PANE": "%1"}, "/dev/pts/4", nil)
+	kind, _, err := detect(context.Background(), mapEnvironment{"TMUX": "/tmp/tmux", "TMUX_PANE": "%1"}, "/dev/pts/4", nil)
 	if err != nil {
-		t.Fatalf("Detect() error = %v", err)
+		t.Fatalf("detect() error = %v", err)
 	}
-	if selection.Kind != Tmux {
-		t.Fatalf("selection = %#v, want tmux", selection)
+	if kind != Tmux {
+		t.Fatalf("detect() = %q, want tmux", kind)
 	}
 }
 
 func TestDetectNestedUsesTTYOwnedByTmux(t *testing.T) {
-	selection, err := Detect(context.Background(), MapEnvironment{
+	kind, _, err := detect(context.Background(), mapEnvironment{
 		"HERDR_ENV": "1",
 		"TMUX":      "/tmp/tmux",
 	}, "/dev/pts/4", fakeRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -47,41 +54,41 @@ func TestDetectNestedUsesTTYOwnedByTmux(t *testing.T) {
 		return []byte("/dev/pts/9\n"), nil
 	}))
 	if err != nil {
-		t.Fatalf("Detect() error = %v", err)
+		t.Fatalf("detect() error = %v", err)
 	}
-	if selection.Kind != Tmux {
-		t.Fatalf("selection = %#v, want tmux", selection)
+	if kind != Tmux {
+		t.Fatalf("detect() = %q, want tmux", kind)
 	}
 }
 
 func TestDetectNestedFallsBackToHerdrWhenTTYNotOwnedByTmux(t *testing.T) {
-	selection, err := Detect(context.Background(), MapEnvironment{
+	kind, _, err := detect(context.Background(), mapEnvironment{
 		"HERDR_PANE_ID": "pane-1",
 		"TMUX_PANE":     "%1",
 	}, "/dev/pts/4", fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("/dev/pts/9\n"), nil
 	}))
 	if err != nil {
-		t.Fatalf("Detect() error = %v", err)
+		t.Fatalf("detect() error = %v", err)
 	}
-	if selection.Kind != Herdr {
-		t.Fatalf("selection = %#v, want Herdr", selection)
+	if kind != Herdr {
+		t.Fatalf("detect() = %q, want Herdr", kind)
 	}
 }
 
 func TestDetectOutsideMultiplexer(t *testing.T) {
-	selection, err := Detect(context.Background(), MapEnvironment{}, "/dev/pts/4", nil)
+	kind, _, err := detect(context.Background(), mapEnvironment{}, "/dev/pts/4", nil)
 	if err != nil {
-		t.Fatalf("Detect() error = %v", err)
+		t.Fatalf("detect() error = %v", err)
 	}
-	if selection.Kind != None {
-		t.Fatalf("selection = %#v, want no backend", selection)
+	if kind != None {
+		t.Fatalf("detect() = %q, want no backend", kind)
 	}
 }
 
 func TestDetectNestedReportsRunnerFailure(t *testing.T) {
 	want := errors.New("tmux unavailable")
-	_, err := Detect(context.Background(), MapEnvironment{"HERDR_ENV": "1", "TMUX": "yes"}, "/dev/pts/4", fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
+	_, _, err := detect(context.Background(), mapEnvironment{"HERDR_ENV": "1", "TMUX": "yes"}, "/dev/pts/4", fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return nil, want
 	}))
 	if err == nil || !strings.Contains(err.Error(), "tmux unavailable") {

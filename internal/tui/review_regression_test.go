@@ -295,14 +295,6 @@ func TestAgentsAreGroupedByMachineAndSearchKeepsHeader(t *testing.T) {
 	}
 }
 
-func TestAgentBatchCompatibility(t *testing.T) {
-	model := NewModel(context.Background(), richDeps(), AgentsTab)
-	model = updateModel(t, model, picker.AgentBatch{Agents: []capabilities.Agent{{PaneID: "new", Target: "new:1", Harness: "codex", State: "working"}}})
-	if !strings.Contains(strings.Join(model.Rows(), "\x00"), "new") {
-		t.Fatalf("AgentBatch was ignored: %v", model.Rows())
-	}
-}
-
 func TestRemoteAgentFocusReferenceKeepsMachineAndBackend(t *testing.T) {
 	model := NewModel(context.Background(), Deps{Agents: []capabilities.Agent{{PaneID: "%7", Target: "local:1", Harness: "pi", State: "working"}}}, AgentsTab)
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Backend: "herdr", Agents: []capabilities.Agent{{PaneID: "%7", Target: "opaque", ContainerID: "remote", Container: "remote", Harness: "claude", State: "working"}}})
@@ -468,7 +460,7 @@ func TestContainerRankingKeepsMarks(t *testing.T) {
 	}
 	model := NewModel(context.Background(), Deps{Containers: containers}, ContainersTab)
 	model.SetQuery("dev")
-	want := []string{"machine:devbox", "container:devbox:devbox", "", "machine:node", "container:node:node", "", "machine:alpha", "container:alpha:alpha", "", "new:local"}
+	want := []string{"machine:devbox", "container:devbox:devbox", "", "machine:node", "container:node:node", "", "machine:alpha", "container:alpha:alpha", ""}
 	if got := model.Rows(); !slices.Equal(got, want) {
 		t.Fatalf("query-ranked containers = %v, want %v", got, want)
 	}

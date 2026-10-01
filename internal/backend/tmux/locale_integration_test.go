@@ -82,7 +82,7 @@ func TestListingSurvivesLocaleLessTmux(t *testing.T) {
 	}
 
 	source := NewAgentSource(commandRunner)
-	source.SetStateDir(t.TempDir())
+	setStateDir(source, t.TempDir())
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 3, PollInterval: 1})
 	deadline := time.Now().Add(2 * time.Second)
 	var agents []capabilities.Agent

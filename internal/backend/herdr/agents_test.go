@@ -21,8 +21,8 @@ func TestAgentSourceMapsNativeStatuses(t *testing.T) {
 		]}}`),
 	}}
 	source := NewAgentSource(runner)
-	source.SetStateDir(t.TempDir())
-	source.SetClock(func() time.Time { return clock })
+	setStateDir(source, t.TempDir())
+	setClock(source, func() time.Time { return clock })
 
 	got, err := source.ListAgents(context.Background())
 	if err != nil {
@@ -57,7 +57,7 @@ func TestAgentSourceFillsLocationLabels(t *testing.T) {
 		"tab list":       []byte(`{"result":{"type":"tab_list","tabs":[{"workspace_id":"w1","tab_id":"w1:t1","label":"editor"}]}}`),
 	}}
 	source := NewAgentSource(runner)
-	source.SetStateDir(t.TempDir())
+	setStateDir(source, t.TempDir())
 	got, err := source.ListAgents(context.Background())
 	if err != nil {
 		t.Fatalf("ListAgents() error = %v", err)
@@ -73,8 +73,8 @@ func TestAgentSourceBlockedTransitionBecomesUnseen(t *testing.T) {
 	}}
 	now := time.Date(2025, time.January, 1, 12, 0, 0, 0, time.UTC)
 	source := NewAgentSource(runner)
-	source.SetStateDir(t.TempDir())
-	source.SetClock(func() time.Time { return now })
+	setStateDir(source, t.TempDir())
+	setClock(source, func() time.Time { return now })
 	first, err := source.ListAgents(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -101,8 +101,8 @@ func TestAgentSourcePersistsStoppedSinceAcrossInvocations(t *testing.T) {
 	}}
 	firstTime := time.Date(2025, time.January, 1, 12, 0, 0, 0, time.UTC)
 	first := NewAgentSource(runner)
-	first.SetStateDir(stateDir)
-	first.SetClock(func() time.Time { return firstTime })
+	setStateDir(first, stateDir)
+	setClock(first, func() time.Time { return firstTime })
 	got, err := first.ListAgents(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -110,8 +110,8 @@ func TestAgentSourcePersistsStoppedSinceAcrossInvocations(t *testing.T) {
 
 	secondTime := firstTime.Add(time.Hour)
 	second := NewAgentSource(runner)
-	second.SetStateDir(stateDir)
-	second.SetClock(func() time.Time { return secondTime })
+	setStateDir(second, stateDir)
+	setClock(second, func() time.Time { return secondTime })
 	again, err := second.ListAgents(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestAgentSourcePrunesPanesAbsentFromSnapshot(t *testing.T) {
 		]}}`),
 	}}
 	source := NewAgentSource(runner)
-	source.SetStateDir(t.TempDir())
+	setStateDir(source, t.TempDir())
 	if _, err := source.ListAgents(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -170,13 +170,13 @@ func TestAgentSourceKeysDefaultServerByConfigPath(t *testing.T) {
 		"agent list": []byte(`{"result":{"type":"agent_list","agents":[{"pane_id":"w:p1","workspace_id":"w","tab_id":"t","agent":"pi","agent_status":"done","state_change_seq":1}]}}`),
 	}}
 	first := NewAgentSource(runner)
-	first.SetStateDir(stateDir)
+	setStateDir(first, stateDir)
 	t.Setenv("HERDR_CONFIG_PATH", "/tmp/herdr-one/config.toml")
 	if _, err := first.ListAgents(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	second := NewAgentSource(runner)
-	second.SetStateDir(stateDir)
+	setStateDir(second, stateDir)
 	t.Setenv("HERDR_CONFIG_PATH", "/tmp/herdr-two/config.toml")
 	if _, err := second.ListAgents(context.Background()); err != nil {
 		t.Fatal(err)
@@ -192,7 +192,7 @@ func TestAgentSourceFillsBranchFromForegroundCWD(t *testing.T) {
 		"-C /work/repo/worktree branch --show-current": []byte("feature/herdr\n"),
 	}}
 	source := NewAgentSource(runner)
-	source.SetStateDir(t.TempDir())
+	setStateDir(source, t.TempDir())
 	got, err := source.ListAgents(context.Background())
 	if err != nil {
 		t.Fatal(err)

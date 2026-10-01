@@ -44,9 +44,6 @@ func New(r runner.CommandRunner, inside ...bool) *Backend {
 	return &Backend{Runner: r, Inside: inTmux, agents: agents, notifier: notifier, remoteMachines: proxyidentity.NewMachineSet(nil)}
 }
 
-// Name identifies this backend.
-func (Backend) Name() string { return "tmux" }
-
 // UTF8Args returns tmux arguments prefixed with the global -u flag. Without
 // it, tmux replaces control characters such as the tab used in format
 // separators when the process has no UTF-8 locale, which is the norm for
@@ -313,8 +310,6 @@ func isMissingSession(err error) bool {
 		strings.Contains(message, "session not found") ||
 		strings.Contains(message, "no server running")
 }
-
-func sessionName(path string) string { return projects.TargetName(path) }
 
 // OpenContainer focuses an existing tmux session by stable session ID.
 func (b *Backend) OpenContainer(ctx context.Context, id string) error {
