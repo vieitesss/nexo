@@ -1168,6 +1168,11 @@ func (m *Model) applyRemote(msg picker.RemoteBatch) {
 	m.rebuild(false)
 }
 func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Modal footer actions own input until they are confirmed or cancelled.
+	// Mouse clicks and wheel events are ignored rather than cancelling them.
+	if m.confirmKill || m.renameMode {
+		return m, nil
+	}
 	event := tea.MouseEvent(msg)
 	button := event.Button
 	if button == tea.MouseButtonWheelUp || button == tea.MouseButtonWheelDown || button == tea.MouseButtonWheelLeft || button == tea.MouseButtonWheelRight {
@@ -1212,9 +1217,12 @@ func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if clicked.foldable {
-		m.cursor = clicked.id
-		m.toggleFold(!clicked.expanded)
+	if clicked.kind == groupRow {
+		m.toggleClickedFold(clicked)
+		return m, nil
+	}
+	if clicked.foldable && m.foldChevronAt(clicked, event.X) {
+		m.toggleClickedFold(clicked)
 		return m, nil
 	}
 	if m.cursor == clicked.id {
@@ -1222,6 +1230,55 @@ func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	m.cursor = clicked.id
 	return m, nil
+}
+
+func (m Model) foldChevronAt(row row, x int) bool {
+	if !row.foldable {
+		return false
+	}
+	start := 2 + shell.StringWidth(foldIndent(row))
+	return x >= start && x < start+shell.StringWidth(foldArrow(row))
+}
+
+func (m *Model) toggleClickedFold(clicked row) {
+	if m.tab != ProjectsTab || !clicked.foldable {
+		return
+	}
+	if clicked.expanded {
+		m.folded[clicked.id] = true
+		delete(m.expanded, clicked.id)
+	} else {
+		delete(m.folded, clicked.id)
+		m.expanded[clicked.id] = true
+	}
+	m.rebuild(false)
+	m.cursor = clicked.id
+}
+
+func foldArrow(row row) string {
+	if row.expanded {
+		return "⌄"
+	}
+	return "▸"
+}
+
+func foldIndent(row row) string {
+	switch row.kind {
+	case groupRow:
+		return strings.Repeat("  ", row.depth)
+	case itemRow:
+		return row.treePrefix
+	default:
+		return ""
+	}
+}
+
+func foldPrefix(row row) string {
+	indent := foldIndent(row)
+	if !row.foldable {
+		return indent
+	}
+	return indent + foldArrow(row) + "  "
 }
 
 func (m Model) tabAt(x int) (Tab, bool) {
@@ -1700,15 +1757,11 @@ func (m Model) rowText(row row) (string, string) {
 		}
 		return marker + value, ""
 	case groupRow:
-		arrow := "▸"
-		if row.expanded {
-			arrow = "⌄"
-		}
 		labelStyle := bold()
 		if selected {
 			labelStyle = normal()
 		}
-		return marker + strings.Repeat("  ", row.depth) + labelStyle.Render(arrow+"  "+abbreviateHome(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
+		return marker + labelStyle.Render(foldPrefix(row)+abbreviateHome(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
 	case newContainerRow:
 		return "  " + strings.Repeat("  ", row.depth) + muted().Render(sanitize(row.label)), ""
 	case separatorRow:
@@ -1945,7 +1998,7 @@ func (m Model) projectLayout() projectColumns {
 }
 
 func projectNameWidth(candidate row) int {
-	width := shell.StringWidth(candidate.treePrefix + projectLabel(candidate.place))
+	width := shell.StringWidth(foldPrefix(candidate) + projectLabel(candidate.place))
 	if candidate.foldable && !candidate.expanded {
 		width += shell.StringWidth(fmt.Sprintf("  %d", candidate.count))
 	}
@@ -1964,16 +2017,16 @@ func (m Model) placeText(row row, marker string) (string, string) {
 		return marker + highlightText(projectLabel(row.place), string(m.query)), ""
 	}
 	layout := m.projectLayout()
-	name := row.treePrefix + projectLabel(row.place)
+	name := foldPrefix(row) + projectLabel(row.place)
 	count := ""
 	if row.foldable && !row.expanded {
 		count = fmt.Sprintf("  %d", row.count)
 	}
 	name = shell.Truncate(name, max(0, layout.name-shell.StringWidth(count)), "…")
 	nameText := highlightText(name, string(m.query))
-	if row.treePrefix != "" {
-		// Tree gutters are structural, not part of fuzzy matching.
-		nameText = muted().Render(row.treePrefix) + highlightText(strings.TrimPrefix(name, row.treePrefix), string(m.query))
+	if prefix := foldPrefix(row); prefix != "" {
+		// Tree gutters and fold chevrons are structural, not part of fuzzy matching.
+		nameText = muted().Render(prefix) + highlightText(strings.TrimPrefix(name, prefix), string(m.query))
 	}
 	if count != "" {
 		nameText += muted().Render(count)

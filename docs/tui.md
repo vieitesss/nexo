@@ -44,5 +44,8 @@ query.
 ## Mouse
 
 Mouse support is enabled for tab and row clicks, folding project headers,
-opening a selected row, and wheel navigation. Shift-drag still selects text in
-most terminals; hold Shift when you need the terminal's normal text selection.
+opening a selected row, and wheel navigation. A checkout's chevron folds it;
+clicking elsewhere selects it, and a second click opens it. Clicks and wheel
+events are ignored while the kill confirmation or inline rename footer is
+active. Shift-drag still selects text in most terminals; hold Shift when you
+need the terminal's normal text selection.

@@ -53,6 +53,70 @@ func TestSearchWordDeletes(t *testing.T) {
 	}
 }
 
+func TestMouseIgnoresModalClicksAndWheel(t *testing.T) {
+	projects := []picker.Place{
+		{Kind: picker.ProjectKind, Path: "/work/root", Group: "/work", DisplayRemainder: "root"},
+		{Kind: picker.ProjectKind, Path: "/work/root/wt", Group: "/work", DisplayRemainder: "wt", ParentPath: "/work/root"},
+	}
+	for _, mode := range []string{"kill", "rename"} {
+		t.Run(mode, func(t *testing.T) {
+			model := NewModel(context.Background(), Deps{Projects: projects}, ProjectsTab)
+			model.SetSize(80, 8)
+			beforeCursor, beforeRows := model.Cursor(), append([]string(nil), model.Rows()...)
+			if mode == "kill" {
+				model.confirmKill = true
+			} else {
+				model.renameMode = true
+			}
+			model = updateModel(t, model, tea.MouseMsg{X: 8, Y: 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+			model = updateModel(t, model, tea.MouseMsg{X: 8, Y: 3, Button: tea.MouseButtonWheelDown})
+			if model.Cursor() != beforeCursor {
+				t.Fatalf("cursor changed during %s modal: %q -> %q", mode, beforeCursor, model.Cursor())
+			}
+			if got := model.Rows(); strings.Join(got, "\x00") != strings.Join(beforeRows, "\x00") {
+				t.Fatalf("rows changed during %s modal: %v -> %v", mode, beforeRows, got)
+			}
+			if mode == "kill" && !model.confirmKill {
+				t.Fatal("kill confirmation ended from a mouse event")
+			}
+			if mode == "rename" && !model.renameMode {
+				t.Fatal("rename mode ended from a mouse event")
+			}
+		})
+	}
+}
+
+func TestMouseCheckoutChevronAndOpenHitAreas(t *testing.T) {
+	projects := []picker.Place{
+		{Kind: picker.ProjectKind, Path: "/work/root", Group: "/work", DisplayRemainder: "root"},
+		{Kind: picker.ProjectKind, Path: "/work/root/wt", Group: "/work", DisplayRemainder: "wt", ParentPath: "/work/root"},
+	}
+	model := NewModel(context.Background(), Deps{Projects: projects}, ProjectsTab)
+	model.SetSize(80, 8)
+	if got := model.Rows(); len(got) != 3 {
+		t.Fatalf("initial rows = %v, want group, checkout and worktree", got)
+	}
+
+	// The root checkout chevron is rendered after the two-cell row marker.
+	model = updateModel(t, model, tea.MouseMsg{X: 2, Y: 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if got := model.Rows(); len(got) != 2 {
+		t.Fatalf("rows after chevron click = %v, want folded checkout", got)
+	}
+	// Clicking its name selects it without changing its fold state.
+	model = updateModel(t, model, tea.MouseMsg{X: 8, Y: 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if model.Cursor() != "project:/work/root" {
+		t.Fatalf("cursor after checkout name click = %q", model.Cursor())
+	}
+	if got := model.Rows(); len(got) != 2 {
+		t.Fatalf("rows after checkout name click = %v, want folded checkout", got)
+	}
+	// A second click opens the checkout like Enter.
+	model = updateModel(t, model, tea.MouseMsg{X: 8, Y: 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if place, ok := model.SelectedPlace(); !ok || place.Path != "/work/root" {
+		t.Fatalf("second checkout click selected %+v, want root checkout", place)
+	}
+}
+
 func TestMouseUsesRenderedBodyLayout(t *testing.T) {
 	projects := []picker.Place{
 		{Kind: picker.ProjectKind, Path: "/work/root", Group: "/work", DisplayRemainder: "root"},

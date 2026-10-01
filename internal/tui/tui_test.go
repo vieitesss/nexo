@@ -157,6 +157,122 @@ func styledRunes(value string) []styledRune {
 	return result
 }
 
+func backgroundCells(value string) []bool {
+	background := false
+	cells := []bool{}
+	for index := 0; index < len(value); {
+		if value[index] == '\x1b' && index+1 < len(value) && value[index+1] == '[' {
+			end := strings.IndexByte(value[index+2:], 'm')
+			if end < 0 {
+				break
+			}
+			end += index + 2
+			params := value[index+2 : end]
+			codes := strings.FieldsFunc(params, func(r rune) bool { return r == ';' || r == ':' })
+			for position := 0; position < len(codes); position++ {
+				code, err := strconv.Atoi(codes[position])
+				if err != nil {
+					continue
+				}
+				switch code {
+				case 0:
+					background = false
+				case 48:
+					background = true
+					if position+1 < len(codes) {
+						switch codes[position+1] {
+						case "5":
+							position += 2
+						case "2":
+							position += 4
+						}
+					}
+				case 49:
+					background = false
+				}
+			}
+			index = end + 1
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(value[index:])
+		for width := shell.StringWidth(string(r)); width > 0; width-- {
+			cells = append(cells, background)
+		}
+		index += size
+	}
+	return cells
+}
+
+func assertSelectedBackgroundCells(t *testing.T, model Model, selectedID string) {
+	t.Helper()
+	frame := strings.Split(model.View(), "\n")
+	bodyHeight := model.height - 3
+	lines, start := model.bodyLayout(bodyHeight)
+	for screenLine := 0; screenLine < bodyHeight; screenLine++ {
+		line := frame[2+screenLine]
+		cells := backgroundCells(line)
+		if len(cells) != model.width {
+			t.Fatalf("body line %d has %d parsed cells, want %d: %q", screenLine, len(cells), model.width, line)
+		}
+		lineIndex := start + screenLine
+		wantBackground := lineIndex < len(lines) && lines[lineIndex].rowID == selectedID
+		for cell, gotBackground := range cells {
+			if gotBackground != wantBackground {
+				t.Fatalf("line %d cell %d background = %t, want %t (selected=%q): %q", screenLine, cell, gotBackground, wantBackground, selectedID, line)
+			}
+		}
+	}
+}
+
+func TestSelectedRowBackgroundCoversEveryCell(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	project := picker.Place{
+		Kind: picker.ProjectKind, Path: "/work/東京😀/root", Group: "/work/東京😀", DisplayRemainder: "東京😀-root", Git: true,
+		GitContext: &picker.GitContext{Identity: "feature", Adds: 2, Deletes: 1, Dirty: true, Ahead: 1, Behind: 1},
+	}
+	cases := []struct {
+		name     string
+		model    Model
+		selected string
+		query    string
+	}{
+		{
+			name:     "folder header",
+			model:    NewModel(context.Background(), Deps{Projects: []picker.Place{project}}, ProjectsTab),
+			selected: "group:/work/東京😀",
+		},
+		{
+			name:     "matched git project",
+			model:    NewModel(context.Background(), Deps{Projects: []picker.Place{project}}, ProjectsTab),
+			selected: "project:/work/東京😀/root",
+			query:    "東京",
+		},
+		{
+			name: "matched pill container",
+			model: NewModel(context.Background(), Deps{
+				Containers: []capabilities.Container{{ID: "one", Name: "東京😀", Machine: picker.LocalMachine()}},
+				Agents:     []capabilities.Agent{{ContainerID: "one", Container: "東京😀", Harness: "pi", Target: "one:0.1", State: "working"}},
+			}, ContainersTab),
+			selected: "container:" + picker.LocalMachine() + ":one",
+			query:    "東京",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model := tc.model
+			model.SetSize(80, 10)
+			if tc.query != "" {
+				model.SetQuery(tc.query)
+			}
+			model.cursor = tc.selected
+			if model.Cursor() != tc.selected {
+				t.Fatalf("cursor = %q, want %q; rows=%v", model.Cursor(), tc.selected, model.Rows())
+			}
+			assertSelectedBackgroundCells(t, model, tc.selected)
+		})
+	}
+}
+
 func TestSelectedRowHasTheOnlyBackgroundSGR(t *testing.T) {
 	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
 	model.SetSize(80, 24)
