@@ -44,10 +44,36 @@ terminal is too narrow, the name column is capped proportionally before lower
 priority columns are reduced or removed. In search results the containing folder
 is shown to the left of the name as a path (`~/work/prefapp/gitops-k8s`),
 right-aligned and ending in `/` so names stay aligned. The branch and its Git
-summary (`⎇ main  +12 −3 * ↑1 ↓2`) share the column after the name; the branch
-truncates before the summary. The folder truncates from the left with `…` and is
-dropped before the name loses characters. Matched characters in names, branches,
-and visible folders are highlighted independently within their cells.
+summary (`⎇ main  #12  +12 −3 * ↑1 ↓2`) share the column after the name; the
+branch truncates before the summary and the pull request badge. The folder
+truncates from the left with `…` and is dropped before the name loses
+characters. Matched characters in names, branches, and visible folders are
+highlighted independently within their cells.
+
+## Pull request state
+
+The Projects tab shows `#123` beside the branch when the checkout's upstream
+branch has a pull request: green for open, magenta for merged, and red for
+closed. The badge loads asynchronously after the local Git context and never
+delays the first frame, a search keystroke, or a refresh. The badge appears
+only when `gh` is on `PATH`, the branch tracks an upstream whose remote is on
+github.com, and the request's head owner and branch match that upstream; a
+branch without an upstream shows nothing instead of guessing `origin`. No
+request, a fork-owned or mismatched head, missing authentication, a network
+failure, and a missing `gh` all leave the row unchanged and show no error.
+
+Answers, the absence of a request included, are cached for 30 seconds. While
+the TUI is open it checks the project rows around the cursor every 5 seconds
+and asks `gh` again only for a checkout whose cached answer expired, so a
+merged request or a request created after the first look appears within about
+half a minute without one query per row per tick. The selected row keeps the
+badge's state colour; only the selection background is painted, never the
+badge.
+
+The colours are terminal ANSI palette entries with a light and a dark variant,
+so the terminal's own palette decides the exact contrast. Against the
+conventional xterm palette both variants reach the WCAG AA 4.5:1 ratio on the
+row background and on the TUI's selection background.
 
 ## Keys
 

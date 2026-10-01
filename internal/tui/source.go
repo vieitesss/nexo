@@ -41,6 +41,7 @@ type sourceUpdate struct {
 	cmd             tea.Cmd
 	projects        []picker.Place
 	projectsUpdated bool
+	pullRequest     *pullRequestMsg
 }
 
 // sourceState owns all asynchronous source state. It deliberately keeps the
@@ -57,6 +58,7 @@ type sourceState struct {
 	containerSource      capabilities.ContainerLister
 	agentRefreshInterval time.Duration
 	gitLoader            picker.GitLoader
+	pullRequestLoader    picker.PullRequestLoader
 	remoteCommands       []tea.Cmd
 
 	remoteMachines []string
@@ -65,29 +67,43 @@ type sourceState struct {
 	groupWarnings  map[string]string
 	refreshErr     error
 
-	generations     sourceGenerations
-	refreshing      bool
-	pendingReload   reloadState
-	cancelLoads     context.CancelFunc
-	gitSlots        chan struct{}
-	trace           *startup.Trace
-	projectWarnings func() []string
+	generations       sourceGenerations
+	refreshing        bool
+	pendingReload     reloadState
+	cancelLoads       context.CancelFunc
+	gitSlots          chan struct{}
+	prSlots           chan struct{}
+	prFreshness       time.Duration
+	prRefreshInterval time.Duration
+	prRefreshedAt     map[string]time.Time
+	now               func() time.Time
+	trace             *startup.Trace
+	projectWarnings   func() []string
 }
 
 func newSource(ctx context.Context, catalog *picker.Catalog, deps Deps, cancel context.CancelFunc, remoteMachines []string) *sourceState {
 	if deps.AgentRefreshInterval <= 0 {
 		deps.AgentRefreshInterval = 2 * time.Second
 	}
+	deps.PullRequestRefreshInterval = pullRequestRefreshInterval(deps.PullRequestRefreshInterval)
+	now := deps.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &sourceState{
 		ctx: ctx, catalog: catalog, agents: newAgentRecords(deps.Agents, ""),
 		projectSource: deps.ProjectSource, agentSource: deps.AgentSource, containerSource: deps.ContainerSource,
 		agentRefreshInterval: deps.AgentRefreshInterval, gitLoader: deps.GitLoader,
-		remoteCommands: append([]tea.Cmd(nil), deps.RemoteCommands...),
-		remoteMachines: append([]string(nil), remoteMachines...),
-		remoteLoaded:   make(map[string]bool), groupErrors: make(map[string]string),
+		pullRequestLoader: deps.PullRequestLoader,
+		remoteCommands:    append([]tea.Cmd(nil), deps.RemoteCommands...),
+		remoteMachines:    append([]string(nil), remoteMachines...),
+		remoteLoaded:      make(map[string]bool), groupErrors: make(map[string]string),
 		groupWarnings: make(map[string]string), refreshErr: deps.AgentError,
-		cancelLoads: cancel, gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)), trace: deps.StartupTrace,
-		projectWarnings: deps.ProjectWarnings,
+		cancelLoads: cancel, gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
+		prSlots:     make(chan struct{}, pullRequestConcurrency(deps.PullRequestLoader)),
+		prFreshness: pullRequestFreshness(deps.PullRequestLoader), prRefreshInterval: deps.PullRequestRefreshInterval,
+		prRefreshedAt: make(map[string]time.Time), now: now,
+		trace: deps.StartupTrace, projectWarnings: deps.ProjectWarnings,
 	}
 }
 
@@ -109,6 +125,9 @@ func (s *sourceState) Init(projects []picker.Place) tea.Cmd {
 	}
 	for _, command := range s.remoteCommands {
 		cmds = append(cmds, s.remoteCommand(command, s.generations.remotes))
+	}
+	if s.pullRequestLoader != nil {
+		cmds = append(cmds, s.pullRequestTick())
 	}
 	cmds = append(cmds, s.gitCommands(projects)...)
 	if len(cmds) == 0 {
@@ -262,6 +281,9 @@ func (s *sourceState) Accept(msg tea.Msg) (sourceUpdate, bool) {
 				toast += fmt.Sprintf(" (+%d more)", len(msg.warnings)-1)
 			}
 		}
+		// A replaced project snapshot schedules a fresh pull request pass for
+		// its checkouts.
+		s.prRefreshedAt = make(map[string]time.Time)
 		return sourceUpdate{changed: true, toast: toast, projects: msg.projects, projectsUpdated: true, cmd: tea.Batch(s.gitCommands(msg.projects)...)}, true
 	case agentsMsg:
 		pendingBefore := s.pending()
@@ -305,6 +327,13 @@ func (s *sourceState) Accept(msg tea.Msg) (sourceUpdate, bool) {
 		s.applyRemote(msg.batch)
 		s.finishReload("remotes")
 		return sourceUpdate{changed: true, reloadDone: pendingBefore && !s.pending()}, true
+	case pullRequestMsg:
+		if msg.generation != s.generations.projects {
+			return sourceUpdate{}, false
+		}
+		// A zero request and a failed command are both silent: the accepted
+		// update clears any badge the row still carries.
+		return sourceUpdate{pullRequest: &msg, changed: true}, true
 	case picker.RemoteBatch:
 		pendingBefore := s.pending()
 		s.applyRemote(msg)
@@ -355,6 +384,79 @@ func (s *sourceState) syncCatalog() {
 		s.groupErrors[machine] = sanitize(status.Error)
 		s.groupWarnings[machine] = sanitize(status.Warning)
 	}
+}
+
+// pullRequestCommand loads the pull request decoration for one checkout. It
+// is scheduled only after that checkout's Git context was accepted, runs
+// within its own bounded slot pool, and carries the project generation so a
+// stale answer cannot decorate a replaced project snapshot.
+func (s *sourceState) pullRequestCommand(path string) tea.Cmd {
+	if s.pullRequestLoader == nil || path == "" {
+		return nil
+	}
+	generation := s.generations.projects
+	return func() tea.Msg {
+		s.trace.Mark("pull-request-start")
+		select {
+		case s.prSlots <- struct{}{}:
+			if s.ctx.Err() != nil {
+				<-s.prSlots
+				return nil
+			}
+		case <-s.ctx.Done():
+			return nil
+		}
+		defer func() { <-s.prSlots }()
+		value, err := s.pullRequestLoader.Load(s.ctx, path)
+		s.trace.Mark("pull-request-done")
+		return pullRequestMsg{generation: generation, path: path, pullRequest: value, err: err}
+	}
+}
+
+// duePullRequestCommand schedules revalidation for one checkout only when its
+// last scheduled load is older than the loader's freshness window. The
+// bookkeeping bounds a refresh pass: however often ticks arrive, each
+// checkout is asked at most once per window, so no gh call runs per tick per
+// row.
+func (s *sourceState) duePullRequestCommand(path string) tea.Cmd {
+	if s.pullRequestLoader == nil || path == "" {
+		return nil
+	}
+	now := s.now()
+	if last, ok := s.prRefreshedAt[path]; ok && now.Sub(last) < s.prFreshness {
+		return nil
+	}
+	s.prRefreshedAt[path] = now
+	return s.pullRequestCommand(path)
+}
+
+// duePullRequestCommands revalidates the given checkouts under the same
+// freshness policy.
+func (s *sourceState) duePullRequestCommands(places []picker.Place) []tea.Cmd {
+	if s.pullRequestLoader == nil {
+		return nil
+	}
+	cmds := make([]tea.Cmd, 0, len(places))
+	seen := make(map[string]bool, len(places))
+	for _, place := range places {
+		if seen[place.Path] {
+			continue
+		}
+		seen[place.Path] = true
+		if command := s.duePullRequestCommand(place.Path); command != nil {
+			cmds = append(cmds, command)
+		}
+	}
+	return cmds
+}
+
+// pullRequestTick schedules the next revalidation check. The check itself is
+// cheap and only queues a load for a checkout whose answer expired.
+func (s *sourceState) pullRequestTick() tea.Cmd {
+	if s.pullRequestLoader == nil {
+		return nil
+	}
+	return tea.Tick(s.prRefreshInterval, func(time.Time) tea.Msg { return pullRequestRefreshMsg{} })
 }
 
 func (s *sourceState) gitCommands(projects []picker.Place) []tea.Cmd {

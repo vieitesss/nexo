@@ -431,9 +431,16 @@ func (m renderFrame) projectLayout() projectColumns {
 		}
 		branch := shell.StringWidth(projectBranch(candidate.place))
 		summary := shell.StringWidth(m.projectSummary(candidate.place))
+		request := shell.StringWidth(projectPullRequestText(candidate.place))
 		git := branch
+		if request > 0 {
+			if git > 0 {
+				git += 2
+			}
+			git += request
+		}
 		if summary > 0 {
-			if branch > 0 {
+			if git > 0 {
 				git += 2
 			}
 			git += summary
@@ -549,30 +556,39 @@ func (m renderFrame) placeText(row row, marker string, selected bool) (string, s
 	return marker + line, ""
 }
 
+// projectGitStyled composes the branch, its pull request badge, and the Git
+// summary into one cell. The summary and the badge never truncate; the branch
+// gives up cells first.
 func (m renderFrame) projectGitStyled(place picker.Place, width int, selected bool) string {
 	if width <= 0 {
 		return ""
 	}
-	branch := highlightText(projectBranch(place), string(m.query), selected)
-	if !strings.Contains(branch, "\x1b[") {
-		branch = muted().Render(branch)
+	branch := ""
+	if projectBranch(place) != "" {
+		branch = highlightText(projectBranch(place), string(m.query), selected)
+		if !strings.Contains(branch, "\x1b[") {
+			branch = muted().Render(branch)
+		}
 	}
-	summary := m.projectSummaryStyled(place)
-	if summary == "" {
+	tail := m.projectPullRequestStyled(place, selected)
+	if summary := m.projectSummaryStyled(place); summary != "" {
+		if tail != "" {
+			tail += "  "
+		}
+		tail += summary
+	}
+	tailWidth := shell.StringWidth(tail)
+	if tail == "" {
 		return shell.Truncate(branch, width, "")
 	}
-	summaryWidth := shell.StringWidth(summary)
-	if summaryWidth >= width {
-		return shell.Truncate(summary, width, "")
+	if projectBranch(place) == "" || tailWidth >= width {
+		return shell.Truncate(tail, width, "")
 	}
-	if projectBranch(place) == "" {
-		return summary
-	}
-	branchWidth := width - summaryWidth - 2
+	branchWidth := width - tailWidth - 2
 	if branchWidth <= 0 {
-		return summary
+		return tail
 	}
-	return shell.Truncate(branch, branchWidth, "") + "  " + summary
+	return shell.Truncate(branch, branchWidth, "") + "  " + tail
 }
 
 func (m renderFrame) projectPathCell(group string, width int, selected bool) string {
@@ -595,6 +611,36 @@ func projectBranch(place picker.Place) string {
 		return "⎇ " + identity
 	}
 	return ""
+}
+
+func projectPullRequest(place picker.Place) *picker.PullRequest {
+	if place.PullRequest == nil || place.PullRequest.Number <= 0 || place.PullRequest.State == "" {
+		return nil
+	}
+	return place.PullRequest
+}
+
+func projectPullRequestText(place picker.Place) string {
+	request := projectPullRequest(place)
+	if request == nil {
+		return ""
+	}
+	return "#" + itoa(request.Number)
+}
+
+func (m renderFrame) projectPullRequestStyled(place picker.Place, selected bool) string {
+	request := projectPullRequest(place)
+	if request == nil {
+		return ""
+	}
+	text := pullRequestStyle(request.State).Render("#" + itoa(request.Number))
+	if selected {
+		// The selection pass strips unmarked foregrounds. Marking the badge
+		// keeps its state colour while the selected row stays the only row
+		// with a painted background.
+		return selectedStateMarkerStart + text + selectedStateMarkerEnd
+	}
+	return text
 }
 
 func (m renderFrame) projectSummary(place picker.Place) string {
@@ -895,6 +941,28 @@ func yellow() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Co
 func brightGreen() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("10")) }
 
 func brightRed() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("9")) }
+
+// pullRequestPalette is the badge foreground per review state. The light
+// variants are dark enough to read on light terminals and on the light
+// selection background; the dark variants are bright enough for dark
+// terminals and the dark selection background. These are ANSI palette
+// indices, so the terminal's own palette decides the exact contrast; the
+// values here are the conventional xterm variants.
+var pullRequestPalette = map[picker.PullRequestState]lipgloss.AdaptiveColor{
+	picker.PullRequestOpen:   {Light: "22", Dark: "46"},
+	picker.PullRequestMerged: {Light: "90", Dark: "219"},
+	picker.PullRequestClosed: {Light: "88", Dark: "217"},
+}
+
+// pullRequestStyle gives each review state its own ANSI colour. The badge sets
+// no background, so the selected row stays the only painted row.
+func pullRequestStyle(state picker.PullRequestState) lipgloss.Style {
+	color, ok := pullRequestPalette[state]
+	if !ok {
+		color = pullRequestPalette[picker.PullRequestOpen]
+	}
+	return lipgloss.NewStyle().Foreground(color)
+}
 
 func bold() lipgloss.Style { return normal().Bold(true) }
 

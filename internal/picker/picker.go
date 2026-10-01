@@ -70,6 +70,9 @@ type Place struct {
 	LinkedWorktree    bool       `json:"linked_worktree,omitempty"`
 	// GitContext is populated asynchronously for Git project candidates.
 	GitContext *GitContext `json:"-"`
+	// PullRequest is populated asynchronously from the checkout's upstream;
+	// nil hides the badge.
+	PullRequest *PullRequest `json:"-"`
 	// Agents is the latest asynchronous agent snapshot for a container.
 	Agents []capabilities.Agent `json:"-"`
 	// ParentPath is the primary checkout path for a linked worktree.
