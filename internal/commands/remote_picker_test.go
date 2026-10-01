@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,27 @@ import (
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/runner"
 )
+
+func TestRemotePlaceCommandsListAgentsWithConfiguredBackend(t *testing.T) {
+	var command string
+	commands := remotePlaceCommands(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Config: config.Config{Remote: config.RemoteConfig{
+			Machines: []string{"dev"}, Backends: map[string]string{"dev": "tmux"},
+		}},
+		Runner: runner.Func(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			command = args[len(args)-1]
+			return []byte("__NEXO_REMOTE_KIND__tmux\n$1\tapi\n__NEXO_AGENTS_START__\n[{\"container\":\"api\",\"state\":\"working\"}]\n__NEXO_AGENTS_END__\n"), nil
+		}),
+	})
+	batch := commands[0]().(picker.RemoteBatch)
+	if strings.Contains(command, "herdr' 'status") || !strings.Contains(command, "'nexo' '--backend' 'tmux' 'agents' '--json'") {
+		t.Fatalf("remote command = %q, want configured tmux agent command without probe", command)
+	}
+	if len(batch.Agents) != 1 || batch.Agents[0].Container != "api" {
+		t.Fatalf("agents = %#v, want remote tmux agent", batch.Agents)
+	}
+}
 
 func TestRemotePlaceCommandsDeliverFastMachineWithoutWaitingForSlowMachine(t *testing.T) {
 	slowRelease := make(chan struct{})

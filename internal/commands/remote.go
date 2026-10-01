@@ -59,7 +59,7 @@ func runRemoteList(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) != 1 {
 		return fmt.Errorf("remote list accepts no arguments")
 	}
-	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig)
+	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithBackends(invocation.Config.Remote.Backends)
 	results := lister.List(ctx, invocation.Config.Remote.Machines)
 	if invocation.JSON {
 		return json.NewEncoder(invocation.Stdout).Encode(results)
@@ -328,10 +328,14 @@ func decodePaneWorkspaceID(output []byte) (string, error) {
 func listRemoteMachine(ctx context.Context, invocation Invocation, machine string) (remote.MachineResult, error) {
 	if invocation.Runner == nil {
 		// Keep the adapter seam useful to callers that already resolved a
-		// tmux proxy and do not need a remote probe.
-		return remote.MachineResult{Machine: machine, Kind: remote.KindTmux}, nil
+		// proxy and do not need a remote probe.
+		kind := remote.Kind(invocation.Config.Remote.BackendFor(machine))
+		if kind != remote.KindTmux && kind != remote.KindHerdr {
+			kind = remote.KindTmux
+		}
+		return remote.MachineResult{Machine: machine, Kind: kind}, nil
 	}
-	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithKindDetection()
+	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithBackends(invocation.Config.Remote.Backends).WithKindDetection()
 	result := lister.ListMachine(ctx, machine)
 	if result.Error != "" {
 		return result, fmt.Errorf("list remote machine %q: %s", machine, result.Error)
@@ -380,12 +384,11 @@ func openRemoteContainerWithResolver(ctx context.Context, invocation Invocation,
 		if invocation.Selection.Kind != backend.Herdr {
 			return fmt.Errorf("unsupported: %s runs Herdr; use Herdr to open it", machine)
 		}
-		// Herdr workspaces are opened through its native machine path. The
-		// local action resolver is tmux-oriented and must not proxy them.
+		// Herdr workspaces are opened through its native machine path.
 		return openRemoteContainer(ctx, invocation, machine, container, kind)
 	}
-	if invocation.Selection.Kind != backend.Tmux {
-		return fmt.Errorf("unsupported: %s runs tmux; use tmux to open it", machine)
+	if invocation.Selection.Kind != backend.Tmux && invocation.Selection.Kind != backend.Herdr {
+		return fmt.Errorf("unsupported: %s runs tmux; use tmux or Herdr to open it", machine)
 	}
 	if invocation.ContainerResolver != nil {
 		actions, err := invocation.ContainerResolver.ResolveContainerActions(ctx, machine)

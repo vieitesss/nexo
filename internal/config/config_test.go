@@ -135,6 +135,43 @@ func TestLoadParsesRemoteSettings(t *testing.T) {
 	}
 }
 
+func TestLoadParsesRemoteBackends(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	contents := []byte("[remote]\nmachines = [\"devbox\", \"gpu1\"]\n[remote.backends]\ndevbox = \"tmux\"\ngpu1 = \"herdr\"\n")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Remote.BackendFor("devbox") != "tmux" || got.Remote.BackendFor("gpu1") != "herdr" || got.Remote.BackendFor("other") != "auto" {
+		t.Fatalf("remote backends = %#v, want per-machine values and auto default", got.Remote.Backends)
+	}
+}
+
+func TestLoadRejectsInvalidRemoteBackends(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		config  string
+		message string
+	}{
+		{name: "unknown machine", config: "[remote]\nmachines = [\"devbox\"]\n[remote.backends]\nother = \"tmux\"\n", message: "unknown machine"},
+		{name: "unknown value", config: "[remote]\nmachines = [\"devbox\"]\n[remote.backends]\ndevbox = \"screen\"\n", message: "invalid remote backend"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), test.message) || !strings.Contains(err.Error(), "remote.backends") {
+				t.Fatalf("Load() error = %v, want %q and remote.backends", err, test.message)
+			}
+		})
+	}
+}
+
 func TestLoadParsesRemoteProxySettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[remote]\ntransport = \"mosh\"\nreconnect-initial = \"2s\"\nreconnect-max = \"12s\"\n"), 0o600); err != nil {

@@ -1,10 +1,11 @@
 # Remote containers
 
-Remote machines are listed through one SSH round trip. The remote shell first
-checks whether a Herdr server is running with the read-only
+Remote machines are listed through one SSH round trip. By default the remote
+shell checks whether a Herdr server is running with the read-only
 `herdr status server --json` command, then emits that machine's kind beside
-its container listing. The kind is cached in that listing result and reused
-when a place is opened; no second probe is needed.
+its container listing. An entry in `[remote.backends]` selects `tmux` or
+`herdr` directly and skips this probe. The kind is cached in that listing
+result and reused when a place is opened; no second probe is needed.
 
 A machine whose server is not running Herdr is treated as a tmux machine. On a
 tmux backend, opening one of its containers creates a local proxy container
@@ -19,6 +20,9 @@ ssh-config = "~/.ssh/config"
 transport = "ssh"              # ssh (default), mosh, or et
 reconnect-initial = "1s"
 reconnect-max = "30s"
+
+[remote.backends]
+devbox = "tmux"                 # auto (default), tmux, or herdr
 ```
 
 ## Herdr machines
@@ -45,14 +49,18 @@ unsupported-backend message directing the user to open it from Herdr instead.
 
 When the local backend is Herdr and the remote kind is tmux, nexo fills the
 missing capability with a Herdr workspace proxy. The workspace label is
-`MACHINE/CONTAINER`, but labels are display values only. Nexo stores the exact
-identity in Herdr workspace display metadata as the `nexo-proxy` token and
-finds proxies by that token, never by label. Its root pane runs the same
-hidden `nexo remote attach` command and reconnect loop used by tmux proxies.
+`MACHINE/CONTAINER`. Nexo stores the exact identity in Herdr workspace display
+metadata as the `nexo-proxy` token and normally finds proxies by that token.
+Its root pane runs the same hidden `nexo remote attach` command and reconnect
+loop used by tmux proxies.
 
-Tokens are display metadata rather than durable identity. If Herdr drops them,
-for example after a server restart, nexo cannot identify the old workspace and
-creates a new proxy instead of reusing it.
+A local workspace whose label exactly matches `MACHINE/CONTAINER` for a
+configured machine is also treated as a proxy, even without a token. Opening
+it reuses the workspace and stamps the token on it. Such a proxy is hidden from
+the local machine and merged with the matching remote row. If the remote is
+unreachable or the container is gone, the proxy remains visible under its
+machine so it can be closed. Labels such as `0` without a configured machine
+prefix remain local.
 
 ## Attachment and commands
 

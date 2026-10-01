@@ -50,10 +50,11 @@ type Lister struct {
 	SSHConfig  string
 	Timeout    time.Duration
 	DetectKind bool
+	Backends   map[string]string
 }
 
 // NewLister creates an SSH lister. Backend selection controls local decoding;
-// a detected remote kind controls the remote listing command.
+// per-machine settings control remote commands, with auto detection by default.
 func NewLister(commandRunner runner.CommandRunner, selected backend.Kind, sshConfig string) Lister {
 	return Lister{
 		Runner:    commandRunner,
@@ -63,11 +64,22 @@ func NewLister(commandRunner runner.CommandRunner, selected backend.Kind, sshCon
 	}
 }
 
-// WithKindDetection enables the read-only remote multiplexer probe in the
-// listing round trip. The result carries the detected kind for reuse by an
-// opening operation, so no second probe is needed.
+// WithKindDetection enables remote kind framing in the listing round trip.
+// Auto machines use a read-only multiplexer probe; explicit machines skip it.
 func (l Lister) WithKindDetection() Lister {
 	l.DetectKind = true
+	return l
+}
+
+// WithBackends supplies explicit per-machine remote backend selections.
+func (l Lister) WithBackends(backends map[string]string) Lister {
+	l.Backends = make(map[string]string, len(backends))
+	for machine, selected := range backends {
+		l.Backends[strings.TrimSpace(machine)] = strings.ToLower(strings.TrimSpace(selected))
+	}
+	if len(l.Backends) > 0 {
+		l.DetectKind = true
+	}
 	return l
 }
 
@@ -221,20 +233,37 @@ func (l Lister) run(ctx context.Context, machine string) ([]byte, error) {
 	if !l.DetectKind {
 		return l.runCommand(ctx, machine, l.backendCommand())
 	}
-	return l.runCommand(ctx, machine, l.remoteListingCommand(false))
+	return l.runCommand(ctx, machine, l.remoteListingCommand(machine, false))
 }
 
 func (l Lister) runWithAgents(ctx context.Context, machine string) ([]byte, error) {
 	if !l.DetectKind {
 		return l.runCommand(ctx, machine, l.backendAgentsCommand())
 	}
-	return l.runCommand(ctx, machine, l.remoteListingCommand(true))
+	return l.runCommand(ctx, machine, l.remoteListingCommand(machine, true))
 }
 
-// remoteListingCommand probes the remote server and emits its kind beside the
-// one listing gathered in this SSH round trip. A running Herdr server wins;
-// tmux is the fallback for machines that do not expose Herdr.
-func (l Lister) remoteListingCommand(withAgents bool) string {
+// remoteListingCommand emits one authoritative listing and its backend kind.
+// An explicit per-machine backend never probes the other multiplexer.
+func (l Lister) remoteListingCommand(machine string, withAgents bool) string {
+	configured := strings.ToLower(strings.TrimSpace(l.Backends[strings.TrimSpace(machine)]))
+	if configured == string(backend.Tmux) || configured == string(backend.Herdr) {
+		kind := Kind(configured)
+		listing := l.backendCommandFor(backend.Kind(configured))
+		agents := ShellCommand("nexo", "--backend", configured, "agents", "--json")
+		agentFrames := ""
+		if withAgents {
+			agentFrames = "; printf '\\n%s\\n' " + ShellCommand(agentFrameStart) + "; " + agents + " 2>/dev/null || true; printf '\\n%s\\n' " + ShellCommand(agentFrameEnd)
+		}
+		return strings.Join([]string{
+			"listing_status=0",
+			"listing_output=$(" + listing + ") || listing_status=$?",
+			"printf '%s\\n' " + ShellCommand(remoteKindFrameStart+string(kind)),
+			"printf '%s\\n' \"$listing_output\"" + agentFrames,
+			"exit $listing_status",
+		}, "; ")
+	}
+
 	herdrStatus := ShellCommand("herdr", "status", "server", "--json")
 	herdrList := ShellCommand("herdr", "workspace", "list")
 	tmuxList := l.backendTmuxCommand()
@@ -287,8 +316,12 @@ func (l Lister) runCommand(ctx context.Context, machine, command string) ([]byte
 }
 
 func (l Lister) backendCommand() string {
-	if l.Backend == backend.Tmux {
-		return ShellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
+	return l.backendCommandFor(l.Backend)
+}
+
+func (l Lister) backendCommandFor(selected backend.Kind) string {
+	if selected == backend.Tmux {
+		return l.backendTmuxCommand()
 	}
 	return ShellCommand("herdr", "workspace", "list")
 }

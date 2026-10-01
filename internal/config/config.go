@@ -79,11 +79,12 @@ func parse(contents []byte, path string) (Config, error) {
 		ProjectsConfig
 		Agents AgentsConfig `toml:"agents"`
 		Remote struct {
-			Machines         []string `toml:"machines"`
-			SSHConfig        string   `toml:"ssh-config"`
-			Transport        string   `toml:"transport"`
-			ReconnectInitial *string  `toml:"reconnect-initial"`
-			ReconnectMax     *string  `toml:"reconnect-max"`
+			Machines         []string          `toml:"machines"`
+			Backends         map[string]string `toml:"backends"`
+			SSHConfig        string            `toml:"ssh-config"`
+			Transport        string            `toml:"transport"`
+			ReconnectInitial *string           `toml:"reconnect-initial"`
+			ReconnectMax     *string           `toml:"reconnect-max"`
 		} `toml:"remote"`
 	}
 	if err := decode(contents, path, &raw); err != nil {
@@ -95,6 +96,7 @@ func parse(contents []byte, path string) (Config, error) {
 		Agents:         raw.Agents,
 		Remote: RemoteConfig{
 			Machines:  raw.Remote.Machines,
+			Backends:  raw.Remote.Backends,
 			SSHConfig: raw.Remote.SSHConfig,
 			Transport: raw.Remote.Transport,
 		},

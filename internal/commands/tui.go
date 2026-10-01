@@ -70,12 +70,18 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 		}
 	}
 	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Projects: picker.ProjectPlaces(discovery.Candidates), Input: invocation.Stdin, Output: invocation.Stdout}
+	localProxyIDs := make(map[string]bool)
 	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
 		containers, err := lister.ListContainers(ctx)
 		if err != nil {
 			return tui.Deps{}, fmt.Errorf("list containers: %w", err)
 		}
 		deps.Containers = containers
+		for _, container := range containers {
+			if container.Proxy {
+				localProxyIDs[container.Machine+"\x00"+container.ID] = true
+			}
+		}
 	}
 	if source, ok := invocation.Adapter.(capabilities.AgentSource); ok {
 		deps.AgentSource = source
@@ -136,17 +142,38 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 			groups[index].ids = append(groups[index].ids, ref.ID)
 		}
 		for _, group := range groups {
+			for _, id := range group.ids {
+				if !localProxyIDs[group.machine+"\x00"+id] {
+					continue
+				}
+				actions, resolveErr := (localContainerResolver{adapter: invocation.Adapter}).ResolveContainerActions(actionCtx, picker.LocalMachine())
+				if resolveErr != nil {
+					return resolveErr
+				}
+				if err := actions.KillContainer(actionCtx, id); err != nil {
+					return err
+				}
+			}
+			remoteIDs := make([]string, 0, len(group.ids))
+			for _, id := range group.ids {
+				if !localProxyIDs[group.machine+"\x00"+id] {
+					remoteIDs = append(remoteIDs, id)
+				}
+			}
+			if len(remoteIDs) == 0 {
+				continue
+			}
 			actions, resolveErr := resolver.ResolveContainerActions(actionCtx, group.machine)
 			if resolveErr != nil {
 				return resolveErr
 			}
 			if batch, ok := actions.(capabilities.ContainerBatchKiller); ok {
-				if err := batch.KillContainers(actionCtx, group.ids); err != nil {
+				if err := batch.KillContainers(actionCtx, remoteIDs); err != nil {
 					return err
 				}
 				continue
 			}
-			for _, id := range group.ids {
+			for _, id := range remoteIDs {
 				if err := actions.KillContainer(actionCtx, id); err != nil {
 					return err
 				}
@@ -166,8 +193,8 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 			}
 			switch kind {
 			case remote.KindTmux:
-				if invocation.Selection.Kind != backend.Tmux {
-					return fmt.Errorf("unsupported: %s runs tmux; use tmux to focus it", ref.Machine)
+				if invocation.Selection.Kind != backend.Tmux && invocation.Selection.Kind != backend.Herdr {
+					return fmt.Errorf("unsupported: %s runs tmux; use tmux or Herdr to focus it", ref.Machine)
 				}
 			case remote.KindHerdr:
 				if invocation.Selection.Kind != backend.Herdr {

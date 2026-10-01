@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/config"
 )
 
 type call struct {
@@ -63,6 +64,23 @@ func TestListContainersUsesWorkspaceAndFocusedPane(t *testing.T) {
 	}
 	if len(containers) != 2 || containers[0].ID != "workspace-1" || containers[0].ActivePaneID != "pane-2" || containers[1].ActivePaneID != "pane-3" {
 		t.Fatalf("containers = %#v, want focused panes", containers)
+	}
+}
+
+func TestListContainersMapsConfiguredProxyLabelsToRemoteMachine(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list":              []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"proxy","label":"dev/api"},{"workspace_id":"local","label":"0"}]}}`),
+		"pane list --workspace proxy": []byte(`{"result":{"type":"pane_list","panes":[]}}`),
+		"pane list --workspace local": []byte(`{"result":{"type":"pane_list","panes":[]}}`),
+	}}
+	backend := New(runner)
+	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"dev"}}, "")
+	containers, err := backend.ListContainers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(containers) != 2 || containers[0].Machine != "dev" || containers[0].Name != "api" || !containers[0].Proxy || containers[1].Machine == "dev" || containers[1].Name != "0" {
+		t.Fatalf("containers = %#v, want remote proxy and local workspace", containers)
 	}
 }
 
