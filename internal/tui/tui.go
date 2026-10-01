@@ -84,16 +84,20 @@ type Deps struct {
 	FocusAgent    func(context.Context, AgentRef) error
 	// CloneProject is the backend-neutral Git action used by the Projects-tab
 	// staged form. It must not open or focus a container.
-	CloneProject   func(context.Context, string, string) error
-	AddProjectPath func(context.Context, string) error
+	CloneProject func(context.Context, string, string) error
 	// CreateDirectory is the backend-neutral filesystem action behind the
 	// Projects-tab directory form. It must not open or focus a container.
 	CreateDirectory func(context.Context, string) error
-	CloneConfig     config.CloneConfig
-	ProjectPaths    []string
-	Home            string
-	KillContainers  func(context.Context, []picker.ContainerRef) error
-	RenameContainer func(context.Context, picker.ContainerRef, string) error
+	// ExtractWorktree is the shared worktree lifecycle used by the Projects-tab
+	// staged form. The backend owns preflight, creation, opening and rollback.
+	ExtractWorktree     func(context.Context, string, string, string) (capabilities.Worktree, error)
+	ExtractReturnBranch func(context.Context, string) (string, error)
+	AddProjectPath      func(context.Context, string) error
+	CloneConfig         config.CloneConfig
+	ProjectPaths        []string
+	Home                string
+	KillContainers      func(context.Context, []picker.ContainerRef) error
+	RenameContainer     func(context.Context, picker.ContainerRef, string) error
 
 	Input      io.Reader
 	Output     io.Writer
@@ -497,7 +501,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SetSize(msg.Width, msg.Height)
 		return m, nil
 	case actionMsg:
-		if msg.kind == "clone" || msg.kind == "mkdir" {
+		if msg.kind == "clone" || msg.kind == "mkdir" || msg.kind == "extract" {
 			if msg.generation != 0 && msg.generation != m.input.actionGeneration {
 				return m, nil
 			}

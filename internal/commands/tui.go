@@ -14,6 +14,7 @@ import (
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/destination"
 	gitops "github.com/vieitesss/nexo/internal/git"
+	"github.com/vieitesss/nexo/internal/lifecycle"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/remote"
@@ -148,6 +149,21 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 			return err
 		}
 		return destination.CreateDirectory(path)
+	}
+	deps.ExtractReturnBranch = func(extractCtx context.Context, repo string) (string, error) {
+		if invocation.Runner == nil {
+			return "", errors.New("worktree extraction requires a command runner")
+		}
+		return lifecycle.SuggestedReturnBranch(extractCtx, repo, gitops.New(invocation.Runner))
+	}
+	deps.ExtractWorktree = func(extractCtx context.Context, repo, destination, returnBranch string) (capabilities.Worktree, error) {
+		extractor, ok := invocation.Adapter.(capabilities.WorktreeExtractor)
+		if !ok {
+			return capabilities.Worktree{}, fmt.Errorf("backend %q does not support extracting worktrees", invocation.Selection.Kind)
+		}
+		return extractor.ExtractWorktree(extractCtx, capabilities.WorktreeExtractOptions{
+			Repo: repo, Destination: destination, ReturnBranch: returnBranch,
+		})
 	}
 	deps.OpenProject = func(openCtx context.Context, place picker.Place) error {
 		opener, ok := invocation.Adapter.(capabilities.ProjectOpener)

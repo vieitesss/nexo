@@ -732,6 +732,9 @@ func (m renderFrame) footer() string {
 		}
 		if current, ok := m.currentItem(); ok && current.place.Kind == picker.ProjectKind {
 			left = append(left, hint("Ctrl-O", "clone"))
+			if current.place.Git {
+				left = append(left, hint("Ctrl-E", "extract"))
+			}
 		}
 	}
 	if m.currentContainer() || len(m.markedTargets()) > 0 {

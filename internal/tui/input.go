@@ -397,6 +397,14 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 			return inputEffect{rebuild: true}
 		}
 		return inputEffect{}
+	case tea.KeyCtrlE:
+		if s.tab == ProjectsTab {
+			if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ProjectKind && current.place.Git {
+				s.form = newExtractForm(s.deps, current.place, s.ctx)
+				return inputEffect{rebuild: true}
+			}
+		}
+		return inputEffect{}
 	case tea.KeyCtrlX:
 		refs := append([]picker.ContainerRef(nil), frame.markedTargets()...)
 		if len(refs) == 0 {

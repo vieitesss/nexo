@@ -32,6 +32,23 @@ type ExtractAdapter struct {
 	Git WorktreeGit
 }
 
+// SuggestedReturnBranch applies the same previous-branch and default-branch
+// policy used by extraction without mutating the checkout. It is used by
+// interactive callers to prefill the editable return-branch field.
+func SuggestedReturnBranch(ctx context.Context, repo string, git WorktreeGit) (string, error) {
+	if git == nil {
+		return "", errors.New("worktree extraction requires a git adapter")
+	}
+	branch, err := git.CurrentBranch(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	if branch == "" {
+		return "", fmt.Errorf("original worktree %q is not on a named branch", repo)
+	}
+	return chooseReturnBranch(ctx, git, repo, branch, "")
+}
+
 // ExtractWorktree moves the branch currently checked out in the original
 // worktree into a new worktree at the destination, leaving the original on a
 // return branch. Every preflight check runs before the original is mutated.

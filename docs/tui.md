@@ -93,6 +93,17 @@ and add-parent offer, but runs no Git command and creates missing parents.
 Creation never opens or focuses a container; on success the catalog refreshes
 and selects the new directory.
 
+Press `Ctrl-E` on a selected Git checkout (including a linked worktree) to open the
+branch-extraction form. The destination starts with a sibling-path suggestion and
+the return-branch stage starts with the same previous-branch/default-branch
+suggestion used by the CLI; both remain editable. Enter advances through the
+stages and starts the asynchronous extraction from the return-branch stage.
+Dirty checkouts, existing destinations, branch ownership conflicts, and the lack
+of an eligible return branch remain inline in the form. Escape cancels, including
+an in-flight extraction, and late results from a canceled action are ignored. A
+successful extraction refreshes the catalog, selects the new worktree, and opens
+and focuses it according to the selected backend's worktree policy.
+
 ## Keys
 
 See the picker key table in the README for the complete list. Left/Right only
