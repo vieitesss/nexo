@@ -193,6 +193,28 @@ func TestProjectsFlatNaturalNameWidthWhenRowFits(t *testing.T) {
 	}
 }
 
+// TestProjectsFlatNameKeepsFullWidthForALongFolder pins the priority: the
+// folder truncates from the left before the name loses any character, so a
+// 40-cell name at 80 columns stays whole instead of dropping to the 45% cap.
+func TestProjectsFlatNameKeepsFullWidthForALongFolder(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	name := strings.Repeat("n", 40)
+	group := "/home/tester/work/some/rather/deep/folder"
+	model := NewModel(context.Background(), Deps{Projects: []picker.Place{
+		{Kind: picker.ProjectKind, Path: group + "/" + name, Group: group, DisplayRemainder: name, Git: true, GitContext: &picker.GitContext{Identity: "main"}},
+	}}, ProjectsTab)
+	model.SetQuery("n")
+	model.SetSize(80, 10)
+	layout := model.projectLayout()
+	if want := shell.StringWidth(name); layout.name != want {
+		t.Fatalf("name column %d shrank from %d to keep the folder: %+v", layout.name, want, layout)
+	}
+	plain := shell.Plain(model.View())
+	if !strings.Contains(plain, name) {
+		t.Fatalf("long folder starved the name: %q", plain)
+	}
+}
+
 func TestProjectBranchAndFolderMatchesAreHighlighted(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI)
 	branch := NewModel(context.Background(), Deps{Projects: []picker.Place{{
@@ -377,7 +399,7 @@ func TestProjectsFlatFolderLeadsNameAsPath(t *testing.T) {
 	model.SetQuery("gitops")
 	model.SetSize(120, 16)
 	plain := shell.Plain(model.View())
-	if !strings.Contains(plain, "~/work/prefapp/  gitops-k8s") {
+	if !strings.Contains(plain, "~/work/prefapp/gitops-k8s") {
 		t.Fatalf("folder did not lead the name as a path: %q", plain)
 	}
 	offset := -1
@@ -412,8 +434,9 @@ func TestProjectsFlatFolderLeftTruncatesThenDrops(t *testing.T) {
 		t.Fatalf("folder truncation starved the name: %q", plain)
 	}
 
-	// One step narrower the name still fits, so the folder is dropped whole.
-	model.SetSize(96, 16)
+	// One step narrower leaves less than the folder's floor, so the folder is
+	// dropped whole while the name keeps every cell.
+	model.SetSize(95, 16)
 	plain = shell.Plain(model.View())
 	if strings.Contains(plain, "fapp") || strings.Contains(plain, "firestartr-pro/") {
 		t.Fatalf("folder survived a width where the name needs the cells: %q", plain)

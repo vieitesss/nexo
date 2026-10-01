@@ -1757,61 +1757,53 @@ func (m Model) projectLayout() projectColumns {
 	}
 
 	// The marker and the gutter between the name and the Git column are fixed
-	// costs; the folder column pays for its own gutter when it survives.
+	// costs. The folder column takes only what the name and Git column leave
+	// unused, so it never costs the name a cell.
 	base := max(0, m.width-(2+2))
 
-	// Do not cap a row that already fits naturally.
-	if maxName+maxGit <= base && (!layout.search || maxPath == 0 || maxName+maxGit+maxPath+2 <= base) {
+	// The name and the Git column are sized on their own, without the folder.
+	// A row that already fits keeps its natural widths.
+	if maxName+maxGit <= base {
 		layout.name, layout.git = maxName, maxGit
-		if layout.search && maxPath > 0 {
-			layout.path = maxPath
+	} else {
+		// The name leads. It claims the longest visible name up to its share
+		// of the row, but never drops below its floor.
+		nameFloor := min(projectMinName, maxName)
+		nameCap := int(float64(m.width) * projectNameShare)
+		if nameCap < projectMinName {
+			nameCap = projectMinName
 		}
-		return layout
-	}
+		nameTarget := min(maxName, nameCap)
+		if nameTarget < nameFloor {
+			nameTarget = nameFloor
+		}
+		if nameTarget > base {
+			nameTarget = base
+		}
 
-	// The name leads. It claims the longest visible name up to its share of
-	// the row, but never drops below its floor.
-	nameFloor := min(projectMinName, maxName)
-	nameCap := int(float64(m.width) * projectNameShare)
-	if nameCap < projectMinName {
-		nameCap = projectMinName
-	}
-	nameTarget := min(maxName, nameCap)
-	if nameTarget < nameFloor {
-		nameTarget = nameFloor
-	}
-	if nameTarget > base {
-		nameTarget = base
-	}
-
-	// The Git summary never truncates; the branch gives up cells first and the
-	// name shrinks only after the summary floor is protected.
-	gitFloor := max(maxSummary, min(maxGit, projectMinBranch))
-	git := min(maxGit, max(base-nameTarget, 0))
-	if git < gitFloor {
-		nameTarget = min(nameTarget, max(nameFloor, base-gitFloor))
-		git = min(maxGit, max(base-nameTarget, 0))
+		// The Git summary never truncates; the branch gives up cells first
+		// and the name shrinks only after the summary floor is protected.
+		gitFloor := max(maxSummary, min(maxGit, projectMinBranch))
+		git := min(maxGit, max(base-nameTarget, 0))
 		if git < gitFloor {
-			git = gitFloor
+			nameTarget = min(nameTarget, max(nameFloor, base-gitFloor))
+			git = min(maxGit, max(base-nameTarget, 0))
+			if git < gitFloor {
+				git = gitFloor
+			}
 		}
+		layout.name, layout.git = nameTarget, git
 	}
 
-	// The Git column takes what it needs first; the folder gets only what is
-	// left. It is right-aligned and left-truncated, so it can stop short of its
-	// natural width without moving the name, and it is dropped before the name
-	// gives up cells or the branch is cut.
-	pathCost := 0
+	// The folder is lowest priority: it is right-aligned and left-truncated,
+	// so it can stop short of its natural width without moving the name, and
+	// it is dropped whole before the name loses a cell or the branch is cut.
 	if layout.search && maxPath > 0 {
-		if leftover := base - nameTarget - git; leftover >= projectMinPath+2 {
-			layout.path = min(maxPath, leftover-2)
-			pathCost = layout.path + 2
+		if leftover := base - layout.name - layout.git; leftover >= projectMinPath {
+			layout.path = min(maxPath, leftover)
 		}
 	}
 
-	// The name keeps its target unless protecting the summary floor leaves it
-	// with less room.
-	layout.name = min(nameTarget, max(nameFloor, base-pathCost-git))
-	layout.git = git
 	layout.name = max(layout.name, 0)
 	layout.git = max(layout.git, 0)
 	return layout
@@ -1858,7 +1850,7 @@ func (m Model) placeText(row row, marker string) (string, string) {
 	gitCell := fit(m.projectGitStyled(row.place, layout.git), layout.git)
 	line := ""
 	if layout.search && layout.path > 0 {
-		line = m.projectPathCell(row.group, layout.path) + "  "
+		line = m.projectPathCell(row.group, layout.path)
 	}
 	line += nameCell + "  " + gitCell
 	return marker + line, ""
