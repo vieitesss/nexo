@@ -77,6 +77,7 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 			return tui.Deps{}, fmt.Errorf("list containers: %w", err)
 		}
 		deps.Containers = containers
+		deps.ContainerSource = lister
 		for _, container := range containers {
 			if container.Proxy {
 				localProxyIDs[container.Machine+"\x00"+container.ID] = true

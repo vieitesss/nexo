@@ -8,19 +8,30 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/picker"
 )
 
-func TestKillConfirmationUsesMarkedContainers(t *testing.T) {
-	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
+func TestKillConfirmationRunsInTUI(t *testing.T) {
+	deps := testContainerDeps()
+	var got []picker.ContainerRef
+	deps.KillContainers = func(_ context.Context, refs []picker.ContainerRef) error {
+		got = append([]picker.ContainerRef(nil), refs...)
+		return nil
+	}
+	model := NewModel(context.Background(), deps, ContainersTab)
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlT})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlX})
-	if _, ok := model.KillTargetsRequest(); ok {
-		t.Fatal("kill became ready before confirmation")
+	if !model.confirmKill {
+		t.Fatal("kill did not enter confirmation")
 	}
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	refs, ok := model.KillTargetsRequest()
-	if !ok || len(refs) != 1 || refs[0].ID != "one" {
-		t.Fatalf("kill targets = %v, %v", refs, ok)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	model = updated.(Model)
+	if cmd == nil || !model.actionInFlight {
+		t.Fatalf("kill did not start in TUI: cmd=%v model=%+v", cmd != nil, model)
+	}
+	model = updateModel(t, model, cmd())
+	if len(got) != 1 || got[0].ID != "one" || len(model.Marked()) != 0 || model.toast != "containers killed" {
+		t.Fatalf("kill result = refs %v, marks %v, toast %q", got, model.Marked(), model.toast)
 	}
 }
 
@@ -41,13 +52,24 @@ func TestAgentIdentityStaysSelectedAcrossRefresh(t *testing.T) {
 	}
 }
 
-func TestRenamePromptRequiresContainer(t *testing.T) {
-	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
+func TestRenamePromptRunsInTUI(t *testing.T) {
+	deps := testContainerDeps()
+	var gotRef picker.ContainerRef
+	var gotName string
+	deps.RenameContainer = func(_ context.Context, ref picker.ContainerRef, name string) error {
+		gotRef, gotName = ref, name
+		return nil
+	}
+	model := NewModel(context.Background(), deps, ContainersTab)
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlR})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n', 'e', 'w'}})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	ref, name, ok := model.RenameTargetRequest()
-	if !ok || ref.ID != "one" || name != "new" {
-		t.Fatalf("rename = %v, %q, %v", ref, name, ok)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil || !model.actionInFlight {
+		t.Fatal("rename did not start in TUI")
+	}
+	model = updateModel(t, model, cmd())
+	if gotRef.ID != "one" || gotName != "new" || model.toast != "container renamed" {
+		t.Fatalf("rename = %v, %q, toast %q", gotRef, gotName, model.toast)
 	}
 }

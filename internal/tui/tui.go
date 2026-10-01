@@ -53,6 +53,7 @@ type Deps struct {
 	Containers []capabilities.Container
 	Agents     []capabilities.Agent
 
+	ContainerSource      capabilities.ContainerLister
 	AgentSource          capabilities.AgentSource
 	AgentRefreshInterval time.Duration
 	GitLoader            picker.GitLoader
@@ -167,6 +168,16 @@ type agentsMsg struct {
 	err    error
 }
 
+type containersMsg struct {
+	containers []capabilities.Container
+	err        error
+}
+
+type actionMsg struct {
+	kind string
+	err  error
+}
+
 type agentRecord struct {
 	agent   capabilities.Agent
 	machine string
@@ -208,13 +219,11 @@ type Model struct {
 	cancelLoads     context.CancelFunc
 
 	confirmKill      bool
-	killReady        bool
 	killTargets      []picker.ContainerRef
 	renameMode       bool
 	renameInput      []rune
-	renameReady      bool
 	renameTarget     picker.ContainerRef
-	renameTargetSet  bool
+	actionInFlight   bool
 	selectedPlace    *picker.Place
 	selectedAgent    *capabilities.Agent
 	selectedAgentRef AgentRef
@@ -322,6 +331,28 @@ func (m Model) refreshAgents() tea.Cmd {
 	}
 }
 
+func (m Model) refreshContainers() tea.Cmd {
+	return func() tea.Msg {
+		containers, err := m.deps.ContainerSource.ListContainers(m.ctx)
+		return containersMsg{containers: containers, err: err}
+	}
+}
+
+func (m Model) reload() tea.Cmd {
+	cmds := make([]tea.Cmd, 0, 2+len(m.deps.RemoteCommands))
+	if m.deps.ContainerSource != nil {
+		cmds = append(cmds, m.refreshContainers())
+	}
+	if m.deps.AgentSource != nil {
+		cmds = append(cmds, m.refreshAgents())
+	}
+	cmds = append(cmds, m.deps.RemoteCommands...)
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
+}
+
 func (m Model) tick() tea.Cmd {
 	return tea.Tick(m.deps.AgentRefreshInterval, func(time.Time) tea.Msg { return refreshTickMsg{} })
 }
@@ -373,44 +404,9 @@ func (m Model) SelectedAgent() (capabilities.Agent, bool) {
 	return *m.selectedAgent, true
 }
 
-// KillTargetsRequest reports the confirmed containers, if any.
-func (m Model) KillTargetsRequest() ([]picker.ContainerRef, bool) {
-	if !m.killReady {
-		return nil, false
-	}
-	refs := append([]picker.ContainerRef(nil), m.killTargets...)
-	if len(refs) == 0 && m.killReady {
-		refs = m.markedTargets()
-	}
-	return refs, len(refs) > 0
-}
-
-// RenameTargetRequest reports a confirmed rename, if any.
-func (m Model) RenameTargetRequest() (picker.ContainerRef, string, bool) {
-	if !m.renameReady {
-		return picker.ContainerRef{}, "", false
-	}
-	if !m.renameTargetSet {
-		return picker.ContainerRef{}, "", false
-	}
-	return m.renameTarget, string(m.renameInput), true
-}
-
 func (m Model) execute(ctx context.Context) error {
 	if m.cancelled {
 		return nil
-	}
-	if refs, ok := m.KillTargetsRequest(); ok {
-		if m.deps.KillContainers == nil {
-			return errors.New("container killing is not supported")
-		}
-		return m.deps.KillContainers(ctx, refs)
-	}
-	if ref, name, ok := m.RenameTargetRequest(); ok {
-		if m.deps.RenameContainer == nil {
-			return errors.New("container renaming is not supported")
-		}
-		return m.deps.RenameContainer(ctx, ref, name)
 	}
 	if place, ok := m.SelectedPlace(); ok {
 		if place.OpenAction != nil {
@@ -461,6 +457,13 @@ func (m *Model) rebuild(force bool) {
 		m.forceFirst = true
 	}
 	old := m.cursor
+	oldIndex := -1
+	for index, candidate := range m.rows {
+		if candidate.id == old {
+			oldIndex = index
+			break
+		}
+	}
 	m.rows = m.rowsForTab(m.tab)
 	if string(m.query) != "" && m.matchCount(m.tab) == 0 {
 		for _, tab := range []Tab{AgentsTab, ContainersTab, ProjectsTab} {
@@ -487,6 +490,12 @@ func (m *Model) rebuild(force bool) {
 			return
 		}
 	}
+	if oldIndex >= 0 {
+		if nearest, ok := nearestCursorable(m.rows, oldIndex); ok {
+			m.cursor = nearest
+			return
+		}
+	}
 	for _, row := range m.rows {
 		if row.kind == itemRow && row.cursorable {
 			m.cursor = row.id
@@ -500,6 +509,18 @@ func (m *Model) rebuild(force bool) {
 		}
 	}
 	m.cursor = ""
+}
+
+func nearestCursorable(rows []row, index int) (string, bool) {
+	for distance := 0; distance < len(rows); distance++ {
+		for _, candidate := range []int{index + distance, index - distance} {
+			if candidate < 0 || candidate >= len(rows) || !rows[candidate].cursorable {
+				continue
+			}
+			return rows[candidate].id, true
+		}
+	}
+	return "", false
 }
 
 func (m Model) sourcePlaces() []picker.Place {
@@ -647,33 +668,46 @@ func (m Model) rowsForTab(tab Tab) []row {
 }
 
 func (m Model) agentRows() []row {
-	agents := append([]agentRecord(nil), m.allAgents()...)
-	sort.SliceStable(agents, func(i, j int) bool {
-		ri, rj := attentionRank(agents[i].agent), attentionRank(agents[j].agent)
-		if ri != rj {
-			return ri < rj
+	rows := make([]row, 0)
+	machines := m.machineNames()
+	for _, machine := range machines {
+		children := make([]row, 0)
+		for _, record := range m.allAgents() {
+			if record.machine != machine {
+				continue
+			}
+			match, ok := m.matchAgent(record)
+			if !ok {
+				continue
+			}
+			agent := record.agent
+			children = append(children, row{id: agentIdentity(record), kind: itemRow, itemKind: "agent", label: agent.Harness, machine: machine, group: machine, depth: 2, cursorable: true, matched: true, score: match.Score, agent: agent, agentMachine: record.machine, agentBackend: record.backend})
 		}
-		if ri == 0 && agents[i].agent.StoppedSince != nil && agents[j].agent.StoppedSince != nil && !agents[i].agent.StoppedSince.Equal(*agents[j].agent.StoppedSince) {
-			return agents[i].agent.StoppedSince.Before(*agents[j].agent.StoppedSince)
-		}
-		return agentIdentity(agents[i]) < agentIdentity(agents[j])
-	})
-	rows := make([]row, 0, len(agents))
-	for _, record := range agents {
-		match, ok := m.matchAgent(record)
-		if !ok {
+		sort.SliceStable(children, func(i, j int) bool {
+			ri, rj := attentionRank(children[i].agent), attentionRank(children[j].agent)
+			if ri != rj {
+				return ri < rj
+			}
+			if ri == 0 && children[i].agent.StoppedSince != nil && children[j].agent.StoppedSince != nil && !children[i].agent.StoppedSince.Equal(*children[j].agent.StoppedSince) {
+				return children[i].agent.StoppedSince.Before(*children[j].agent.StoppedSince)
+			}
+			if string(m.query) != "" && children[i].score != children[j].score {
+				return children[i].score > children[j].score
+			}
+			return children[i].id < children[j].id
+		})
+		remoteErr := m.groupErrors[machine]
+		remoteWarn := m.groupWarnings[machine]
+		isRemote := contains(m.remoteMachines, machine)
+		_, machineMatch := picker.Rank(string(m.query), sanitize(machine))
+		if len(children) == 0 && !machineMatch && remoteErr == "" && remoteWarn == "" && !isRemote && string(m.query) != "" {
 			continue
 		}
-		agent := record.agent
-		rows = append(rows, row{id: agentIdentity(record), kind: itemRow, itemKind: "agent", label: agent.Harness, group: agent.Container, cursorable: true, matched: true, score: match.Score, agent: agent, agentMachine: record.machine, agentBackend: record.backend})
-	}
-	if string(m.query) != "" {
-		sort.SliceStable(rows, func(i, j int) bool {
-			if rows[i].score != rows[j].score {
-				return rows[i].score > rows[j].score
-			}
-			return rows[i].label < rows[j].label
-		})
+		rows = append(rows, row{id: "machine:" + machine, kind: machineRow, label: shortenMachine(machine), group: machine, machine: machine, count: len(children), cursorable: true, remoteErr: remoteErr, remoteWarn: remoteWarn, loading: isRemote && !m.remoteLoaded[machine]})
+		rows = append(rows, children...)
+		if machine != machines[len(machines)-1] {
+			rows = append(rows, row{kind: separatorRow})
+		}
 	}
 	return rows
 }
@@ -694,6 +728,11 @@ func (m Model) machineNames() []string {
 	for _, machine := range m.remoteMachines {
 		if machine != "" {
 			seen[machine] = true
+		}
+	}
+	for _, record := range m.allAgents() {
+		if record.machine != "" {
+			seen[record.machine] = true
 		}
 	}
 	names := make([]string, 0, len(seen))
@@ -1043,6 +1082,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rebuild(false)
 		}
 		return m, nil
+	case containersMsg:
+		if msg.err == nil {
+			m.deps.Containers = append([]capabilities.Container(nil), msg.containers...)
+			m.rebuild(false)
+		}
+		return m, nil
+	case actionMsg:
+		m.actionInFlight = false
+		if msg.err != nil {
+			m.toast = msg.err.Error()
+			return m, m.reload()
+		}
+		if msg.kind == "kill" {
+			m.toast = "containers killed"
+			m.marked = make(map[picker.ContainerRef]bool)
+		} else {
+			m.toast = "container renamed"
+		}
+		return m, m.reload()
 	case picker.AgentBatch:
 		// Keep the existing picker command seam compatible while callers move
 		// to AgentSource. A batch without machine provenance is local.
@@ -1331,17 +1389,20 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirmKill = false
 		m.renameMode = false
 		m.killTargets = nil
-		m.renameTargetSet = false
 		m.cancelBackgroundLoads()
 		return m, tea.Quit
+	}
+	if m.actionInFlight {
+		return m, nil
 	}
 	if m.confirmKill {
 		switch strings.ToLower(msg.String()) {
 		case "y":
 			m.confirmKill = false
-			m.killReady = true
-			m.cancelBackgroundLoads()
-			return m, tea.Quit
+			refs := append([]picker.ContainerRef(nil), m.killTargets...)
+			m.killTargets = nil
+			m.actionInFlight = true
+			return m, m.runKill(refs)
 		case "n", "esc":
 			m.confirmKill = false
 			m.killTargets = nil
@@ -1354,13 +1415,13 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case tea.KeyEsc:
 			m.renameMode = false
 			m.renameInput = nil
-			m.renameTargetSet = false
 		case tea.KeyEnter:
 			if strings.TrimSpace(string(m.renameInput)) != "" {
 				m.renameMode = false
-				m.renameReady = true
-				m.cancelBackgroundLoads()
-				return m, tea.Quit
+				name := string(m.renameInput)
+				m.renameInput = nil
+				m.actionInFlight = true
+				return m, m.runRename(m.renameTarget, name)
 			}
 		case tea.KeyBackspace, tea.KeyDelete:
 			if len(m.renameInput) > 0 {
@@ -1418,7 +1479,6 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.renameMode = true
 			m.renameInput = nil
 			m.renameTarget = picker.ContainerRef{Machine: current.place.Machine, ID: current.place.ContainerID}
-			m.renameTargetSet = true
 		}
 		return m, nil
 	case tea.KeyCtrlW:
@@ -1569,6 +1629,24 @@ func (m *Model) toggleMark() {
 func (m Model) currentContainer() bool {
 	current, ok := m.currentItem()
 	return ok && current.place.Kind == picker.ContainerKind && current.place.ContainerID != ""
+}
+
+func (m Model) runKill(refs []picker.ContainerRef) tea.Cmd {
+	return func() tea.Msg {
+		if m.deps.KillContainers == nil {
+			return actionMsg{kind: "kill", err: errors.New("container killing is not supported")}
+		}
+		return actionMsg{kind: "kill", err: m.deps.KillContainers(m.ctx, refs)}
+	}
+}
+
+func (m Model) runRename(ref picker.ContainerRef, name string) tea.Cmd {
+	return func() tea.Msg {
+		if m.deps.RenameContainer == nil {
+			return actionMsg{kind: "rename", err: errors.New("container renaming is not supported")}
+		}
+		return actionMsg{kind: "rename", err: m.deps.RenameContainer(m.ctx, ref, name)}
+	}
 }
 
 // foldRight unfolds the selected folder or checkout and keeps it selected.
@@ -1819,19 +1897,18 @@ func (m Model) rowText(row row) (string, string) {
 
 func (m Model) agentText(row row, marker string, selected bool) (string, string) {
 	a := row.agent
-	container := displayContainer(a, row.agentMachine)
+	container := displayContainer(a)
 	nameStyle := bold()
 	if selected {
 		nameStyle = normal()
 	}
 	primary := nameStyle.Render(highlightText(sanitize(a.Harness), string(m.query), selected)) + muted().Render("  "+highlightText(sanitize(container), string(m.query), selected))
 	state := strings.ToLower(strings.TrimSpace(sanitize(a.State)))
-	stateText := "● " + state
+	stateLabel := "● " + state
 	if state == "stopped" && a.StoppedSince != nil {
-		stateText += " " + stoppedAge(m.now(), *a.StoppedSince)
+		stateLabel += " " + stoppedAge(m.now(), *a.StoppedSince)
 	}
-	stateStyle := stateColorFor(a, selected)
-	left := stateStyle.Render(stateText)
+	left := stateText(a, stateLabel, selected)
 	if a.Branch != "" {
 		branch := highlightText("⎇ "+sanitize(a.Branch), string(m.query), selected)
 		if !strings.Contains(branch, "\x1b[") {
@@ -1844,18 +1921,23 @@ func (m Model) agentText(row row, marker string, selected bool) (string, string)
 	if !strings.Contains(targetText, "\x1b[") {
 		target = muted().Render(targetText)
 	}
-	gap := m.width - shell.StringWidth("  ") - shell.StringWidth(left) - shell.StringWidth(target)
+	indent := strings.Repeat("  ", row.depth)
+	gap := m.width - shell.StringWidth(marker) - shell.StringWidth(indent) - shell.StringWidth(left) - shell.StringWidth(target)
 	if gap < 2 {
 		gap = 2
 	}
-	secondary := "  " + left + strings.Repeat(" ", gap) + target
-	return marker + primary, secondary
+	secondary := marker + indent + left + strings.Repeat(" ", gap) + target
+	return marker + indent + primary, secondary
 }
-func displayContainer(a capabilities.Agent, machine string) string {
-	if machine != "" && machine != picker.LocalMachine() {
-		return machine + "/" + a.Container
-	}
+func displayContainer(a capabilities.Agent) string {
 	return a.Container
+}
+
+func stateText(agent capabilities.Agent, text string, selected bool) string {
+	if !selected {
+		return stateColor(agent).Render(text)
+	}
+	return selectedStateMarkerStart + selectedStateColor(agent).Render(text) + selectedStateMarkerEnd
 }
 func (m Model) containerText(row row, marker string, selected bool) (string, string) {
 	name := sanitize(row.place.ContainerName)
@@ -1873,46 +1955,13 @@ func (m Model) containerText(row row, marker string, selected bool) (string, str
 	}
 	name = nameGutter + name
 	agents := m.containerAgents(row.place)
-	full := make([]string, 0, len(agents))
-	dots := ""
+	dots := make([]string, 0, len(agents))
 	for _, agent := range agents {
-		state := strings.ToLower(strings.TrimSpace(sanitize(agent.State)))
-		age := ""
-		if state == "stopped" && agent.StoppedSince != nil {
-			age = " " + stoppedAge(m.now(), *agent.StoppedSince)
-		}
-		full = append(full, stateColorFor(agent, selected).Render("●")+" "+muted().Render(sanitize(agent.Harness)+" "+state+age))
-		dots += stateColorFor(agent, selected).Render("●")
+		dots = append(dots, stateText(agent, "●", selected))
 	}
-	activity := ""
-	if row.activity != nil {
-		activity = activityAge(m.now(), *row.activity)
-	}
-	text := name
-	if row.place.Proxy {
-		text += "  " + muted().Render("local proxy")
-	}
-	lineWidth := max(1, m.width-shell.StringWidth(marker))
-	join := func(pills string, age string) string {
-		value := text
-		if pills != "" {
-			value += "  " + pills
-		}
-		if age != "" {
-			value += strings.Repeat(" ", max(2, lineWidth-shell.StringWidth(value)-shell.StringWidth(age))) + muted().Render(age)
-		}
-		return value
-	}
-	pills := strings.Join(full, "  ")
-	line := join(pills, activity)
-	if shell.StringWidth(line)+shell.StringWidth(marker) > m.width {
-		line = join(dots, activity)
-	}
-	if shell.StringWidth(line)+shell.StringWidth(marker) > m.width {
-		line = join("", activity)
-	}
-	if shell.StringWidth(line)+shell.StringWidth(marker) > m.width {
-		line = join("", "")
+	line := name
+	if len(dots) > 0 {
+		line += " " + strings.Join(dots, " ")
 	}
 	available := max(1, m.width-shell.StringWidth(marker))
 	if shell.StringWidth(line) > available {
@@ -1920,8 +1969,6 @@ func (m Model) containerText(row row, marker string, selected bool) (string, str
 	}
 	return marker + line, ""
 }
-
-func activityAge(now, activity time.Time) string { return stoppedAge(now, activity) }
 
 type projectColumns struct {
 	name, git, path int
@@ -2288,11 +2335,11 @@ func fit(value string, width int) string {
 }
 
 func selectedRowBackground(value string) string {
-	// Selected rows carry exactly one foreground. Strip every per-segment
-	// foreground (and faint) first, then restore the selection start after the
-	// resets that each segment emits. Bold and underline survive, so matched
-	// letters and marked names stay distinguishable without their own colour.
-	value = stripForeground(value)
+	// Selected rows use one foreground everywhere except explicitly marked
+	// agent-state segments. Strip every other per-segment foreground (and faint)
+	// first, then restore the selection start after each reset. Bold and
+	// underline survive, so matched letters and marked names stay distinguishable.
+	value = stripForegroundMarked(value)
 	style := lipgloss.NewStyle().Background(selectionBackground()).Foreground(selectionForeground())
 	start := strings.TrimSuffix(style.Render(""), "\x1b[0m")
 	if start == "" {
@@ -2302,12 +2349,23 @@ func selectedRowBackground(value string) string {
 	return start + value + "\x1b[0m"
 }
 
-// stripForeground drops every foreground colour and the faint attribute from
-// styled text while keeping the remaining SGR attributes (reset, bold,
-// underline, …).
-func stripForeground(value string) string {
+// stripForegroundMarked drops every unmarked foreground colour and the faint
+// attribute from styled text while keeping the remaining SGR attributes
+// (reset, bold, underline, …).
+func stripForegroundMarked(value string) string {
+	marked := false
 	out := strings.Builder{}
 	for index := 0; index < len(value); {
+		if strings.HasPrefix(value[index:], selectedStateMarkerStart) {
+			marked = true
+			index += len(selectedStateMarkerStart)
+			continue
+		}
+		if strings.HasPrefix(value[index:], selectedStateMarkerEnd) {
+			marked = false
+			index += len(selectedStateMarkerEnd)
+			continue
+		}
 		if value[index] != '\x1b' || index+1 >= len(value) || value[index+1] != '[' {
 			out.WriteByte(value[index])
 			index++
@@ -2319,7 +2377,7 @@ func stripForeground(value string) string {
 			break
 		}
 		end += index + 2
-		if kept := keptAttributes(value[index+2 : end]); kept != "" {
+		if kept := keptMarkedAttributes(value[index+2:end], marked); kept != "" {
 			out.WriteString("\x1b[")
 			out.WriteString(kept)
 			out.WriteByte('m')
@@ -2327,6 +2385,13 @@ func stripForeground(value string) string {
 		index = end + 1
 	}
 	return out.String()
+}
+
+func keptMarkedAttributes(params string, marked bool) string {
+	if marked {
+		return params
+	}
+	return keptAttributes(params)
 }
 
 // keptAttributes removes the foreground colour and faint parameters from an
@@ -2404,15 +2469,21 @@ func stateColor(agent capabilities.Agent) lipgloss.Style {
 	}
 }
 
-// stateColorFor keeps the state cue on the selected row without a per-segment
-// colour: the selection foreground already contrasts with its background, so
-// the selected row renders the state as plain text.
-func stateColorFor(agent capabilities.Agent, selected bool) lipgloss.Style {
-	if selected {
-		return normal()
+func selectedStateColor(agent capabilities.Agent) lipgloss.Style {
+	switch {
+	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && !agent.Seen:
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#9b1c1c", Dark: "#ff8a8a"})
+	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped"):
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#166534", Dark: "#86efac"})
+	default:
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#8a4b08", Dark: "#fbbf24"})
 	}
-	return stateColor(agent)
 }
+
+const (
+	selectedStateMarkerStart = "\x1b[58;5;0m"
+	selectedStateMarkerEnd   = "\x1b[59m"
+)
 
 // palette holds the brand colours of assets/logo.svg. Ground, tile and
 // tileBorder are the icon frame; the TUI never paints a background, so on

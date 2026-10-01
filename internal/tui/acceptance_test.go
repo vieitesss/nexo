@@ -257,6 +257,7 @@ func TestActionKeysAndEsc(t *testing.T) {
 	if model.confirmKill {
 		t.Fatal("n did not cancel kill")
 	}
+	model.deps.RenameContainer = func(context.Context, picker.ContainerRef, string) error { return nil }
 	model = updateModel(t, model, keyMsg(tea.KeyCtrlR))
 	if !model.renameMode {
 		t.Fatal("Ctrl-R did not enter rename")
@@ -264,9 +265,14 @@ func TestActionKeysAndEsc(t *testing.T) {
 	for _, value := range []rune{'n', 'e', 'w'} {
 		model = updateModel(t, model, keyMsg(tea.KeyRunes, value))
 	}
-	model = updateModel(t, model, keyMsg(tea.KeyEnter))
-	if _, _, ok := model.RenameTargetRequest(); !ok {
+	updated, cmd := model.Update(keyMsg(tea.KeyEnter))
+	model = updated.(Model)
+	if cmd == nil || !model.actionInFlight {
 		t.Fatal("Enter did not accept rename")
+	}
+	model = updateModel(t, model, cmd())
+	if model.toast != "container renamed" {
+		t.Fatalf("rename toast = %q", model.toast)
 	}
 	openProject := NewModel(context.Background(), richDeps(), ProjectsTab)
 	openProject.SetQuery("nexo")
@@ -544,11 +550,10 @@ func selectionDeps() Deps {
 	}
 }
 
-// TestSelectedRowHasOnlySelectionForeground parses the selected row's SGR and
-// asserts that no foreground other than the selection foreground is active on
-// any visible cell. The fixture carries a search query, a marked item, a Git
-// summary and every agent state, so each tab exercises the segments that used
-// to leak their own colour through the selection.
+// TestSelectedRowForegrounds checks that selection text uses one foreground,
+// while agent state cues keep their explicit adaptive colours. The fixture
+// carries a search query, a marked item, a Git summary and every agent state,
+// so each tab exercises the coloured segments that must remain readable.
 func TestSelectedRowHasOnlySelectionForeground(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	previous := lipgloss.HasDarkBackground()
@@ -556,6 +561,14 @@ func TestSelectedRowHasOnlySelectionForeground(t *testing.T) {
 	for _, dark := range []bool{true, false} {
 		lipgloss.SetHasDarkBackground(dark)
 		expected := selectionForegroundToken(t)
+		stateTokens := map[string]bool{}
+		for _, agent := range selectionDeps().Agents {
+			for _, token := range foregroundTokens(selectedStateColor(agent).Render("x")) {
+				if token != "" {
+					stateTokens[token] = true
+				}
+			}
+		}
 		for _, tab := range []Tab{AgentsTab, ContainersTab, ProjectsTab} {
 			model := NewModel(context.Background(), selectionDeps(), tab)
 			model.SetSize(120, 30)
@@ -577,8 +590,8 @@ func TestSelectedRowHasOnlySelectionForeground(t *testing.T) {
 					}
 					painted++
 					for cell, token := range foregroundTokens(line) {
-						if token != expected {
-							t.Fatalf("dark=%v tab %q row %q cell %d: foreground %q, want %q: %q", dark, tab, row.id, cell, token, expected, line)
+						if token != expected && !stateTokens[token] {
+							t.Fatalf("dark=%v tab %q row %q cell %d: foreground %q, want selection or state: %q", dark, tab, row.id, cell, token, line)
 						}
 					}
 					plain := shell.Plain(line)

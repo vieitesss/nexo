@@ -148,10 +148,34 @@ func TestRemoteLoadCompletionAndMachineScopedAgents(t *testing.T) {
 	}
 }
 
+func TestAgentsAreGroupedByMachineAndSearchKeepsHeader(t *testing.T) {
+	model := NewModel(context.Background(), Deps{
+		Agents: []capabilities.Agent{
+			{PaneID: "remote", Container: "remote-box", Harness: "pi", State: "working"},
+			{PaneID: "local", Container: "local-box", Harness: "claude", State: "working"},
+		},
+		RemoteMachines: []string{"dev"},
+	}, AgentsTab)
+	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "remote", Container: "remote-box", Harness: "pi", State: "working"}}})
+	rows := model.Rows()
+	if rows[0] != "machine:"+picker.LocalMachine() || !strings.Contains(strings.Join(rows, "\x00"), "machine:dev") {
+		t.Fatalf("machine order = %v", rows)
+	}
+	model.SetQuery("remote-box")
+	if !strings.Contains(strings.Join(model.Rows(), "\x00"), "machine:dev") {
+		t.Fatalf("matching machine header missing = %v", model.Rows())
+	}
+	model.SetSize(100, 12)
+	plain := shell.Plain(model.View())
+	if strings.Contains(plain, "dev/remote-box") {
+		t.Fatalf("agent container retained machine prefix: %q", plain)
+	}
+}
+
 func TestAgentBatchCompatibility(t *testing.T) {
 	model := NewModel(context.Background(), richDeps(), AgentsTab)
 	model = updateModel(t, model, picker.AgentBatch{Agents: []capabilities.Agent{{PaneID: "new", Target: "new:1", Harness: "codex", State: "working"}}})
-	if len(model.Rows()) != 1 || !strings.Contains(strings.Join(model.Rows(), "\x00"), "new") {
+	if !strings.Contains(strings.Join(model.Rows(), "\x00"), "new") {
 		t.Fatalf("AgentBatch was ignored: %v", model.Rows())
 	}
 }
@@ -179,7 +203,13 @@ func TestRemoteAgentIdentityIncludesMachine(t *testing.T) {
 	model := NewModel(context.Background(), Deps{Agents: []capabilities.Agent{{PaneID: "%1", Target: "local:1", Harness: "pi", State: "working"}}}, AgentsTab)
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%1", Target: "raw-target", Harness: "claude", State: "working"}}})
 	rows := model.Rows()
-	if len(rows) != 2 || rows[0] == rows[1] {
+	agents := make([]string, 0, 2)
+	for _, row := range rows {
+		if strings.HasPrefix(row, "agent:") {
+			agents = append(agents, row)
+		}
+	}
+	if len(agents) != 2 || agents[0] == agents[1] {
 		t.Fatalf("agent identities = %v", rows)
 	}
 }
@@ -285,11 +315,25 @@ func TestAgentRankingAndAttentionOrder(t *testing.T) {
 		{PaneID: "z-harness", Harness: "priority", Container: "one", Target: "one:4", State: "working"},
 	}
 	model := NewModel(context.Background(), Deps{Agents: agents}, AgentsTab)
-	if got, want := model.Rows()[:3], []string{"agent:" + picker.LocalMachine() + ":unseen", "agent:" + picker.LocalMachine() + ":a-target", "agent:" + picker.LocalMachine() + ":a-working"}; !slices.Equal(got, want) {
+	want := []string{"agent:" + picker.LocalMachine() + ":unseen", "agent:" + picker.LocalMachine() + ":a-target", "agent:" + picker.LocalMachine() + ":a-working"}
+	got := make([]string, 0, len(want))
+	for _, row := range model.Rows() {
+		if strings.HasPrefix(row, "agent:") {
+			got = append(got, row)
+		}
+	}
+	if !slices.Equal(got[:3], want) {
 		t.Fatalf("empty-query attention order = %v, want prefix %v", got, want)
 	}
 	model.SetQuery("priority")
-	if got, want := model.Rows(), []string{"agent:" + picker.LocalMachine() + ":z-harness", "agent:" + picker.LocalMachine() + ":a-target"}; !slices.Equal(got, want) {
+	got = got[:0]
+	for _, row := range model.Rows() {
+		if strings.HasPrefix(row, "agent:") {
+			got = append(got, row)
+		}
+	}
+	want = []string{"agent:" + picker.LocalMachine() + ":z-harness", "agent:" + picker.LocalMachine() + ":a-target"}
+	if !slices.Equal(got, want) {
 		t.Fatalf("query-ranked agents = %v, want %v", got, want)
 	}
 }
@@ -342,24 +386,44 @@ func TestPlaceRankingAndVisibleAgentHighlights(t *testing.T) {
 }
 
 func TestModalTargetsAreFrozen(t *testing.T) {
-	model := NewModel(context.Background(), richDeps(), ContainersTab)
+	deps := richDeps()
+	var killed []picker.ContainerRef
+	deps.KillContainers = func(_ context.Context, refs []picker.ContainerRef) error {
+		killed = append([]picker.ContainerRef(nil), refs...)
+		return nil
+	}
+	model := NewModel(context.Background(), deps, ContainersTab)
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlX})
 	model.cursor = containerIdentity(picker.ContainerPlaces([]capabilities.Container{{ID: "remote-two", Name: "two", Machine: "remote"}})[0])
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	refs, ok := model.KillTargetsRequest()
-	if !ok || len(refs) != 1 || refs[0].ID != "local-one" {
-		t.Fatalf("frozen kill target = %v, %v", refs, ok)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("kill command missing")
+	}
+	model = updateModel(t, model, cmd())
+	if len(killed) != 1 || killed[0].ID != "local-one" {
+		t.Fatalf("frozen kill target = %v", killed)
 	}
 
-	rename := NewModel(context.Background(), richDeps(), ContainersTab)
+	deps = richDeps()
+	var renamed picker.ContainerRef
+	deps.RenameContainer = func(_ context.Context, ref picker.ContainerRef, _ string) error {
+		renamed = ref
+		return nil
+	}
+	rename := NewModel(context.Background(), deps, ContainersTab)
 	rename = updateModel(t, rename, tea.KeyMsg{Type: tea.KeyCtrlR})
 	rename.cursor = containerIdentity(picker.ContainerPlaces([]capabilities.Container{{ID: "remote-two", Name: "two", Machine: "remote"}})[0])
 	for _, value := range []rune{'n', 'e', 'w'} {
 		rename = updateModel(t, rename, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{value}})
 	}
-	rename = updateModel(t, rename, tea.KeyMsg{Type: tea.KeyEnter})
-	ref, _, ok := rename.RenameTargetRequest()
-	if !ok || ref.ID != "local-one" {
-		t.Fatalf("frozen rename target = %v, %v", ref, ok)
+	updated, cmd = rename.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	rename = updated.(Model)
+	if cmd == nil {
+		t.Fatal("rename command missing")
+	}
+	rename = updateModel(t, rename, cmd())
+	if renamed.ID != "local-one" {
+		t.Fatalf("frozen rename target = %v", renamed)
 	}
 }
