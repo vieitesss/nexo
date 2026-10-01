@@ -30,7 +30,7 @@ func TestCreateWorktreeAddsAndOpensInsideTmux(t *testing.T) {
 		{name: "git", args: []string{"-C", "/repo", "show-ref", "--verify", "--quiet", "refs/heads/feature"}},
 		{name: "git", args: []string{"-C", "/repo", "worktree", "add", "-b", "feature", destination}},
 		{name: "tmux", args: []string{"-u", "has-session", "-t", "=" + projects.TargetName(destination)}},
-		{name: "tmux", args: []string{"-u", "switch-client", "-t", "=" + projects.TargetName(destination)}},
+		{name: "tmux", args: []string{"switch-client", "-t", "=" + projects.TargetName(destination)}},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)

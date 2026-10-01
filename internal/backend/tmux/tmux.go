@@ -222,7 +222,7 @@ func (b *Backend) openProject(ctx context.Context, path string, options capabili
 	}
 
 	if b.Inside {
-		_, err = b.run(ctx, "switch-client", "-t", "="+name)
+		_, err = b.runClient(ctx, "switch-client", "-t", "="+name)
 		return created, err
 	}
 	return created, b.runInteractive(ctx, "attach-session", "-t", "="+name)
@@ -238,7 +238,7 @@ func (b *Backend) runInteractive(ctx context.Context, operation string, args ...
 			Err:       errors.New("runner does not support interactive commands"),
 		}
 	}
-	if err := interactive.RunInteractive(ctx, "tmux", UTF8Args(append([]string{operation}, args...)...)...); err != nil {
+	if err := interactive.RunInteractive(ctx, "tmux", append([]string{operation}, args...)...); err != nil {
 		stderr := interactiveStderr(err)
 		if stderr == "" {
 			stderr = err.Error()
@@ -254,7 +254,15 @@ func (b *Backend) runInteractive(ctx context.Context, operation string, args ...
 }
 
 func (b *Backend) run(ctx context.Context, operation string, args ...string) ([]byte, error) {
-	output, err := b.Runner.Run(ctx, "tmux", UTF8Args(append([]string{operation}, args...)...)...)
+	return b.runWithArgs(ctx, UTF8Args(append([]string{operation}, args...)...), operation, args...)
+}
+
+func (b *Backend) runClient(ctx context.Context, operation string, args ...string) ([]byte, error) {
+	return b.runWithArgs(ctx, append([]string{operation}, args...), operation, args...)
+}
+
+func (b *Backend) runWithArgs(ctx context.Context, tmuxArgs []string, operation string, args ...string) ([]byte, error) {
+	output, err := b.Runner.Run(ctx, "tmux", tmuxArgs...)
 	if err == nil {
 		return output, nil
 	}
@@ -307,7 +315,7 @@ func (b *Backend) OpenContainer(ctx context.Context, id string) error {
 		return errors.New("tmux container opener requires an id")
 	}
 	if b.Inside {
-		_, err := b.run(ctx, "switch-client", "-t", id)
+		_, err := b.runClient(ctx, "switch-client", "-t", id)
 		return err
 	}
 	return b.runInteractive(ctx, "attach-session", "-t", id)
@@ -360,7 +368,10 @@ func (b *Backend) FocusPane(ctx context.Context, paneID string) error {
 		return errors.New("tmux pane focuser requires a pane id")
 	}
 	if b.Inside {
-		for _, operation := range []string{"switch-client", "select-window", "select-pane"} {
+		if _, err := b.runClient(ctx, "switch-client", "-t", paneID); err != nil {
+			return err
+		}
+		for _, operation := range []string{"select-window", "select-pane"} {
 			if _, err := b.run(ctx, operation, "-t", paneID); err != nil {
 				return err
 			}

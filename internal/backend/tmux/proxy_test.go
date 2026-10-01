@@ -260,10 +260,10 @@ func TestProxySwitchesExistingSessionWithoutCreatingDuplicate(t *testing.T) {
 	if len(runner.calls) != 4 {
 		t.Fatalf("tmux calls = %#v, want list, two options, and switch", runner.calls)
 	}
-	if runner.calls[0].args[1] != "list-sessions" || runner.calls[1].args[1] != "set-option" || runner.calls[2].args[1] != "set-option" || runner.calls[3].args[1] != "switch-client" {
+	if runner.calls[0].args[1] != "list-sessions" || runner.calls[1].args[1] != "set-option" || runner.calls[2].args[1] != "set-option" || runner.calls[3].args[0] != "switch-client" {
 		t.Fatalf("tmux calls = %#v, want existing proxy switch", runner.calls)
 	}
-	if got := runner.calls[3].args[3]; got != "$1" {
+	if got := runner.calls[3].args[2]; got != "$1" {
 		t.Fatalf("switch target = %q, want stable session id", got)
 	}
 }
@@ -301,21 +301,21 @@ func TestTransportArgsHonorSSHConfigOnlyForSSH(t *testing.T) {
 	keepalive := []string{"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
 	remote := config.RemoteConfig{SSHConfig: "/tmp/ssh config", Transport: "ssh"}
 	sshWant := append([]string{"ssh", "-t"}, keepalive...)
-	sshWant = append(sshWant, "-F", "/tmp/ssh config", "devbox", "tmux -u attach-session -t '=$1'")
+	sshWant = append(sshWant, "-F", "/tmp/ssh config", "devbox", "tmux attach-session -t '=$1'")
 	if got := transportArgs(remote, "devbox", "$1"); !reflect.DeepEqual(got, sshWant) {
 		t.Fatalf("ssh transport args = %#v, want %#v", got, sshWant)
 	}
 	remote.Transport = "mosh"
-	if got, want := transportArgs(remote, "devbox", "$1"), []string{"mosh", "devbox", "--", "tmux", "-u", "attach-session", "-t", "=$1"}; !reflect.DeepEqual(got, want) {
+	if got, want := transportArgs(remote, "devbox", "$1"), []string{"mosh", "devbox", "--", "tmux", "attach-session", "-t", "=$1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("mosh transport args = %#v, want %#v", got, want)
 	}
 	remote.Transport = "et"
-	if got, want := transportArgs(remote, "devbox", "$1"), []string{"et", "devbox", "-c", "tmux -u attach-session -t '=$1'"}; !reflect.DeepEqual(got, want) {
+	if got, want := transportArgs(remote, "devbox", "$1"), []string{"et", "devbox", "-c", "tmux attach-session -t '=$1'"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("et transport args = %#v, want %#v", got, want)
 	}
 	remote.Transport = "ssh"
 	canonicalWant := append([]string{"ssh", "-t"}, keepalive...)
-	canonicalWant = append(canonicalWant, "-F", "/tmp/ssh config", "devbox", "tmux -u attach-session -t '=app_v1_blue'")
+	canonicalWant = append(canonicalWant, "-F", "/tmp/ssh config", "devbox", "tmux attach-session -t '=app_v1_blue'")
 	if got := transportArgs(remote, "devbox", "app.v1:blue"); !reflect.DeepEqual(got, canonicalWant) {
 		t.Fatalf("canonical SSH transport args = %#v, want %#v", got, canonicalWant)
 	}

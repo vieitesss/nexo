@@ -91,7 +91,7 @@ func TestContainerActionsUseBackendNativeCommands(t *testing.T) {
 		t.Fatalf("KillContainers() error = %v", err)
 	}
 	want := []call{
-		{name: "tmux", args: []string{"-u", "switch-client", "-t", "$1"}},
+		{name: "tmux", args: []string{"switch-client", "-t", "$1"}},
 		{name: "tmux", args: []string{"-u", "rename-session", "-t", "$1", "renamed"}},
 		{name: "tmux", args: []string{"-u", "kill-session", "-t", "$1"}},
 		{name: "tmux", args: []string{"-u", "kill-session", "-t", "$2"}},
@@ -140,7 +140,7 @@ func TestOpenProjectSwitchesToExistingExactSessionInsideTmux(t *testing.T) {
 	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
-	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "switch-client", "-t", "=acme_app"}}}
+	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"switch-client", "-t", "=acme_app"}}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
@@ -154,7 +154,7 @@ func TestOpenProjectCreatesAndAttachesMissingSessionOutsideTmux(t *testing.T) {
 	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
-	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "new-session", "-d", "-s", "acme_app", "-c", "/work/acme/app"}}, {name: "tmux", args: []string{"-u", "attach-session", "-t", "=acme_app"}}}
+	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "new-session", "-d", "-s", "acme_app", "-c", "/work/acme/app"}}, {name: "tmux", args: []string{"attach-session", "-t", "=acme_app"}}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
@@ -212,7 +212,7 @@ func TestFocusPaneSwitchesContainerWindowAndPaneByExactID(t *testing.T) {
 		t.Fatalf("FocusPane() error = %v", err)
 	}
 	want := []call{
-		{name: "tmux", args: []string{"-u", "switch-client", "-t", "%7"}},
+		{name: "tmux", args: []string{"switch-client", "-t", "%7"}},
 		{name: "tmux", args: []string{"-u", "select-window", "-t", "%7"}},
 		{name: "tmux", args: []string{"-u", "select-pane", "-t", "%7"}},
 	}
@@ -242,7 +242,7 @@ func TestFocusPaneSelectsAndAttachesOutsideTmux(t *testing.T) {
 	want := []call{
 		{name: "tmux", args: []string{"-u", "select-window", "-t", "%7"}},
 		{name: "tmux", args: []string{"-u", "select-pane", "-t", "%7"}},
-		{name: "tmux", args: []string{"-u", "attach-session", "-t", "%7"}},
+		{name: "tmux", args: []string{"attach-session", "-t", "%7"}},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
