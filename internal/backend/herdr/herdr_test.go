@@ -40,6 +40,12 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	if strings.HasPrefix(key, "workspace create --label machine/container --env") {
 		return []byte(`{"result":{"type":"workspace_created","workspace":{"workspace_id":"w1"},"root_pane":{"pane_id":"p1"}}}`), nil
 	}
+	if strings.HasPrefix(key, "workspace create ") {
+		return []byte(`{"result":{"type":"workspace_created","workspace":{"workspace_id":"workspace-created","label":"acme_app"},"root_pane":{"pane_id":"p1"}}}`), nil
+	}
+	if strings.HasPrefix(key, "worktree create ") {
+		return []byte(`{"result":{"type":"workspace_created","workspace":{"workspace_id":"workspace-worktree","label":"worktrees_feature"},"root_pane":{"pane_id":"p1"}}}`), nil
+	}
 	// Agent location labels are read through Herdr's list commands. Keep the
 	// older fixtures focused on state behavior by returning empty snapshots.
 	switch key {
@@ -253,17 +259,26 @@ func TestFocusPaneUsesExactAgentPaneID(t *testing.T) {
 	}
 }
 
-func TestOpenProjectWorkspaceIDForcesFocus(t *testing.T) {
-	runner := &fakeRunner{}
+func TestOpenProjectWorkspaceIDFocusReportsWorkspaceLabel(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-forced","label":"forced-label"}]}}`),
+	}}
 	backend := New(runner)
 
-	if _, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{ContainerID: "workspace-forced"}); err != nil {
+	container, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{ContainerID: "workspace-forced"})
+	if err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
 
-	want := []call{{name: "herdr", args: []string{"workspace", "focus", "workspace-forced"}}}
+	want := []call{
+		{name: "herdr", args: []string{"workspace", "list"}},
+		{name: "herdr", args: []string{"workspace", "focus", "workspace-forced"}},
+	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+	if container.ID != "workspace-forced" || container.Name != "forced-label" || container.Path != "/work/acme/app" || container.Created {
+		t.Fatalf("container = %#v, want focused workspace label", container)
 	}
 }
 
@@ -284,6 +299,25 @@ func TestOpenProjectNoFocusReusesWorkspaceWithoutFocus(t *testing.T) {
 	}
 	if container.ID != "workspace-exact" || container.Name != "acme_app" || container.Path != "/work/acme/app" || container.Created {
 		t.Fatalf("container = %#v, want reused workspace", container)
+	}
+}
+
+func TestOpenProjectNoFocusReusesWorkspaceByFuzzyLabel(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-fuzzy","label":"dev/app"}]}}`),
+	}}
+	backend := New(runner)
+
+	container, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{NoFocus: true})
+	if err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+	want := []call{{name: "herdr", args: []string{"workspace", "list"}}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want no workspace focus: %#v", runner.calls, want)
+	}
+	if container.ID != "workspace-fuzzy" || container.Name != "dev/app" || container.Path != "/work/acme/app" || container.Created {
+		t.Fatalf("container = %#v, want reused fuzzy workspace", container)
 	}
 }
 
@@ -339,5 +373,29 @@ func TestOpenProjectNoFocusWorkspaceIDRejectsMissing(t *testing.T) {
 
 	if _, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{ContainerID: "missing", NoFocus: true}); err == nil {
 		t.Fatal("OpenProject() error = nil, want missing workspace error")
+	}
+}
+
+func TestOpenProjectRejectsCreateWithoutWorkspaceID(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[]}}`),
+		"workspace create --cwd /work/acme/app --label acme_app": []byte(`{"result":{"type":"workspace_created","workspace":{}}}`),
+	}}
+	backend := New(runner)
+
+	if _, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{NoFocus: true}); err == nil {
+		t.Fatal("OpenProject() error = nil, want missing workspace id error")
+	}
+}
+
+func TestOpenProjectRejectsMalformedCreateOutput(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[]}}`),
+		"workspace create --cwd /work/acme/app --label acme_app": []byte("not json"),
+	}}
+	backend := New(runner)
+
+	if _, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{NoFocus: true}); err == nil {
+		t.Fatal("OpenProject() error = nil, want malformed output error")
 	}
 }

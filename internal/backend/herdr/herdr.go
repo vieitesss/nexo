@@ -117,7 +117,10 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 	if err != nil {
 		return capabilities.Worktree{}, err
 	}
-	workspace := decodeWorktreeWorkspace(output)
+	workspace, err := decodeWorktreeWorkspace(output)
+	if err != nil {
+		return capabilities.Worktree{}, err
+	}
 	name := workspace.Label
 	if name == "" {
 		name = projects.TargetName(path)
@@ -144,15 +147,15 @@ func (b *Backend) RemoveWorktree(ctx context.Context, worktree capabilities.Work
 	return err
 }
 
-func decodeWorktreeWorkspace(output []byte) workspace {
+func decodeWorktreeWorkspace(output []byte) (workspace, error) {
 	if len(output) == 0 {
-		return workspace{}
+		return workspace{}, errors.New("herdr create returned no workspace")
 	}
 	var envelope struct {
 		Result json.RawMessage `json:"result"`
 	}
-	if json.Unmarshal(output, &envelope) != nil {
-		return workspace{}
+	if err := json.Unmarshal(output, &envelope); err != nil {
+		return workspace{}, fmt.Errorf("decode herdr created workspace: %w", err)
 	}
 	raw := output
 	if len(envelope.Result) != 0 && string(envelope.Result) != "null" {
@@ -161,10 +164,13 @@ func decodeWorktreeWorkspace(output []byte) workspace {
 	var result struct {
 		Workspace workspace `json:"workspace"`
 	}
-	if json.Unmarshal(raw, &result) != nil {
-		return workspace{}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return workspace{}, fmt.Errorf("decode herdr created workspace: %w", err)
 	}
-	return result.Workspace
+	if result.Workspace.ID == "" {
+		return workspace{}, errors.New("herdr create returned a workspace without an id")
+	}
+	return result.Workspace, nil
 }
 
 // OpenProject focuses an existing Herdr workspace selected by label, or
@@ -206,7 +212,10 @@ func (b *Backend) OpenProject(ctx context.Context, path string, options capabili
 	if err != nil {
 		return capabilities.OpenedContainer{}, err
 	}
-	created := decodeWorktreeWorkspace(createdOutput)
+	created, err := decodeWorktreeWorkspace(createdOutput)
+	if err != nil {
+		return capabilities.OpenedContainer{}, err
+	}
 	name := created.Label
 	if name == "" {
 		name = target
@@ -214,11 +223,9 @@ func (b *Backend) OpenProject(ctx context.Context, path string, options capabili
 	return capabilities.OpenedContainer{ID: created.ID, Name: name, Path: path, Created: true}, nil
 }
 
+// openWorkspaceByID resolves the workspace label from the workspace list so the
+// reported container is complete whether or not the workspace is focused.
 func (b *Backend) openWorkspaceByID(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
-	if !options.NoFocus {
-		_, err := b.run(ctx, "workspace", "focus", options.ContainerID)
-		return capabilities.OpenedContainer{ID: options.ContainerID, Path: path}, err
-	}
 	output, err := b.run(ctx, "workspace", "list")
 	if err != nil {
 		return capabilities.OpenedContainer{}, err
@@ -228,9 +235,15 @@ func (b *Backend) openWorkspaceByID(ctx context.Context, path string, options ca
 		return capabilities.OpenedContainer{}, err
 	}
 	for _, workspace := range workspaces {
-		if workspace.ID == options.ContainerID {
-			return capabilities.OpenedContainer{ID: workspace.ID, Name: workspace.Label, Path: path}, nil
+		if workspace.ID != options.ContainerID {
+			continue
 		}
+		if !options.NoFocus {
+			if _, err := b.run(ctx, "workspace", "focus", options.ContainerID); err != nil {
+				return capabilities.OpenedContainer{}, err
+			}
+		}
+		return capabilities.OpenedContainer{ID: workspace.ID, Name: workspace.Label, Path: path}, nil
 	}
 	return capabilities.OpenedContainer{}, fmt.Errorf("herdr workspace %q not found", options.ContainerID)
 }
