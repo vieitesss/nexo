@@ -34,6 +34,10 @@ reconnect-max = "30s"
 devbox = "tmux"                 # auto (default), tmux, or herdr
 ```
 
+`ssh-config` expands a leading `~`, `~/...` or `$HOME` to the home
+directory; any other value is passed to `ssh -F` unchanged; empty uses the
+normal SSH lookup.
+
 ## Main and remote machines
 
 The main machine runs nexo. Every remote machine runs its own multiplexer and

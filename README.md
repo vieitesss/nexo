@@ -316,8 +316,8 @@ theme = "auto"
 
 [remote]
 machines = ["devbox"]
-# Absolute path; "~" is not expanded here. Use "" for the normal SSH lookup.
-ssh-config = "/home/you/.ssh/config"
+# "~", "~/..." and "$HOME" expand to the home directory. Use "" for the normal SSH lookup.
+ssh-config = "~/.ssh/config"
 transport = "ssh"
 reconnect-initial = "1s"
 reconnect-max = "30s"
@@ -349,7 +349,7 @@ machine and each remote machine need.
 | `tui.theme` | `auto` | Select `auto`, `dark`, or `light`; auto queries the terminal background and falls back to `COLORFGBG`, then dark. A running TUI polls the config and follows `dark`/`light` changes without a restart; `auto` is not re-probed mid-session. |
 | `remote.machines` | `[]` | SSH aliases to list and open. `local`, the local hostname, and aliases beginning with `-` are rejected. |
 | `remote.backends` | `{}` | Optional per-machine backend table. Each key must be in `remote.machines`; values are `auto`, `tmux`, or `herdr`. Unlisted machines use `auto`. |
-| `remote.ssh-config` | `""` | Optional absolute SSH config path for listing and SSH attachment. `~` is not expanded, so use a full path such as `/home/you/.ssh/config`; empty uses the normal SSH lookup. |
+| `remote.ssh-config` | `""` | Optional SSH config path for listing and SSH attachment. A leading `~`, `~/...` or `$HOME` expands to the home directory; any other value is passed through as written; empty uses the normal SSH lookup. |
 | `remote.transport` | `ssh` | Proxy attachment transport: `ssh`, `mosh`, or `et`. Listing always uses SSH. |
 | `remote.reconnect-initial` | `1s` | Initial retry delay for SSH proxy attachments; must be positive and no greater than `reconnect-max`. |
 | `remote.reconnect-max` | `30s` | Maximum retry delay for SSH proxy attachments; must be positive. |
