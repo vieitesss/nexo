@@ -17,7 +17,7 @@ func openThemePTY(t *testing.T) (terminal, peer *os.File) {
 		t.Skipf("pty unavailable: %v", err)
 	}
 	master := os.NewFile(uintptr(masterFD), "theme-pty-master")
-	if err := unix.IoctlSetInt(masterFD, unix.TIOCSPTLCK, 0); err != nil {
+	if err := unix.IoctlSetPointerInt(masterFD, unix.TIOCSPTLCK, 0); err != nil {
 		_ = master.Close()
 		t.Skipf("cannot unlock pty: %v", err)
 	}

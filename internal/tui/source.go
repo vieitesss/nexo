@@ -7,15 +7,18 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
+	"github.com/vieitesss/nexo/internal/startup"
 )
 
 type sourceGenerations struct {
+	projects   int
 	containers int
 	agents     int
 	remotes    int
@@ -32,9 +35,12 @@ func (state reloadState) done() bool {
 }
 
 type sourceUpdate struct {
-	changed    bool
-	reloadDone bool
-	toast      string
+	changed         bool
+	reloadDone      bool
+	toast           string
+	cmd             tea.Cmd
+	projects        []picker.Place
+	projectsUpdated bool
 }
 
 // sourceState owns all asynchronous source state. It deliberately keeps the
@@ -46,6 +52,7 @@ type sourceState struct {
 	agents       []agentRecord
 	remoteAgents []agentRecord
 
+	projectSource        func(context.Context) ([]picker.Place, error)
 	agentSource          capabilities.AgentSource
 	containerSource      capabilities.ContainerLister
 	agentRefreshInterval time.Duration
@@ -58,11 +65,13 @@ type sourceState struct {
 	groupWarnings  map[string]string
 	refreshErr     error
 
-	generations   sourceGenerations
-	refreshing    bool
-	pendingReload reloadState
-	cancelLoads   context.CancelFunc
-	gitSlots      chan struct{}
+	generations     sourceGenerations
+	refreshing      bool
+	pendingReload   reloadState
+	cancelLoads     context.CancelFunc
+	gitSlots        chan struct{}
+	trace           *startup.Trace
+	projectWarnings func() []string
 }
 
 func newSource(ctx context.Context, catalog *picker.Catalog, deps Deps, cancel context.CancelFunc, remoteMachines []string) *sourceState {
@@ -71,13 +80,14 @@ func newSource(ctx context.Context, catalog *picker.Catalog, deps Deps, cancel c
 	}
 	return &sourceState{
 		ctx: ctx, catalog: catalog, agents: newAgentRecords(deps.Agents, ""),
-		agentSource: deps.AgentSource, containerSource: deps.ContainerSource,
+		projectSource: deps.ProjectSource, agentSource: deps.AgentSource, containerSource: deps.ContainerSource,
 		agentRefreshInterval: deps.AgentRefreshInterval, gitLoader: deps.GitLoader,
 		remoteCommands: append([]tea.Cmd(nil), deps.RemoteCommands...),
 		remoteMachines: append([]string(nil), remoteMachines...),
 		remoteLoaded:   make(map[string]bool), groupErrors: make(map[string]string),
 		groupWarnings: make(map[string]string), refreshErr: deps.AgentError,
-		cancelLoads: cancel, gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
+		cancelLoads: cancel, gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)), trace: deps.StartupTrace,
+		projectWarnings: deps.ProjectWarnings,
 	}
 }
 
@@ -85,7 +95,14 @@ func newSource(ctx context.Context, catalog *picker.Catalog, deps Deps, cancel c
 // project snapshot as the projection, while source results still come through
 // Accept so stale generations have one home.
 func (s *sourceState) Init(projects []picker.Place) tea.Cmd {
-	cmds := make([]tea.Cmd, 0, 3+len(s.remoteCommands))
+	cmds := make([]tea.Cmd, 0, 4+len(s.remoteCommands))
+	if s.projectSource != nil {
+		s.generations.projects++
+		cmds = append(cmds, s.refreshProjectsAt(s.generations.projects))
+	}
+	if s.containerSource != nil {
+		cmds = append(cmds, s.refreshContainersAt(s.generations.containers))
+	}
 	if s.agentSource != nil {
 		s.refreshing = true
 		cmds = append(cmds, s.refreshAgentsAt(s.generations.agents), s.tick())
@@ -93,30 +110,7 @@ func (s *sourceState) Init(projects []picker.Place) tea.Cmd {
 	for _, command := range s.remoteCommands {
 		cmds = append(cmds, s.remoteCommand(command, s.generations.remotes))
 	}
-	if s.gitLoader != nil {
-		seenGit := map[string]bool{}
-		for _, place := range projects {
-			if !place.Git || place.Path == "" || seenGit[place.Path] {
-				continue
-			}
-			seenGit[place.Path] = true
-			place := place
-			cmds = append(cmds, func() tea.Msg {
-				select {
-				case s.gitSlots <- struct{}{}:
-					if s.ctx.Err() != nil {
-						<-s.gitSlots
-						return nil
-					}
-				case <-s.ctx.Done():
-					return nil
-				}
-				defer func() { <-s.gitSlots }()
-				value, err := s.gitLoader.Load(s.ctx, place.Path)
-				return picker.GitContextMsg{Path: place.Path, Context: value, Err: err}
-			})
-		}
-	}
+	cmds = append(cmds, s.gitCommands(projects)...)
 	if len(cmds) == 0 {
 		return nil
 	}
@@ -130,23 +124,42 @@ func (s *sourceState) cancel() {
 	}
 }
 
+func (s *sourceState) refreshProjectsAt(generation int) tea.Cmd {
+	return func() tea.Msg {
+		s.trace.Mark("projects-start")
+		projects, err := s.projectSource(s.ctx)
+		var warnings []string
+		if s.projectWarnings != nil {
+			warnings = s.projectWarnings()
+		}
+		s.trace.Mark("projects-done")
+		return projectsMsg{generation: generation, projects: projects, warnings: warnings, err: err}
+	}
+}
+
 func (s *sourceState) refreshAgentsAt(generation int) tea.Cmd {
 	return func() tea.Msg {
+		s.trace.Mark("agents-start")
 		agents, err := s.agentSource.ListAgents(s.ctx)
+		s.trace.Mark("agents-done")
 		return agentsMsg{generation: generation, agents: agents, err: err}
 	}
 }
 
 func (s *sourceState) refreshContainersAt(generation int) tea.Cmd {
 	return func() tea.Msg {
+		s.trace.Mark("containers-start")
 		containers, err := s.containerSource.ListContainers(s.ctx)
+		s.trace.Mark("containers-done")
 		return containersMsg{generation: generation, containers: containers, err: err}
 	}
 }
 
 func (s *sourceState) remoteCommand(command tea.Cmd, generation int) tea.Cmd {
 	return func() tea.Msg {
+		s.trace.Mark("remote-start")
 		msg := command()
+		s.trace.Mark("remote-done")
 		batch, ok := msg.(picker.RemoteBatch)
 		if !ok {
 			return msg
@@ -231,6 +244,25 @@ func (s *sourceState) Tick() tea.Cmd {
 // leaks into Model.Update.
 func (s *sourceState) Accept(msg tea.Msg) (sourceUpdate, bool) {
 	switch msg := msg.(type) {
+	case projectsMsg:
+		if msg.generation != s.generations.projects {
+			return sourceUpdate{}, false
+		}
+		if msg.err != nil {
+			return sourceUpdate{toast: "project discovery: " + msg.err.Error()}, true
+		}
+		if s.catalog != nil {
+			s.catalog.SetProjects(msg.projects)
+			s.syncCatalog()
+		}
+		toast := ""
+		if len(msg.warnings) > 0 {
+			toast = "project warning: " + msg.warnings[0]
+			if len(msg.warnings) > 1 {
+				toast += fmt.Sprintf(" (+%d more)", len(msg.warnings)-1)
+			}
+		}
+		return sourceUpdate{changed: true, toast: toast, projects: msg.projects, projectsUpdated: true, cmd: tea.Batch(s.gitCommands(msg.projects)...)}, true
 	case agentsMsg:
 		pendingBefore := s.pending()
 		if msg.generation != s.generations.agents {
@@ -323,4 +355,36 @@ func (s *sourceState) syncCatalog() {
 		s.groupErrors[machine] = sanitize(status.Error)
 		s.groupWarnings[machine] = sanitize(status.Warning)
 	}
+}
+
+func (s *sourceState) gitCommands(projects []picker.Place) []tea.Cmd {
+	if s.gitLoader == nil {
+		return nil
+	}
+	seenGit := map[string]bool{}
+	cmds := make([]tea.Cmd, 0, len(projects))
+	for _, place := range projects {
+		if !place.Git || place.Path == "" || seenGit[place.Path] {
+			continue
+		}
+		seenGit[place.Path] = true
+		place := place
+		cmds = append(cmds, func() tea.Msg {
+			s.trace.Mark("git-start")
+			select {
+			case s.gitSlots <- struct{}{}:
+				if s.ctx.Err() != nil {
+					<-s.gitSlots
+					return nil
+				}
+			case <-s.ctx.Done():
+				return nil
+			}
+			defer func() { <-s.gitSlots }()
+			value, err := s.gitLoader.Load(s.ctx, place.Path)
+			s.trace.Mark("git-done")
+			return picker.GitContextMsg{Path: place.Path, Context: value, Err: err}
+		})
+	}
+	return cmds
 }

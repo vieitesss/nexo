@@ -145,6 +145,79 @@ func (source fixedContainerSource) ListContainers(context.Context) ([]capabiliti
 	return source.containers, source.err
 }
 
+func TestProjectSnapshotUpdatesOnlyAfterGenerationAcceptance(t *testing.T) {
+	old := picker.Place{Kind: picker.ProjectKind, Path: "/old", Group: "/work", DisplayRemainder: "old"}
+	fresh := picker.Place{Kind: picker.ProjectKind, Path: "/fresh", Group: "/work", DisplayRemainder: "fresh"}
+	model := NewModel(context.Background(), Deps{Projects: []picker.Place{old}}, ProjectsTab)
+	model.source.generations.projects = 1
+	model = updateModel(t, model, projectsMsg{generation: 0, projects: []picker.Place{fresh}})
+	if len(model.deps.Projects) != 1 || model.deps.Projects[0].Path != old.Path {
+		t.Fatalf("stale project result updated deps: %#v", model.deps.Projects)
+	}
+	model = updateModel(t, model, projectsMsg{generation: 1, projects: []picker.Place{fresh}, warnings: []string{"permissions"}})
+	if len(model.deps.Projects) != 1 || model.deps.Projects[0].Path != fresh.Path || !strings.Contains(model.toast, "permissions") {
+		t.Fatalf("accepted project result = %#v, toast=%q", model.deps.Projects, model.toast)
+	}
+}
+
+func TestPassiveSourcesKeepTheTypedTab(t *testing.T) {
+	local := picker.LocalMachine()
+	model := NewModel(context.Background(), Deps{}, ContainersTab)
+	model = updateModel(t, model, keyMsg(tea.KeyRunes, 'a'))
+	model = updateModel(t, model, keyMsg(tea.KeyRunes, 'p'))
+	model = updateModel(t, model, keyMsg(tea.KeyRunes, 'i'))
+	model = updateModel(t, model, agentsMsg{generation: 0, agents: []capabilities.Agent{{
+		PaneID: "agent", Container: "api", ContainerID: "api", State: "working",
+	}}})
+	model = updateModel(t, model, containersMsg{generation: 0, containers: []capabilities.Container{{
+		ID: "api", Name: "api", Machine: local,
+	}}})
+	if model.Query() != "api" || model.Tab() != ContainersTab {
+		t.Fatalf("passive arrivals changed the chosen tab: query=%q tab=%q", model.Query(), model.Tab())
+	}
+}
+
+func TestFirstContainerSnapshotSelectsAnItem(t *testing.T) {
+	local := picker.LocalMachine()
+	model := NewModel(context.Background(), Deps{}, ContainersTab)
+	model.source.containerSource = fixedContainerSource{containers: []capabilities.Container{{ID: "api", Name: "api", Machine: local}}}
+	model.source.generations.containers = 1
+	model = updateModel(t, model, containersMsg{generation: 1, containers: []capabilities.Container{{ID: "api", Name: "api", Machine: local}}})
+	if model.Cursor() != containerIdentity(picker.Place{Machine: local, ContainerID: "api"}) {
+		t.Fatalf("cursor after first snapshot = %q, want container", model.Cursor())
+	}
+	model = updateModel(t, model, keyMsg(tea.KeyEnter))
+	if _, ok := model.SelectedPlace(); !ok {
+		t.Fatal("Enter did not select the first loaded container")
+	}
+}
+
+func TestOpeningTabUsesOnlyInitialLocalAgents(t *testing.T) {
+	remoteUnseen := picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "remote", State: "stopped", Seen: false}}}
+	localUnseen := agentsMsg{generation: 0, agents: []capabilities.Agent{{PaneID: "local", State: "stopped", Seen: false}}}
+	newModel := func() Model {
+		return NewModel(context.Background(), Deps{AutoTab: true, RemoteMachines: []string{"dev"}}, ContainersTab)
+	}
+	remoteFirst := updateModel(t, newModel(), remoteUnseen)
+	remoteFirst = updateModel(t, remoteFirst, localUnseen)
+	if remoteFirst.Tab() != AgentsTab {
+		t.Fatalf("remote-first opening tab = %q, want agents after local snapshot", remoteFirst.Tab())
+	}
+	localFirst := updateModel(t, newModel(), localUnseen)
+	localFirst = updateModel(t, localFirst, remoteUnseen)
+	if localFirst.Tab() != AgentsTab {
+		t.Fatalf("local-first opening tab = %q, want agents", localFirst.Tab())
+	}
+}
+
+func TestOpeningTabFallsBackToContainersOnLocalError(t *testing.T) {
+	model := NewModel(context.Background(), Deps{AutoTab: true}, AgentsTab)
+	model = updateModel(t, model, agentsMsg{generation: 0, err: errors.New("unavailable")})
+	if model.Tab() != ContainersTab {
+		t.Fatalf("opening tab after local error = %q, want containers", model.Tab())
+	}
+}
+
 func TestContainerRefreshErrorAfterKillIsRetryable(t *testing.T) {
 	local := picker.LocalMachine()
 	deps := Deps{

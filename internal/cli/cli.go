@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/vieitesss/nexo/internal/commands"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
+	"github.com/vieitesss/nexo/internal/startup"
 	"github.com/vieitesss/nexo/internal/version"
 )
 
@@ -108,6 +110,25 @@ func RunWith(args []string, stdout, stderr io.Writer, commandRunner runner.Comma
 // and feature packages verify the complete invocation context without
 // reaching into process globals.
 func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr io.Writer, commandRunner runner.CommandRunner, environment backend.Environment, tty string) int {
+	var traceBuffer bytes.Buffer
+	traceOutput := stderr
+	tuiTrace := false
+	for _, arg := range args {
+		if arg == "tui" {
+			tuiTrace = true
+			break
+		}
+	}
+	if tuiTrace && strings.TrimSpace(os.Getenv("NEXO_STARTUP_TRACE")) != "" {
+		traceOutput = &traceBuffer
+		defer func() {
+			if traceBuffer.Len() > 0 && stderr != nil {
+				_, _ = stderr.Write(traceBuffer.Bytes())
+			}
+		}()
+	}
+	trace := startup.New("cli", traceOutput)
+	trace.Mark("start")
 	if registry == nil {
 		writeError(stderr, errors.New("command registry is nil"))
 		return 2
@@ -137,6 +158,7 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 	}
 
 	cfg, err := loadConfig(options)
+	trace.Mark("config-loaded")
 	if err != nil {
 		writeError(stderr, err)
 		return 2
@@ -153,23 +175,26 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		return 2
 	}
 	selection = selection.WithCapabilities(commandRunner, environment)
+	trace.Mark("backend-ready")
 	if configurator, ok := selection.Adapter.(interface {
 		ConfigureRemoteConfig(config.RemoteConfig, string)
 	}); ok {
 		configurator.ConfigureRemoteConfig(cfg.Remote, options.ConfigPath)
 	}
 	if err := command.Run(context.Background(), commands.Invocation{
-		Selection:  selection,
-		Config:     cfg,
-		ConfigPath: options.ConfigPath,
-		Runner:     commandRunner,
-		Adapter:    selection.Adapter,
-		Stdout:     stdout,
-		Stderr:     stderr,
-		Stdin:      os.Stdin,
-		JSON:       options.JSON,
-		Args:       options.Args,
+		Selection:    selection,
+		Config:       cfg,
+		ConfigPath:   options.ConfigPath,
+		Runner:       commandRunner,
+		Adapter:      selection.Adapter,
+		Stdout:       stdout,
+		Stderr:       stderr,
+		Stdin:        os.Stdin,
+		StartupTrace: trace,
+		JSON:         options.JSON,
+		Args:         options.Args,
 	}); err != nil {
+		trace.Mark("command-failed")
 		writeError(stderr, err)
 		var usageErr commands.UsageError
 		if errors.As(err, &usageErr) {
@@ -177,6 +202,7 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		}
 		return 1
 	}
+	trace.Mark("command-done")
 	return 0
 }
 

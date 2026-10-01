@@ -22,13 +22,14 @@ type inputState struct {
 	ctx  context.Context
 	deps Deps
 
-	tab        Tab
-	query      []rune
-	cursor     string
-	forceFirst bool
-	folded     map[string]bool
-	expanded   map[string]bool
-	marked     map[picker.ContainerRef]bool
+	tab         Tab
+	query       []rune
+	cursor      string
+	forceFirst  bool
+	cursorMoved bool
+	folded      map[string]bool
+	expanded    map[string]bool
+	marked      map[picker.ContainerRef]bool
 
 	confirmKill    bool
 	killTargets    []picker.ContainerRef
@@ -105,7 +106,6 @@ func (s *inputState) reconcileSelection(oldRows, rows []row) {
 				return
 			}
 		}
-		s.forceFirst = false
 	}
 	for _, candidate := range rows {
 		if candidate.cursorable && candidate.id == old {
@@ -229,6 +229,8 @@ func (s *inputState) mouse(msg tea.MouseMsg, frame inputFrame) inputEffect {
 		return s.accept(frame.rows)
 	}
 	s.cursor = clicked.id
+	s.forceFirst = false
+	s.cursorMoved = true
 	return inputEffect{}
 }
 
@@ -503,6 +505,8 @@ func (s *inputState) moveCursor(delta int, rows []row) {
 		current = len(indices) - 1
 	}
 	s.cursor = rows[indices[current]].id
+	s.forceFirst = false
+	s.cursorMoved = true
 }
 
 func (s *inputState) pageSize(height int) int {

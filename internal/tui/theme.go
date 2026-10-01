@@ -45,7 +45,8 @@ var tmuxClientTheme = func() string {
 
 // configureTheme selects the adaptive colour variant used by lipgloss. An
 // explicit choice never touches the terminal; auto asks the controlling tty
-// and falls back to tmux's client theme, COLORFGBG and then dark.
+// synchronously, before Bubble Tea owns it, and falls back to tmux's client
+// theme, COLORFGBG and then dark.
 func configureTheme(theme string) {
 	switch theme {
 	case "light":
@@ -57,6 +58,10 @@ func configureTheme(theme string) {
 	}
 }
 
+// detectDarkBackground probes the controlling tty while it is still the only
+// reader. Bubble Tea is not started yet, so the OSC/DA1 exchange cannot
+// compete with it and any keys typed during the probe are drained before the
+// terminal returns to cooked mode.
 func detectDarkBackground() bool {
 	terminal, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
@@ -73,7 +78,15 @@ func detectDarkBackground() bool {
 	}
 	defer func() { _ = term.Restore(terminal.Fd(), state) }()
 
-	if dark, answered := queryDarkBackground(terminal, backgroundQueryTimeout); answered {
+	return resolveAutoTheme(func() (bool, bool) {
+		return queryDarkBackground(terminal, backgroundQueryTimeout)
+	})
+}
+
+// resolveAutoTheme applies the auto-mode fallback order: a tty answer wins,
+// otherwise tmux's client theme (only inside tmux), then COLORFGBG, then dark.
+func resolveAutoTheme(probe func() (dark, answered bool)) bool {
+	if dark, answered := probe(); answered {
 		return dark
 	}
 	return fallbackDarkBackground()

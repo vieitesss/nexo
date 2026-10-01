@@ -196,6 +196,26 @@ func TestFallbackDarkBackgroundAsksTmuxFirst(t *testing.T) {
 	}
 }
 
+// TestAutoThemeFallsBackWithoutAnswerOrHints covers the auto-mode composition:
+// when the tty stays silent and no hint is available the theme is dark, while
+// a real tty answer wins over the fallback chain.
+func TestAutoThemeFallsBackWithoutAnswerOrHints(t *testing.T) {
+	previous := tmuxClientTheme
+	t.Cleanup(func() { tmuxClientTheme = previous })
+	tmuxClientTheme = func() string { return "" }
+	t.Setenv("TMUX", "")
+	t.Setenv("COLORFGBG", "")
+
+	if got := resolveAutoTheme(func() (bool, bool) { return false, false }); !got {
+		t.Fatal("auto theme without an answer or hints = light, want dark")
+	}
+
+	t.Setenv("COLORFGBG", "15;0")
+	if got := resolveAutoTheme(func() (bool, bool) { return false, true }); got {
+		t.Fatal("auto theme with a light tty answer = dark, want light")
+	}
+}
+
 func TestConfigureThemeLightUsesLightAdaptiveColours(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	previous := lipgloss.HasDarkBackground()
