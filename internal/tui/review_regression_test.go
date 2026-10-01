@@ -325,10 +325,10 @@ func TestPlaceRankingAndVisibleAgentHighlights(t *testing.T) {
 	model = NewModel(context.Background(), Deps{Agents: []capabilities.Agent{{PaneID: "a", Container: "one", Target: "one:1", Harness: "pi", State: "working", Branch: "branch"}}}, AgentsTab)
 	model.SetQuery("branch")
 	model.SetSize(100, 8)
-	// Inspect the row unselected so the semantic yellow match survives.
+	// Inspect the row unselected so the accent match colour survives.
 	model.cursor = ""
 	lipgloss.SetColorProfile(termenv.ANSI)
-	if !strings.Contains(model.View(), "branch") || !strings.Contains(model.View(), "\x1b[1;33mb") {
+	if !strings.Contains(model.View(), "branch") || !strings.Contains(model.View(), accent().Bold(true).Render("b")) {
 		t.Fatalf("branch match not highlighted: %q", model.View())
 	}
 	projects := NewModel(context.Background(), Deps{Projects: []picker.Place{

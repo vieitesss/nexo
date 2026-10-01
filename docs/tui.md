@@ -51,3 +51,20 @@ clicking elsewhere selects it, and a second click opens it. Clicks and wheel
 events are ignored while the kill confirmation or inline rename footer is
 active. Shift-drag still selects text in most terminals; hold Shift when you
 need the terminal's normal text selection.
+
+## Colours
+
+The brand colours come from the icon in `assets/logo.svg`. The lime accent
+(`#B8F15A`), the foreground (`#E8EAED`) and the muted grey (`#8A919E`) are
+adaptive: on a light terminal they switch to an olive accent, a darker grey and
+a near-black foreground so the text stays readable. The icon also defines a
+ground (`#0F1115`), a tile (`#171A21`) and a tile border (`#2A2F3A`); the
+interface paints no background, so those are not used on screen.
+
+Semantic colours stay as terminal ANSI codes and follow the user's theme:
+agent state is red, yellow or green, Git additions and deletions are bright
+green and bright red, and errors are red. The selected row is the only painted
+background — one blue bar with a single foreground — and its text is stripped
+of every other colour.
+
+There is no user theming; the colours are not configurable.
