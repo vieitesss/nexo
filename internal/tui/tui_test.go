@@ -366,3 +366,29 @@ func TestRenderFillsRequestedSurface(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkContainerRowsMultiMachine exercises the row rebuild with local and
+// remote containers where every row already carries its associated agents.
+func BenchmarkContainerRowsMultiMachine(b *testing.B) {
+	machines := []string{"dev", "stage", "prod"}
+	containers := make([]capabilities.Container, 0, 30)
+	for index := 0; index < 30; index++ {
+		id := "local-" + strconv.Itoa(index)
+		containers = append(containers, capabilities.Container{ID: id, Name: id, Machine: picker.LocalMachine()})
+	}
+	model := NewModel(context.Background(), Deps{Containers: containers, RemoteMachines: machines}, ContainersTab)
+	for _, machine := range machines {
+		places := make([]picker.Place, 0, 30)
+		for index := 0; index < 30; index++ {
+			id := machine + "-" + strconv.Itoa(index)
+			places = append(places, picker.Place{Kind: picker.ContainerKind, ContainerID: id, ContainerName: id})
+		}
+		model.applyRemote(picker.RemoteBatch{Machine: machine, Places: places})
+	}
+	model.SetSize(120, 40)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		model.containerRows()
+	}
+}
