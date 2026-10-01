@@ -12,6 +12,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/lifecycle"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/runner"
 )
@@ -86,16 +87,14 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 	if b == nil || b.Runner == nil {
 		return capabilities.Worktree{}, errors.New("tmux worktree creator requires a command runner")
 	}
-	path, err := filepath.Abs(options.Destination)
-	if err != nil {
-		return capabilities.Worktree{}, fmt.Errorf("resolve worktree destination: %w", err)
-	}
-	if _, err := os.Lstat(path); err == nil {
-		return capabilities.Worktree{}, fmt.Errorf("worktree destination %q already exists", path)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return capabilities.Worktree{}, fmt.Errorf("check worktree destination %q: %w", path, err)
-	}
+	return lifecycle.CreateWorktree(ctx, options, lifecycle.WorktreeAdapter{
+		Create:   b.createWorktree,
+		Open:     b.openProjectNative,
+		Rollback: b.rollbackCreatedWorktree,
+	})
+}
 
+func (b *Backend) createWorktree(ctx context.Context, options capabilities.WorktreeCreateOptions) (capabilities.Worktree, error) {
 	branchExisted := false
 	if options.NewBranch {
 		branchExisted = b.branchExists(ctx, options.Repo, options.Branch)
@@ -105,37 +104,28 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 	}
 	args := []string{"-C", options.Repo, "worktree", "add"}
 	if options.NewBranch {
-		args = append(args, "-b", options.Branch, path)
+		args = append(args, "-b", options.Branch, options.Destination)
 	} else {
-		args = append(args, path, options.Branch)
+		args = append(args, options.Destination, options.Branch)
 	}
 	if _, err := b.runGit(ctx, args...); err != nil {
-		rollbackErr := b.rollbackWorktree(ctx, options.Repo, path, options.NewBranch, options.Branch, branchExisted)
+		rollbackErr := b.rollbackWorktree(ctx, options.Repo, options.Destination, options.NewBranch, options.Branch, branchExisted)
 		if rollbackErr != nil {
 			return capabilities.Worktree{}, errors.Join(err, rollbackErr)
 		}
 		return capabilities.Worktree{}, err
 	}
+	return capabilities.Worktree{Path: options.Destination, Branch: options.Branch, Repo: options.Repo, NewBranch: options.NewBranch}, nil
+}
 
-	result := capabilities.Worktree{Path: path, Branch: options.Branch, Repo: options.Repo, NewBranch: options.NewBranch}
-	container, err := b.openProject(ctx, path, capabilities.OpenOptions{NoFocus: options.NoFocus})
-	result.Container = container
-	if container.Created {
-		result.SessionName = container.Name
-	}
-	if err != nil {
-		rollbackErr := b.rollbackWorktree(ctx, options.Repo, path, options.NewBranch, options.Branch, branchExisted)
-		if container.Created {
-			if _, killErr := b.run(ctx, "kill-session", "-t", "="+container.Name); killErr != nil {
-				rollbackErr = errors.Join(rollbackErr, killErr)
-			}
+func (b *Backend) rollbackCreatedWorktree(ctx context.Context, worktree capabilities.Worktree) error {
+	rollbackErr := b.rollbackWorktree(ctx, worktree.Repo, worktree.Path, worktree.NewBranch, worktree.Branch, false)
+	if worktree.Container.Created && worktree.SessionName != "" {
+		if _, killErr := b.run(ctx, "kill-session", "-t", "="+worktree.SessionName); killErr != nil {
+			rollbackErr = errors.Join(rollbackErr, killErr)
 		}
-		if rollbackErr != nil {
-			return capabilities.Worktree{}, errors.Join(err, rollbackErr)
-		}
-		return capabilities.Worktree{}, err
 	}
-	return result, nil
+	return rollbackErr
 }
 
 func (b *Backend) RemoveWorktree(ctx context.Context, worktree capabilities.Worktree) error {
@@ -195,12 +185,12 @@ func (b *Backend) runGit(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 // OpenProject opens path in a tmux session and focuses it unless NoFocus is
-// set.
+// set. Shared lifecycle policy normalizes the result at this module's seam.
 func (b *Backend) OpenProject(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
-	return b.openProject(ctx, path, options)
+	return lifecycle.OpenProject(ctx, path, options, b.openProjectNative)
 }
 
-func (b *Backend) openProject(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
+func (b *Backend) openProjectNative(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
 	if options.ContainerID != "" {
 		return capabilities.OpenedContainer{}, &UnsupportedError{Option: "--workspace-id"}
 	}
