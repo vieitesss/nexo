@@ -8,11 +8,13 @@ refreshed.
 
 Projects are grouped by their containing folder. On an empty query every folder
 and every checkout with linked worktrees starts folded. Right unfolds the
-selected folder or checkout. Left folds the parent and moves the selection
-there: a worktree folds its checkout, a project folds its folder, and an
-expanded folder folds itself. Left on a folded folder does nothing. A folded
-checkout keeps a subtle count of its hidden worktree children. Search does not
-change the saved fold state.
+selected folder or checkout. Left folds the selected row when it is expanded —
+a folder header or a checkout with worktrees — and keeps the selection there;
+otherwise it folds the parent and moves the selection there, so a worktree
+folds its checkout, a folded checkout folds its folder, and a peer project
+folds the same folder. Left on a folded folder does nothing. A folded checkout
+keeps a subtle count of its hidden worktree children. Search does not change
+the saved fold state.
 
 ## Search
 

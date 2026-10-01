@@ -104,7 +104,7 @@ func TestProjectsQueryIsFlatRankedAndStartsAtBestName(t *testing.T) {
 	// The folder column is flat mode only and reads as a path before the name.
 	model.SetSize(120, 16)
 	plain := shell.Plain(model.View())
-	if !strings.Contains(plain, "~/work/prefapp/") || strings.Contains(plain, "⌄  ") {
+	if !strings.Contains(plain, "~/work/prefapp/") || strings.Contains(plain, "▾  ") {
 		t.Fatalf("flat query did not put the folder before the name: %q", plain)
 	}
 }

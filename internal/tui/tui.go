@@ -1257,7 +1257,7 @@ func (m *Model) toggleClickedFold(clicked row) {
 
 func foldArrow(row row) string {
 	if row.expanded {
-		return "⌄"
+		return "▾"
 	}
 	return "▸"
 }
@@ -1279,6 +1279,16 @@ func foldPrefix(row row) string {
 		return indent
 	}
 	return indent + foldArrow(row) + "  "
+}
+
+// foldPrefixStyled renders the tree guides and the fold glyph with one shared
+// style, so a group header and a project with worktrees show the same marker.
+func foldPrefixStyled(row row) string {
+	prefix := muted().Render(foldIndent(row))
+	if !row.foldable {
+		return prefix
+	}
+	return prefix + foldStyle().Render(foldArrow(row)) + "  "
 }
 
 func (m Model) tabAt(x int) (Tab, bool) {
@@ -1554,16 +1564,23 @@ func (m *Model) foldRight() {
 	m.cursor = current.id
 }
 
-// foldLeft folds the selected row's parent and moves the selection there. A
-// worktree folds its checkout, a project folds its folder, and an expanded
-// folder folds itself. A folded folder is already collapsed and does nothing.
-// Search rows are flat, so folding keys only act while browsing folders.
+// foldLeft collapses the selected tree row. An expanded group or project with
+// worktrees folds itself and keeps the cursor; any other row folds its parent
+// and moves the cursor there. Search rows are flat, so folding keys only act
+// while browsing folders.
 func (m *Model) foldLeft() {
 	if m.tab != ProjectsTab || string(m.query) != "" {
 		return
 	}
 	current, ok := m.currentRow()
 	if !ok {
+		return
+	}
+	if current.foldable && current.expanded {
+		delete(m.expanded, current.id)
+		m.folded[current.id] = true
+		m.rebuild(false)
+		m.cursor = current.id
 		return
 	}
 	parent := foldParent(current)
@@ -1576,8 +1593,8 @@ func (m *Model) foldLeft() {
 	m.cursor = parent
 }
 
-// foldParent reports the row that Left folds from the selected row, or the
-// empty string when Left has nothing to fold.
+// foldParent reports the row that Left folds from the selected row when the
+// row itself cannot fold, or the empty string when Left has nothing to fold.
 func foldParent(current row) string {
 	switch current.kind {
 	case groupRow:
@@ -1761,7 +1778,7 @@ func (m Model) rowText(row row) (string, string) {
 		if selected {
 			labelStyle = normal()
 		}
-		return marker + labelStyle.Render(foldPrefix(row)+abbreviateHome(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
+		return marker + foldPrefixStyled(row) + labelStyle.Render(abbreviateHome(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
 	case newContainerRow:
 		return "  " + strings.Repeat("  ", row.depth) + muted().Render(sanitize(row.label)), ""
 	case separatorRow:
@@ -1782,8 +1799,9 @@ func (m Model) rowText(row row) (string, string) {
 func (m Model) agentText(row row, marker string) (string, string) {
 	a := row.agent
 	container := displayContainer(a, row.agentMachine)
+	selected := row.id == m.cursor
 	nameStyle := bold()
-	if row.id == m.cursor {
+	if selected {
 		nameStyle = normal()
 	}
 	primary := nameStyle.Render(highlightText(sanitize(a.Harness), string(m.query))) + muted().Render("  "+highlightText(sanitize(container), string(m.query)))
@@ -1792,7 +1810,7 @@ func (m Model) agentText(row row, marker string) (string, string) {
 	if state == "stopped" && a.StoppedSince != nil {
 		stateText += " " + stoppedAge(m.now(), *a.StoppedSince)
 	}
-	stateStyle := stateColor(a)
+	stateStyle := stateColorFor(a, selected)
 	left := stateStyle.Render(stateText)
 	if a.Branch != "" {
 		branch := highlightText("⎇ "+sanitize(a.Branch), string(m.query))
@@ -1826,6 +1844,7 @@ func (m Model) containerText(row row, marker string) (string, string) {
 		name += strings.Repeat(" ", max(0, row.nameWidth-shell.StringWidth(name)))
 	}
 	nameGutter := "  "
+	selected := row.id == m.cursor
 	marked := m.marked[picker.ContainerRef{Machine: row.place.Machine, ID: row.place.ContainerID}]
 	if marked {
 		nameGutter = magenta().Render("◆ ")
@@ -1843,8 +1862,8 @@ func (m Model) containerText(row row, marker string) (string, string) {
 		if state == "stopped" && agent.StoppedSince != nil {
 			age = " " + stoppedAge(m.now(), *agent.StoppedSince)
 		}
-		full = append(full, stateColor(agent).Render("●")+" "+muted().Render(sanitize(agent.Harness)+" "+state+age))
-		dots += stateColor(agent).Render("●")
+		full = append(full, stateColorFor(agent, selected).Render("●")+" "+muted().Render(sanitize(agent.Harness)+" "+state+age))
+		dots += stateColorFor(agent, selected).Render("●")
 	}
 	activity := ""
 	if row.activity != nil {
@@ -2026,7 +2045,7 @@ func (m Model) placeText(row row, marker string) (string, string) {
 	nameText := highlightText(name, string(m.query))
 	if prefix := foldPrefix(row); prefix != "" {
 		// Tree gutters and fold chevrons are structural, not part of fuzzy matching.
-		nameText = muted().Render(prefix) + highlightText(strings.TrimPrefix(name, prefix), string(m.query))
+		nameText = foldPrefixStyled(row) + highlightText(strings.TrimPrefix(name, prefix), string(m.query))
 	}
 	if count != "" {
 		nameText += muted().Render(count)
@@ -2243,13 +2262,26 @@ func fit(value string, width int) string {
 }
 
 func selectedRowBackground(value string) string {
-	style := lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Light: "#d9eaf7", Dark: "#31516f"})
+	// Faint text disappears against the selection blue, so drop it and let the
+	// bright selection foreground apply to every visible segment.
+	value = strings.ReplaceAll(value, "\x1b[2m", "")
+	style := lipgloss.NewStyle().Background(selectionBackground()).Foreground(selectionForeground())
 	start := strings.TrimSuffix(style.Render(""), "\x1b[0m")
 	if start == "" {
 		return value
 	}
 	value = strings.ReplaceAll(value, "\x1b[0m", "\x1b[0m"+start)
 	return start + value + "\x1b[0m"
+}
+
+// selectionBackground and selectionForeground are chosen together so the row's
+// text always contrasts with its own background in either terminal theme.
+func selectionBackground() lipgloss.AdaptiveColor {
+	return lipgloss.AdaptiveColor{Light: "#d9eaf7", Dark: "#31516f"}
+}
+
+func selectionForeground() lipgloss.AdaptiveColor {
+	return lipgloss.AdaptiveColor{Light: "#0b1b28", Dark: "#f4f8fc"}
 }
 
 func stripBackgroundResets(value string) string {
@@ -2281,8 +2313,25 @@ func stateColor(agent capabilities.Agent) lipgloss.Style {
 		return yellow()
 	}
 }
+
+// stateColorFor brightens the state colour on the selected row: the dark
+// red, green and yellow variants do not contrast with the selection blue.
+func stateColorFor(agent capabilities.Agent, selected bool) lipgloss.Style {
+	if !selected {
+		return stateColor(agent)
+	}
+	switch {
+	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && !agent.Seen:
+		return brightRed()
+	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped"):
+		return brightGreen()
+	default:
+		return brightYellow()
+	}
+}
 func normal() lipgloss.Style      { return lipgloss.NewStyle().Foreground(lipgloss.Color("default")) }
 func muted() lipgloss.Style       { return normal().Faint(true) }
+func foldStyle() lipgloss.Style   { return muted() }
 func accent() lipgloss.Style      { return lipgloss.NewStyle().Foreground(lipgloss.Color("6")) }
 func divergence() lipgloss.Style  { return lipgloss.NewStyle().Foreground(lipgloss.Color("6")) }
 func magenta() lipgloss.Style     { return lipgloss.NewStyle().Foreground(lipgloss.Color("5")) }
@@ -2291,7 +2340,10 @@ func green() lipgloss.Style       { return lipgloss.NewStyle().Foreground(lipglo
 func yellow() lipgloss.Style      { return lipgloss.NewStyle().Foreground(lipgloss.Color("3")) }
 func brightGreen() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("10")) }
 func brightRed() lipgloss.Style   { return lipgloss.NewStyle().Foreground(lipgloss.Color("9")) }
-func bold() lipgloss.Style        { return normal().Bold(true) }
+func brightYellow() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+}
+func bold() lipgloss.Style { return normal().Bold(true) }
 func highlightText(text, query string) string {
 	match, ok := picker.Rank(query, text)
 	if !ok || len(match.Positions) == 0 {

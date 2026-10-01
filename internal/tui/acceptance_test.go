@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -311,6 +313,107 @@ func TestFooterOnlyAdvertisesCurrentActions(t *testing.T) {
 	for _, action := range []string{"Enter", "Ctrl-X", "Ctrl-R", "Ctrl-T"} {
 		if !strings.Contains(containerFooter, action) {
 			t.Fatalf("container footer missing %q: %q", action, containerFooter)
+		}
+	}
+}
+
+var ansiParameters = regexp.MustCompile(`\x1b\[([0-9;:]*)m`)
+
+// backgroundCoverage walks a styled line and reports how many visible cells
+// had an active background out of the line's total width.
+func backgroundCoverage(line string) (covered, total int) {
+	background := false
+	for index := 0; index < len(line); {
+		if line[index] == '\x1b' {
+			match := ansiParameters.FindStringSubmatch(line[index:])
+			if match == nil {
+				index++
+				continue
+			}
+			parameters := strings.FieldsFunc(match[1], func(r rune) bool { return r == ';' || r == ':' })
+			if len(parameters) == 0 {
+				background = false
+			}
+			for _, parameter := range parameters {
+				value, _ := strconv.Atoi(parameter)
+				if value == 0 || value == 49 {
+					background = false
+				}
+				if value == 48 || value == 7 {
+					background = true
+				}
+			}
+			index += len(match[0])
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(line[index:])
+		width := shell.StringWidth(line[index : index+size])
+		total += width
+		if background {
+			covered += width
+		}
+		index += size
+	}
+	return covered, total
+}
+
+func channel(hex string) (int, int, int) {
+	r, g, b, _ := lipgloss.Color(hex).RGBA()
+	return int(r >> 8), int(g >> 8), int(b >> 8)
+}
+
+// TestSelectedRowUsesLightForegroundAcrossTheFullWidth checks the selection
+// is readable in every tab and in both themes: each painted row carries the
+// explicit selection foreground and its background covers every column,
+// padding included.
+func TestSelectedRowUsesLightForegroundAcrossTheFullWidth(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	previous := lipgloss.HasDarkBackground()
+	t.Cleanup(func() { lipgloss.SetHasDarkBackground(previous) })
+	for _, dark := range []bool{true, false} {
+		lipgloss.SetHasDarkBackground(dark)
+		style := lipgloss.NewStyle().Background(selectionBackground()).Foreground(selectionForeground())
+		start := strings.TrimSuffix(style.Render(""), "\x1b[0m")
+		if start == "" {
+			t.Fatal("selection style rendered no escape sequence")
+		}
+		for _, tab := range []Tab{AgentsTab, ContainersTab, ProjectsTab} {
+			model := NewModel(context.Background(), richDeps(), tab)
+			model.SetSize(100, 24)
+			cursorable := []string{}
+			for _, row := range model.rows {
+				if row.cursorable {
+					cursorable = append(cursorable, row.id)
+				}
+			}
+			if len(cursorable) == 0 {
+				t.Fatalf("tab %q has no cursorable rows", tab)
+			}
+			for _, id := range cursorable {
+				model.cursor = id
+				lines := strings.Split(model.View(), "\n")
+				painted := 0
+				for _, line := range lines[2 : len(lines)-1] {
+					if !strings.HasPrefix(line, start) {
+						continue
+					}
+					painted++
+					covered, total := backgroundCoverage(line)
+					if covered != total || total != model.width {
+						t.Fatalf("dark=%v tab %q row %q: background covers %d of %d cells (width %d): %q", dark, tab, id, covered, total, model.width, line)
+					}
+				}
+				if painted == 0 {
+					t.Fatalf("dark=%v tab %q row %q has no selection background", dark, tab, id)
+				}
+			}
+		}
+		if dark {
+			if r, g, b := channel(selectionForeground().Dark); r < 200 || g < 200 || b < 200 {
+				t.Fatalf("dark selection foreground is not light: %d,%d,%d", r, g, b)
+			}
+		} else if r, g, b := channel(selectionForeground().Light); r > 80 || g > 80 || b > 80 {
+			t.Fatalf("light selection foreground is not dark: %d,%d,%d", r, g, b)
 		}
 	}
 }
