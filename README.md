@@ -286,6 +286,7 @@ statuses, and safe verification.
 | `←` / `→` | Fold the selected folder or checkout, step Left to its parent, or unfold with Right |
 | `Ctrl-T` | Mark the selected container |
 | `Ctrl-O` | Open the clone form for the selected Projects row |
+| `Ctrl-D` | Open the new-directory form in the Projects tab |
 | `Ctrl-X` | Kill marked or selected containers after confirmation |
 | `Ctrl-R` | Rename the selected container |
 | `Esc` / `Ctrl-C` | Clear search, then close / close |

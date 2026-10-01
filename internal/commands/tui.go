@@ -12,6 +12,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/destination"
 	gitops "github.com/vieitesss/nexo/internal/git"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
@@ -141,6 +142,12 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 	deps.RemoteMachines = append([]string(nil), invocation.Config.Remote.ConfiguredMachines()...)
 	deps.CloneProject = func(cloneCtx context.Context, source, destination string) error {
 		return gitops.Clone(cloneCtx, invocation.Runner, source, destination)
+	}
+	deps.CreateDirectory = func(createCtx context.Context, path string) error {
+		if err := createCtx.Err(); err != nil {
+			return err
+		}
+		return destination.CreateDirectory(path)
 	}
 	deps.OpenProject = func(openCtx context.Context, place picker.Place) error {
 		opener, ok := invocation.Adapter.(capabilities.ProjectOpener)
