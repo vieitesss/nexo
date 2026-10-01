@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -465,27 +466,28 @@ func TestProjectDivergenceUsesItsOwnColour(t *testing.T) {
 	}
 }
 
-func TestSelectionAccentOccupiesOneBodyLineForEveryRowKind(t *testing.T) {
+func TestSelectedRowPaintsTheBodyWidthForEveryRowKind(t *testing.T) {
 	deps := Deps{
 		Projects:   projectFixture(),
 		Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: picker.LocalMachine()}},
 		Agents:     []capabilities.Agent{{PaneID: "pane", ContainerID: "one", Container: "one", Harness: "pi", Target: "one:0.1", State: "working"}},
 	}
+	background := regexp.MustCompile(`\x1b\[[0-9;:]*([47][0-9]|10[0-7]|48)[^m]*m`)
 	for _, tab := range []Tab{AgentsTab, ContainersTab, ProjectsTab} {
 		model := NewModel(context.Background(), deps, tab)
 		model.SetSize(100, 30)
 		for _, id := range model.Rows() {
 			model.cursor = id
 			styledLines := strings.Split(model.View(), "\n")
-			body := styledLines[2:29]
-			marked := 0
-			for _, line := range body {
+			painted := 0
+			for _, line := range styledLines[2:29] {
 				if strings.Contains(line, "▌") {
-					marked++
+					t.Fatalf("tab %s row %q retained the selection bar", tab, id)
 				}
+				painted += len(background.FindAllString(line, -1))
 			}
-			if marked != 1 {
-				t.Fatalf("tab %s row %q has accent on %d lines", tab, id, marked)
+			if painted == 0 {
+				t.Fatalf("tab %s row %q has no selection background", tab, id)
 			}
 		}
 	}

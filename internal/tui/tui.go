@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -85,7 +86,7 @@ func Run(ctx context.Context, deps Deps, tab Tab) error {
 	if output == nil {
 		output = os.Stdout
 	}
-	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(input), tea.WithOutput(output), tea.WithAltScreen())
+	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(input), tea.WithOutput(output), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	result, err := program.Run()
 	model.cancelBackgroundLoads()
 	if err != nil {
@@ -1052,6 +1053,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		return m.key(msg)
+	case tea.MouseMsg:
+		return m.mouse(msg)
 	case ToastMsg:
 		m.toast = msg.Text
 		return m, nil
@@ -1164,6 +1167,135 @@ func (m *Model) applyRemote(msg picker.RemoteBatch) {
 	m.remoteAgents = updatedAgents
 	m.rebuild(false)
 }
+func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Modal footer actions own input until they are confirmed or cancelled.
+	// Mouse clicks and wheel events are ignored rather than cancelling them.
+	if m.confirmKill || m.renameMode {
+		return m, nil
+	}
+	event := tea.MouseEvent(msg)
+	button := event.Button
+	if button == tea.MouseButtonWheelUp || button == tea.MouseButtonWheelDown || button == tea.MouseButtonWheelLeft || button == tea.MouseButtonWheelRight {
+		delta := 0
+		switch button {
+		case tea.MouseButtonWheelUp:
+			delta = -1
+		case tea.MouseButtonWheelDown:
+			delta = 1
+		}
+		if delta != 0 {
+			m.moveCursor(delta)
+		}
+		return m, nil
+	}
+	if button != tea.MouseButtonLeft || event.Action != tea.MouseActionPress || event.X < 0 || event.X >= m.width {
+		return m, nil
+	}
+	if event.Y == 0 {
+		if tab, ok := m.tabAt(event.X); ok {
+			m.switchTo(tab)
+		}
+		return m, nil
+	}
+	if event.Y < 2 || event.Y >= m.height-1 {
+		return m, nil
+	}
+	lines, start := m.bodyLayout(m.height - 3)
+	lineIndex := start + event.Y - 2
+	if lineIndex < 0 || lineIndex >= len(lines) || lines[lineIndex].rowID == "" {
+		return m, nil
+	}
+	id := lines[lineIndex].rowID
+	var clicked row
+	var ok bool
+	for _, candidate := range m.rows {
+		if candidate.id == id && candidate.cursorable {
+			clicked, ok = candidate, true
+			break
+		}
+	}
+	if !ok {
+		return m, nil
+	}
+	if clicked.kind == groupRow {
+		m.toggleClickedFold(clicked)
+		return m, nil
+	}
+	if clicked.foldable && m.foldChevronAt(clicked, event.X) {
+		m.toggleClickedFold(clicked)
+		return m, nil
+	}
+	if m.cursor == clicked.id {
+		return m.accept()
+	}
+	m.cursor = clicked.id
+	return m, nil
+}
+
+func (m Model) foldChevronAt(row row, x int) bool {
+	if !row.foldable {
+		return false
+	}
+	start := 2 + shell.StringWidth(foldIndent(row))
+	return x >= start && x < start+shell.StringWidth(foldArrow(row))
+}
+
+func (m *Model) toggleClickedFold(clicked row) {
+	if m.tab != ProjectsTab || !clicked.foldable {
+		return
+	}
+	if clicked.expanded {
+		m.folded[clicked.id] = true
+		delete(m.expanded, clicked.id)
+	} else {
+		delete(m.folded, clicked.id)
+		m.expanded[clicked.id] = true
+	}
+	m.rebuild(false)
+	m.cursor = clicked.id
+}
+
+func foldArrow(row row) string {
+	if row.expanded {
+		return "⌄"
+	}
+	return "▸"
+}
+
+func foldIndent(row row) string {
+	switch row.kind {
+	case groupRow:
+		return strings.Repeat("  ", row.depth)
+	case itemRow:
+		return row.treePrefix
+	default:
+		return ""
+	}
+}
+
+func foldPrefix(row row) string {
+	indent := foldIndent(row)
+	if !row.foldable {
+		return indent
+	}
+	return indent + foldArrow(row) + "  "
+}
+
+func (m Model) tabAt(x int) (Tab, bool) {
+	offset := 0
+	for _, item := range []struct {
+		name string
+		tab  Tab
+	}{{"Agents", AgentsTab}, {"Containers", ContainersTab}, {"Projects", ProjectsTab}} {
+		width := shell.StringWidth(item.name) + shell.StringWidth(fmt.Sprintf(" %d", m.matchCount(item.tab)))
+		if x >= offset && x < offset+width {
+			return item.tab, true
+		}
+		offset += width + 3
+	}
+	return "", false
+}
+
 func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
 		m.cancelled = true
@@ -1260,7 +1392,20 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.renameTargetSet = true
 		}
 		return m, nil
-	case tea.KeyBackspace, tea.KeyDelete:
+	case tea.KeyCtrlW:
+		m.SetQuery(string(deleteBackToWhitespace(m.query)))
+		return m, nil
+	case tea.KeyCtrlU:
+		m.SetQuery("")
+		return m, nil
+	case tea.KeyBackspace:
+		if msg.Alt {
+			m.SetQuery(string(deleteBackToBoundary(m.query)))
+		} else if len(m.query) > 0 {
+			m.SetQuery(string(m.query[:len(m.query)-1]))
+		}
+		return m, nil
+	case tea.KeyDelete:
 		if len(m.query) > 0 {
 			m.SetQuery(string(m.query[:len(m.query)-1]))
 		}
@@ -1305,6 +1450,28 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.switchTab(-1)
 	}
 	return m, nil
+}
+
+func deleteBackToWhitespace(query []rune) []rune {
+	end := len(query)
+	for end > 0 && unicode.IsSpace(query[end-1]) {
+		end--
+	}
+	for end > 0 && !unicode.IsSpace(query[end-1]) {
+		end--
+	}
+	return query[:end]
+}
+
+func deleteBackToBoundary(query []rune) []rune {
+	end := len(query)
+	for end > 0 && !unicode.IsLetter(query[end-1]) && !unicode.IsDigit(query[end-1]) {
+		end--
+	}
+	for end > 0 && (unicode.IsLetter(query[end-1]) || unicode.IsDigit(query[end-1])) {
+		end--
+	}
+	return query[:end]
 }
 
 func (m *Model) switchTab(delta int) {
@@ -1446,7 +1613,7 @@ func (m Model) accept() (tea.Model, tea.Cmd) {
 }
 
 // View renders exactly the terminal dimensions once Bubble Tea has sent a
-// size. No style in this package sets a background colour.
+// size. The selected row is the only element with a background colour.
 func (m Model) View() string {
 	if !m.sized || m.width <= 0 || m.height <= 0 {
 		return ""
@@ -1510,21 +1677,31 @@ func (m Model) searchLine() string {
 	}
 	return fit(prompt+strings.Repeat(" ", max(0, gap))+count, m.width)
 }
-func (m Model) renderBody(height int) []string {
-	lines := []string{}
+
+type bodyLine struct {
+	text  string
+	rowID string
+}
+
+func (m Model) bodyLayout(height int) ([]bodyLine, int) {
+	lines := []bodyLine{}
 	selectedLine := -1
 	for _, row := range m.rows {
 		if row.cursorable && row.id == m.cursor {
 			selectedLine = len(lines)
 		}
 		primary, secondary := m.rowText(row)
-		lines = append(lines, primary)
+		rowID := ""
+		if row.cursorable {
+			rowID = row.id
+		}
+		lines = append(lines, bodyLine{text: primary, rowID: rowID})
 		if height >= 2 && secondary != "" && row.kind == itemRow {
-			lines = append(lines, secondary)
+			lines = append(lines, bodyLine{text: secondary, rowID: rowID})
 		}
 	}
 	if height <= 0 {
-		return nil
+		return nil, 0
 	}
 	start := shell.ViewportStart(len(lines), height, selectedLine)
 	if height >= 2 && selectedLine >= 0 && selectedLine+1 < len(lines) && start+height <= selectedLine+1 {
@@ -1539,9 +1716,21 @@ func (m Model) renderBody(height int) []string {
 	if start < 0 {
 		start = 0
 	}
+	return lines, start
+}
+
+func (m Model) renderBody(height int) []string {
+	lines, start := m.bodyLayout(height)
+	if height <= 0 {
+		return nil
+	}
 	out := []string{}
 	for i := start; i < len(lines) && len(out) < height; i++ {
-		out = append(out, fit(lines[i], m.width))
+		value := fit(lines[i].text, m.width)
+		if lines[i].rowID != "" && lines[i].rowID == m.cursor {
+			value = selectedRowBackground(value)
+		}
+		out = append(out, value)
 	}
 	for len(out) < height {
 		out = append(out, fit("", m.width))
@@ -1551,15 +1740,16 @@ func (m Model) renderBody(height int) []string {
 func (m Model) rowText(row row) (string, string) {
 	selected := row.cursorable && row.id == m.cursor
 	marker := "  "
-	if selected {
-		marker = accent().Render("▌") + " "
-	}
 	// Secondary agent details may occupy a second line, but the selection
 	// accent belongs to the row's first line only. This keeps its height
 	// constant while moving across every tab.
 	switch row.kind {
 	case machineRow:
-		value := strings.Repeat("  ", row.depth) + bold().Render(highlightText(sanitize(row.label), string(m.query))) + muted().Render(fmt.Sprintf("  %d", row.count))
+		labelStyle := bold()
+		if selected {
+			labelStyle = normal()
+		}
+		value := strings.Repeat("  ", row.depth) + labelStyle.Render(highlightText(sanitize(row.label), string(m.query))) + muted().Render(fmt.Sprintf("  %d", row.count))
 		if row.remoteErr != "" {
 			value += muted().Render("  " + sanitize(row.remoteErr))
 		} else if row.loading {
@@ -1567,11 +1757,11 @@ func (m Model) rowText(row row) (string, string) {
 		}
 		return marker + value, ""
 	case groupRow:
-		arrow := "▸"
-		if row.expanded {
-			arrow = "⌄"
+		labelStyle := bold()
+		if selected {
+			labelStyle = normal()
 		}
-		return marker + strings.Repeat("  ", row.depth) + bold().Render(arrow+"  "+abbreviateHome(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
+		return marker + labelStyle.Render(foldPrefix(row)+abbreviateHome(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
 	case newContainerRow:
 		return "  " + strings.Repeat("  ", row.depth) + muted().Render(sanitize(row.label)), ""
 	case separatorRow:
@@ -1592,10 +1782,11 @@ func (m Model) rowText(row row) (string, string) {
 func (m Model) agentText(row row, marker string) (string, string) {
 	a := row.agent
 	container := displayContainer(a, row.agentMachine)
-	primary := bold().Render(highlightText(sanitize(a.Harness), string(m.query))) + muted().Render("  "+highlightText(sanitize(container), string(m.query)))
+	nameStyle := bold()
 	if row.id == m.cursor {
-		primary = bold().Render(primary)
+		nameStyle = normal()
 	}
+	primary := nameStyle.Render(highlightText(sanitize(a.Harness), string(m.query))) + muted().Render("  "+highlightText(sanitize(container), string(m.query)))
 	state := strings.ToLower(strings.TrimSpace(sanitize(a.State)))
 	stateText := "● " + state
 	if state == "stopped" && a.StoppedSince != nil {
@@ -1688,9 +1879,6 @@ func (m Model) containerText(row row, marker string) (string, string) {
 	available := max(1, m.width-shell.StringWidth(marker))
 	if shell.StringWidth(line) > available {
 		line = shell.Truncate(line, available, "…")
-	}
-	if row.id == m.cursor {
-		line = bold().Render(line)
 	}
 	return marker + line, ""
 }
@@ -1810,7 +1998,7 @@ func (m Model) projectLayout() projectColumns {
 }
 
 func projectNameWidth(candidate row) int {
-	width := shell.StringWidth(candidate.treePrefix + projectLabel(candidate.place))
+	width := shell.StringWidth(foldPrefix(candidate) + projectLabel(candidate.place))
 	if candidate.foldable && !candidate.expanded {
 		width += shell.StringWidth(fmt.Sprintf("  %d", candidate.count))
 	}
@@ -1829,22 +2017,19 @@ func (m Model) placeText(row row, marker string) (string, string) {
 		return marker + highlightText(projectLabel(row.place), string(m.query)), ""
 	}
 	layout := m.projectLayout()
-	name := row.treePrefix + projectLabel(row.place)
+	name := foldPrefix(row) + projectLabel(row.place)
 	count := ""
 	if row.foldable && !row.expanded {
 		count = fmt.Sprintf("  %d", row.count)
 	}
 	name = shell.Truncate(name, max(0, layout.name-shell.StringWidth(count)), "…")
 	nameText := highlightText(name, string(m.query))
-	if row.treePrefix != "" {
-		// Tree gutters are structural, not part of fuzzy matching.
-		nameText = muted().Render(row.treePrefix) + highlightText(strings.TrimPrefix(name, row.treePrefix), string(m.query))
+	if prefix := foldPrefix(row); prefix != "" {
+		// Tree gutters and fold chevrons are structural, not part of fuzzy matching.
+		nameText = muted().Render(prefix) + highlightText(strings.TrimPrefix(name, prefix), string(m.query))
 	}
 	if count != "" {
 		nameText += muted().Render(count)
-	}
-	if row.id == m.cursor {
-		nameText = bold().Render(nameText)
 	}
 	nameCell := fit(nameText, layout.name)
 	gitCell := fit(m.projectGitStyled(row.place, layout.git), layout.git)
@@ -2055,6 +2240,16 @@ func fit(value string, width int) string {
 	value = stripBackgroundResets(value)
 	value = shell.Truncate(value, width, "")
 	return value + strings.Repeat(" ", max(0, width-shell.StringWidth(value)))
+}
+
+func selectedRowBackground(value string) string {
+	style := lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Light: "#d9eaf7", Dark: "#31516f"})
+	start := strings.TrimSuffix(style.Render(""), "\x1b[0m")
+	if start == "" {
+		return value
+	}
+	value = strings.ReplaceAll(value, "\x1b[0m", "\x1b[0m"+start)
+	return start + value + "\x1b[0m"
 }
 
 func stripBackgroundResets(value string) string {
