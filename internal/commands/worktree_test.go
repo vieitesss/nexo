@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,6 +42,11 @@ func (f *fakeWorktreeCreator) ExtractWorktree(_ context.Context, options capabil
 }
 
 func (f *fakeWorktreeCreator) RemoveWorktree(context.Context, capabilities.Worktree) error {
+	f.removed = true
+	return f.removeError
+}
+
+func (f *fakeWorktreeCreator) RollbackExtractWorktree(context.Context, capabilities.Worktree) error {
 	f.removed = true
 	return f.removeError
 }
@@ -285,6 +292,80 @@ func TestWorktreeExtractCommandRollsBackOnOutputFailure(t *testing.T) {
 	if !extractor.removed {
 		t.Fatal("extractor was not asked to roll back")
 	}
+}
+
+type realOutputFailureExtractor struct {
+	repo         string
+	destination  string
+	branch       string
+	returnBranch string
+}
+
+func (e realOutputFailureExtractor) ExtractWorktree(ctx context.Context, _ capabilities.WorktreeExtractOptions) (capabilities.Worktree, error) {
+	if output, err := exec.CommandContext(ctx, "git", "-C", e.repo, "checkout", "--no-overwrite-ignore", e.returnBranch).CombinedOutput(); err != nil {
+		return capabilities.Worktree{}, fmt.Errorf("checkout return branch: %s: %w", output, err)
+	}
+	if output, err := exec.CommandContext(ctx, "git", "-C", e.repo, "worktree", "add", e.destination, e.branch).CombinedOutput(); err != nil {
+		return capabilities.Worktree{}, fmt.Errorf("add worktree: %s: %w", output, err)
+	}
+	return capabilities.Worktree{Repo: e.repo, Path: e.destination, Branch: e.branch, ContainerID: "workspace", Container: capabilities.OpenedContainer{ID: "workspace", Created: true}}, nil
+}
+
+func (e realOutputFailureExtractor) RollbackExtractWorktree(ctx context.Context, worktree capabilities.Worktree) error {
+	var failures []error
+	if output, err := exec.CommandContext(ctx, "git", "-C", worktree.Repo, "worktree", "remove", "--force", worktree.Path).CombinedOutput(); err != nil {
+		failures = append(failures, fmt.Errorf("remove worktree: %s: %w", output, err))
+	}
+	if output, err := exec.CommandContext(ctx, "git", "-C", worktree.Repo, "checkout", "--no-overwrite-ignore", worktree.Branch).CombinedOutput(); err != nil {
+		failures = append(failures, fmt.Errorf("restore branch: %s: %w", output, err))
+	}
+	return errors.Join(failures...)
+}
+
+func TestWorktreeExtractCommandRestoresBranchAfterOutputFailure(t *testing.T) {
+	repo := t.TempDir()
+	runCommandTestGit(t, repo, "init", "-q")
+	runCommandTestGit(t, repo, "config", "user.email", "test@example.com")
+	runCommandTestGit(t, repo, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(repo, "README"), []byte("initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runCommandTestGit(t, repo, "add", "README")
+	runCommandTestGit(t, repo, "commit", "-qm", "initial")
+	returnBranch := runCommandTestGit(t, repo, "branch", "--show-current")
+	runCommandTestGit(t, repo, "checkout", "-qb", "feature")
+	before := runCommandTestGit(t, repo, "rev-parse", "HEAD")
+	destination := filepath.Join(t.TempDir(), "feature")
+	command, _ := NewRegistry().Lookup("worktree")
+	err := command.Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Herdr},
+		Adapter:   realOutputFailureExtractor{repo: repo, destination: destination, branch: "feature", returnBranch: returnBranch},
+		Args:      []string{"extract", repo, destination},
+		Stdout:    failingWriter{},
+		JSON:      true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "output failed") {
+		t.Fatalf("Run() error = %v, want output failure", err)
+	}
+	if runCommandTestGit(t, repo, "branch", "--show-current") != "feature" || runCommandTestGit(t, repo, "rev-parse", "HEAD") != before {
+		t.Fatalf("original checkout not restored after output failure")
+	}
+	if _, statErr := os.Stat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("destination after output failure = %v", statErr)
+	}
+	listing := runCommandTestGit(t, repo, "worktree", "list", "--porcelain")
+	if strings.Contains(listing, destination) || !strings.Contains(listing, "branch refs/heads/feature") {
+		t.Fatalf("worktree list after output failure = %s", listing)
+	}
+}
+
+func runCommandTestGit(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	output, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v (%s)", args, err, output)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func TestWorktreeExtractCommandAddsParentAndRestoresOnFailure(t *testing.T) {

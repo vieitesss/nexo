@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 )
@@ -15,6 +17,7 @@ type WorktreeGit interface {
 	CurrentBranch(context.Context, string) (string, error)
 	IsClean(context.Context, string) (bool, error)
 	BranchOwners(context.Context, string, string) ([]string, error)
+	WorktreeRoots(context.Context, string) ([]string, error)
 	PreviousBranch(context.Context, string) (string, error)
 	DefaultBranch(context.Context, string) (string, error)
 	BranchExists(context.Context, string, string) (bool, error)
@@ -47,6 +50,13 @@ func ExtractWorktree(ctx context.Context, options capabilities.WorktreeExtractOp
 	if err != nil {
 		return capabilities.Worktree{}, err
 	}
+	roots, err := adapter.Git.WorktreeRoots(ctx, repo)
+	if err != nil {
+		return capabilities.Worktree{}, err
+	}
+	if root := containingWorktree(roots, destination); root != "" {
+		return capabilities.Worktree{}, fmt.Errorf("worktree destination %q is inside registered worktree %q", destination, root)
+	}
 
 	branch, err := adapter.Git.CurrentBranch(ctx, repo)
 	if err != nil {
@@ -72,6 +82,12 @@ func ExtractWorktree(ctx context.Context, options capabilities.WorktreeExtractOp
 		return capabilities.Worktree{}, err
 	}
 	if err := adapter.Git.Checkout(ctx, repo, returnBranch); err != nil {
+		cleanupCtx, cancel := CleanupContext(ctx)
+		defer cancel()
+		restoreErr := restoreAfterFailedCheckout(cleanupCtx, adapter.Git, repo, branch)
+		if restoreErr != nil {
+			return capabilities.Worktree{}, errors.Join(err, restoreErr)
+		}
 		return capabilities.Worktree{}, err
 	}
 
@@ -83,7 +99,9 @@ func ExtractWorktree(ctx context.Context, options capabilities.WorktreeExtractOp
 	}
 	result, err := createAndOpenWorktree(ctx, createOptions, adapter.WorktreeAdapter)
 	if err != nil {
-		if restoreErr := adapter.Git.Checkout(ctx, repo, branch); restoreErr != nil {
+		cleanupCtx, cancel := CleanupContext(ctx)
+		defer cancel()
+		if restoreErr := restoreBranch(cleanupCtx, adapter.Git, repo, branch); restoreErr != nil {
 			return capabilities.Worktree{}, errors.Join(err, fmt.Errorf("restore original branch %s: %w", branch, restoreErr))
 		}
 		return capabilities.Worktree{}, err
@@ -168,6 +186,80 @@ func eligibleReturnBranch(ctx context.Context, git WorktreeGit, repo, branch str
 		return "", false, nil
 	}
 	return branch, true, nil
+}
+
+func restoreAfterFailedCheckout(ctx context.Context, git WorktreeGit, repo, branch string) error {
+	actual, inspectErr := git.CurrentBranch(ctx, repo)
+	if inspectErr == nil && actual == branch {
+		return nil
+	}
+	if restoreErr := restoreBranch(ctx, git, repo, branch); restoreErr != nil {
+		if inspectErr != nil {
+			return errors.Join(fmt.Errorf("inspect branch after failed checkout: %w", inspectErr), restoreErr)
+		}
+		return restoreErr
+	}
+	if inspectErr != nil {
+		return fmt.Errorf("inspect branch after failed checkout: %w", inspectErr)
+	}
+	return nil
+}
+
+// restoreBranch treats a post-checkout hook error as successful recovery when
+// Git did switch to the requested branch before returning the error.
+func restoreBranch(ctx context.Context, git WorktreeGit, repo, branch string) error {
+	if err := git.Checkout(ctx, repo, branch); err == nil {
+		return nil
+	} else if actual, inspectErr := git.CurrentBranch(ctx, repo); inspectErr == nil && actual == branch {
+		return nil
+	} else if inspectErr != nil {
+		return errors.Join(err, fmt.Errorf("verify restored branch %s: %w", branch, inspectErr))
+	} else {
+		return errors.Join(err, fmt.Errorf("restored branch is %s, want %s", actual, branch))
+	}
+}
+
+func containingWorktree(roots []string, destination string) string {
+	for _, root := range roots {
+		if pathWithin(root, destination) {
+			return root
+		}
+	}
+	return ""
+}
+
+func pathWithin(root, path string) bool {
+	root = canonicalExistingPath(root)
+	path = canonicalExistingPath(path)
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func canonicalExistingPath(path string) string {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	candidate := absolute
+	var suffix []string
+	for {
+		if _, err := os.Lstat(candidate); err == nil {
+			if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+				for index := len(suffix) - 1; index >= 0; index-- {
+					resolved = filepath.Join(resolved, suffix[index])
+				}
+				return filepath.Clean(resolved)
+			}
+			break
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			break
+		}
+		suffix = append(suffix, filepath.Base(candidate))
+		candidate = parent
+	}
+	return absolute
 }
 
 func samePath(a, b string) bool {

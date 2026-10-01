@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,6 +77,41 @@ type extractCalls struct {
 	openErr     error
 	rolledBack  []capabilities.Worktree
 	rollbackErr error
+}
+
+type realWorktreeAdapter struct {
+	openErr error
+}
+
+func (a realWorktreeAdapter) create(ctx context.Context, options capabilities.WorktreeCreateOptions) (capabilities.Worktree, error) {
+	command := exec.CommandContext(ctx, "git", "-C", options.Repo, "worktree", "add", options.Destination, options.Branch)
+	if output, err := command.CombinedOutput(); err != nil {
+		return capabilities.Worktree{}, fmt.Errorf("git worktree add: %s: %w", output, err)
+	}
+	return capabilities.Worktree{Repo: options.Repo, Path: options.Destination, Branch: options.Branch}, nil
+}
+
+func (a realWorktreeAdapter) open(_ context.Context, path string, _ capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
+	if a.openErr != nil {
+		return capabilities.OpenedContainer{}, a.openErr
+	}
+	return capabilities.OpenedContainer{Path: path, ID: "real", Created: true}, nil
+}
+
+func (realWorktreeAdapter) rollback(ctx context.Context, worktree capabilities.Worktree) error {
+	command := exec.CommandContext(ctx, "git", "-C", worktree.Repo, "worktree", "remove", "--force", worktree.Path)
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("git worktree remove: %s: %w", output, err)
+	}
+	return nil
+}
+
+func realExtractAdapter() ExtractAdapter {
+	adapter := realWorktreeAdapter{}
+	return ExtractAdapter{
+		WorktreeAdapter: WorktreeAdapter{Create: adapter.create, Open: adapter.open, Rollback: adapter.rollback},
+		Git:             git.New(runner.ExecRunner{}),
+	}
 }
 
 func TestExtractWorktreeMovesBranchToDestination(t *testing.T) {
@@ -252,6 +288,212 @@ func TestExtractWorktreeRollsBackAndRestoresWhenOpenFails(t *testing.T) {
 	}
 	if branch := currentBranch(t, repo); branch != "feature" {
 		t.Fatalf("original branch = %q, want feature restored", branch)
+	}
+}
+
+func TestExtractWorktreeRefusesIgnoredOverwriteAndPreservesOriginal(t *testing.T) {
+	repo := testGitRepo(t)
+	base := currentBranch(t, repo)
+	if err := os.WriteFile(filepath.Join(repo, "secret"), []byte("versioned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, repo, "add", "secret")
+	runTestGit(t, repo, "commit", "-qm", "track secret")
+	runTestGit(t, repo, "checkout", "-qb", "feature")
+	runTestGit(t, repo, "rm", "-q", "secret")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, repo, "add", ".gitignore")
+	runTestGit(t, repo, "commit", "-qm", "ignore secret")
+	if err := os.WriteFile(filepath.Join(repo, "secret"), []byte("local-only\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "feature")
+	before := runTestGit(t, repo, "rev-parse", "HEAD")
+
+	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+		Repo: repo, Destination: destination, ReturnBranch: base,
+	}, realExtractAdapter())
+	if err == nil || !strings.Contains(err.Error(), "checkout") {
+		t.Fatalf("ExtractWorktree() error = %v, want ignored overwrite refusal", err)
+	}
+	if currentBranch(t, repo) != "feature" || runTestGit(t, repo, "rev-parse", "HEAD") != before {
+		t.Fatalf("original checkout changed after refusal")
+	}
+	if _, statErr := os.Stat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("destination exists after refusal: %v", statErr)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(repo, "secret"))
+	if readErr != nil || string(contents) != "local-only\n" {
+		t.Fatalf("ignored local file = %q, %v", contents, readErr)
+	}
+	if listing := runTestGit(t, repo, "worktree", "list", "--porcelain"); strings.Contains(listing, destination) || !strings.Contains(listing, "branch refs/heads/feature") {
+		t.Fatalf("worktree list after refusal = %s", listing)
+	}
+}
+
+func TestExtractWorktreeCleanCheckIgnoresStatusConfiguration(t *testing.T) {
+	repo := testGitRepo(t)
+	base := currentBranch(t, repo)
+	runTestGit(t, repo, "checkout", "-qb", "feature")
+	runTestGit(t, repo, "config", "status.showUntrackedFiles", "no")
+	if err := os.WriteFile(filepath.Join(repo, "untracked"), []byte("local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "feature")
+	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+		Repo: repo, Destination: destination, ReturnBranch: base,
+	}, realExtractAdapter())
+	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("ExtractWorktree() error = %v, want configuration-independent dirty refusal", err)
+	}
+	if currentBranch(t, repo) != "feature" {
+		t.Fatalf("original branch changed after dirty refusal")
+	}
+	if _, statErr := os.Stat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("destination exists after dirty refusal: %v", statErr)
+	}
+	if listing := runTestGit(t, repo, "worktree", "list", "--porcelain"); strings.Contains(listing, destination) {
+		t.Fatalf("worktree list after dirty refusal = %s", listing)
+	}
+}
+
+func TestExtractWorktreeCleanCheckCatchesTrackedChanges(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		staged bool
+	}{
+		{name: "unstaged"},
+		{name: "staged", staged: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := testGitRepo(t)
+			base := currentBranch(t, repo)
+			runTestGit(t, repo, "checkout", "-qb", "feature")
+			if err := os.WriteFile(filepath.Join(repo, "README"), []byte("dirty\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if test.staged {
+				runTestGit(t, repo, "add", "README")
+			}
+			destination := filepath.Join(t.TempDir(), "feature")
+			_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+				Repo: repo, Destination: destination, ReturnBranch: base,
+			}, realExtractAdapter())
+			if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+				t.Fatalf("ExtractWorktree() error = %v, want dirty refusal", err)
+			}
+			if currentBranch(t, repo) != "feature" || strings.Contains(runTestGit(t, repo, "worktree", "list", "--porcelain"), destination) {
+				t.Fatalf("repository changed after tracked dirty refusal")
+			}
+		})
+	}
+}
+
+func TestExtractWorktreeCleanCheckIncludesIgnoredSubmoduleChanges(t *testing.T) {
+	repo := testGitRepo(t)
+	base := currentBranch(t, repo)
+	submodule := testGitRepo(t)
+	if output, err := exec.Command("git", "-C", repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", submodule, "lib").CombinedOutput(); err != nil {
+		t.Fatalf("add submodule: %v (%s)", err, output)
+	}
+	runTestGit(t, repo, "commit", "-qam", "add submodule")
+	runTestGit(t, repo, "checkout", "-qb", "feature")
+	runTestGit(t, repo, "config", "submodule.lib.ignore", "all")
+	if err := os.WriteFile(filepath.Join(repo, "lib", "README"), []byte("dirty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "feature")
+	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+		Repo: repo, Destination: destination, ReturnBranch: base,
+	}, realExtractAdapter())
+	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("ExtractWorktree() error = %v, want ignored submodule refusal", err)
+	}
+	if currentBranch(t, repo) != "feature" || strings.Contains(runTestGit(t, repo, "worktree", "list", "--porcelain"), destination) {
+		t.Fatalf("repository changed after ignored submodule refusal")
+	}
+}
+
+func TestExtractWorktreeRestoresAfterInitialCheckoutHookFailure(t *testing.T) {
+	repo := testGitRepo(t)
+	base := currentBranch(t, repo)
+	runTestGit(t, repo, "checkout", "-qb", "feature")
+	before := runTestGit(t, repo, "rev-parse", "HEAD")
+	hook := filepath.Join(repo, ".git", "hooks", "post-checkout")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "feature")
+	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+		Repo: repo, Destination: destination, ReturnBranch: base,
+	}, realExtractAdapter())
+	if err == nil {
+		t.Fatal("ExtractWorktree() error = nil, want hook failure")
+	}
+	if currentBranch(t, repo) != "feature" || runTestGit(t, repo, "rev-parse", "HEAD") != before {
+		t.Fatalf("original checkout was not restored after hook failure")
+	}
+	if _, statErr := os.Stat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("destination exists after hook failure: %v", statErr)
+	}
+	if listing := runTestGit(t, repo, "worktree", "list", "--porcelain"); strings.Contains(listing, destination) || !strings.Contains(listing, "branch refs/heads/feature") {
+		t.Fatalf("worktree list after hook failure = %s", listing)
+	}
+}
+
+func TestExtractWorktreeRejectsNestedDestination(t *testing.T) {
+	repo := testGitRepo(t)
+	base := currentBranch(t, repo)
+	runTestGit(t, repo, "checkout", "-qb", "feature")
+	destination := filepath.Join(repo, "nested", "feature")
+	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+		Repo: repo, Destination: destination, ReturnBranch: base,
+	}, realExtractAdapter())
+	if err == nil || !strings.Contains(err.Error(), "inside registered worktree") {
+		t.Fatalf("ExtractWorktree() error = %v, want nested destination refusal", err)
+	}
+	if currentBranch(t, repo) != "feature" || strings.Contains(runTestGit(t, repo, "worktree", "list", "--porcelain"), destination) {
+		t.Fatalf("repository changed after nested destination refusal")
+	}
+}
+
+func TestExtractWorktreeCleanupSurvivesCancellationAfterCreate(t *testing.T) {
+	repo := testGitRepo(t)
+	base := currentBranch(t, repo)
+	runTestGit(t, repo, "checkout", "-qb", "feature")
+	destination := filepath.Join(t.TempDir(), "feature")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	adapter := realWorktreeAdapter{}
+	openErr := errors.New("open canceled")
+	gotAdapter := ExtractAdapter{
+		WorktreeAdapter: WorktreeAdapter{
+			Create: adapter.create,
+			Open: func(_ context.Context, path string, _ capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
+				cancel()
+				return capabilities.OpenedContainer{Path: path}, openErr
+			},
+			Rollback: adapter.rollback,
+		},
+		Git: git.New(runner.ExecRunner{}),
+	}
+	_, err := ExtractWorktree(ctx, capabilities.WorktreeExtractOptions{
+		Repo: repo, Destination: destination, ReturnBranch: base,
+	}, gotAdapter)
+	if !errors.Is(err, openErr) {
+		t.Fatalf("ExtractWorktree() error = %v, want open cancellation error", err)
+	}
+	if currentBranch(t, repo) != "feature" {
+		t.Fatalf("original branch = %q, want feature", currentBranch(t, repo))
+	}
+	if _, statErr := os.Stat(destination); !os.IsNotExist(statErr) {
+		t.Fatalf("destination after canceled cleanup = %v", statErr)
+	}
+	listing := runTestGit(t, repo, "worktree", "list", "--porcelain")
+	if strings.Contains(listing, destination) || !strings.Contains(listing, "branch refs/heads/feature") {
+		t.Fatalf("worktree list after canceled cleanup = %s", listing)
 	}
 }
 

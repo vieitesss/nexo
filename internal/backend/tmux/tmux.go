@@ -122,7 +122,9 @@ func (b *Backend) createWorktree(ctx context.Context, options capabilities.Workt
 		args = append(args, options.Destination, options.Branch)
 	}
 	if _, err := b.runGit(ctx, args...); err != nil {
-		rollbackErr := b.rollbackWorktree(ctx, options.Repo, options.Destination, options.NewBranch, options.Branch, branchExisted)
+		cleanupCtx, cancel := lifecycle.CleanupContext(ctx)
+		defer cancel()
+		rollbackErr := b.rollbackWorktree(cleanupCtx, options.Repo, options.Destination, options.NewBranch, options.Branch, branchExisted)
 		if rollbackErr != nil {
 			return capabilities.Worktree{}, errors.Join(err, rollbackErr)
 		}
@@ -140,6 +142,22 @@ func (b *Backend) rollbackCreatedWorktree(ctx context.Context, worktree capabili
 	}
 	return rollbackErr
 }
+
+// RollbackExtractWorktree removes the extracted worktree and restores its
+// branch in the original checkout. Cleanup uses a detached bounded context so
+// output failures cannot strand the original branch.
+func (b *Backend) RollbackExtractWorktree(ctx context.Context, worktree capabilities.Worktree) error {
+	cleanupCtx, cancel := lifecycle.CleanupContext(ctx)
+	defer cancel()
+	cleanupErr := b.rollbackCreatedWorktree(cleanupCtx, worktree)
+	if worktree.Repo == "" || worktree.Branch == "" {
+		return errors.Join(cleanupErr, errors.New("extracted worktree result lacks original branch identity"))
+	}
+	restoreErr := git.New(b.Runner).Checkout(cleanupCtx, worktree.Repo, worktree.Branch)
+	return errors.Join(cleanupErr, restoreErr)
+}
+
+var _ capabilities.WorktreeExtractionRollback = (*Backend)(nil)
 
 func (b *Backend) RemoveWorktree(ctx context.Context, worktree capabilities.Worktree) error {
 	if b == nil || b.Runner == nil {

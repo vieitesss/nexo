@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/projects"
@@ -79,7 +80,9 @@ func createAndOpenWorktree(ctx context.Context, options capabilities.WorktreeCre
 		if adapter.Rollback == nil {
 			return capabilities.Worktree{}, openErr
 		}
-		if rollbackErr := adapter.Rollback(ctx, result); rollbackErr != nil {
+		cleanupCtx, cancel := CleanupContext(ctx)
+		defer cancel()
+		if rollbackErr := adapter.Rollback(cleanupCtx, result); rollbackErr != nil {
 			return capabilities.Worktree{}, errors.Join(openErr, rollbackErr)
 		}
 		return capabilities.Worktree{}, openErr
@@ -95,7 +98,9 @@ func createAndOpenWorktree(ctx context.Context, options capabilities.WorktreeCre
 	if adapter.Rollback == nil {
 		return capabilities.Worktree{}, openErr
 	}
-	if rollbackErr := adapter.Rollback(ctx, result); rollbackErr != nil {
+	cleanupCtx, cancel := CleanupContext(ctx)
+	defer cancel()
+	if rollbackErr := adapter.Rollback(cleanupCtx, result); rollbackErr != nil {
 		return capabilities.Worktree{}, errors.Join(openErr, rollbackErr)
 	}
 	return capabilities.Worktree{}, openErr
@@ -149,6 +154,13 @@ func normalizeWorktree(options capabilities.WorktreeCreateOptions, result capabi
 		result.SessionName = result.Container.Name
 	}
 	return result
+}
+
+// CleanupContext returns a bounded context that is not canceled when the
+// caller abandons an operation after mutation has begun. Recovery must still
+// have a deadline so a broken native command cannot hang forever.
+func CleanupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), 30*time.Second)
 }
 
 func hasContainer(result capabilities.Worktree) bool {

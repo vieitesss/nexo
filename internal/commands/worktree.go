@@ -168,8 +168,8 @@ func runWorktreeExtract(ctx context.Context, invocation Invocation) error {
 	}
 
 	var rollbackErr error
-	if remover, ok := invocation.Adapter.(capabilities.WorktreeRemover); ok {
-		rollbackErr = remover.RemoveWorktree(ctx, result)
+	if rollbacker, ok := invocation.Adapter.(capabilities.WorktreeExtractionRollback); ok {
+		rollbackErr = rollbacker.RollbackExtractWorktree(ctx, result)
 	} else {
 		rollbackErr = errors.New("backend cannot roll back an extracted worktree")
 	}

@@ -55,3 +55,10 @@ type WorktreeExtractor interface {
 type WorktreeRemover interface {
 	RemoveWorktree(context.Context, Worktree) error
 }
+
+// WorktreeExtractionRollback removes only resources created by an extraction
+// and restores the extracted branch in the original checkout. It is separate
+// from WorktreeRemover because ordinary creation has no branch to restore.
+type WorktreeExtractionRollback interface {
+	RollbackExtractWorktree(context.Context, Worktree) error
+}
