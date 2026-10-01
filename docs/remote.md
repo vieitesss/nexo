@@ -13,6 +13,15 @@ named `MACHINE/CONTAINER`. Its only pane runs the configured attachment
 transport; the local prefix and status bar are disabled for that container, so
 input and the status bar belong to the remote multiplexer.
 
+A local tmux session whose name exactly matches `MACHINE/CONTAINER` for a
+configured remote machine is also treated as a proxy, even when nexo did not
+create it. It is hidden from the local machine and shown under `MACHINE`;
+opening it adopts the existing session and stamps the session-scoped
+`@nexo-proxy` option. Remote and local proxy rows are merged so the container
+appears only once. Machine names are matched case-insensitively after trimming
+whitespace, and names supplied only in `[remote.backends]` are configured
+machines too.
+
 ```toml
 [remote]
 machines = ["devbox"]

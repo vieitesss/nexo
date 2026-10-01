@@ -13,6 +13,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
@@ -75,7 +76,7 @@ func (l Lister) WithKindDetection() Lister {
 func (l Lister) WithBackends(backends map[string]string) Lister {
 	l.Backends = make(map[string]string, len(backends))
 	for machine, selected := range backends {
-		l.Backends[strings.TrimSpace(machine)] = strings.ToLower(strings.TrimSpace(selected))
+		l.Backends[config.NormalizeMachineName(machine)] = strings.ToLower(strings.TrimSpace(selected))
 	}
 	if len(l.Backends) > 0 {
 		l.DetectKind = true
@@ -220,10 +221,11 @@ func uniqueMachines(machines []string) []string {
 	unique := make([]string, 0, len(machines))
 	for _, machine := range machines {
 		machine = strings.TrimSpace(machine)
-		if machine == "" || seen[machine] {
+		key := config.NormalizeMachineName(machine)
+		if key == "" || seen[key] {
 			continue
 		}
-		seen[machine] = true
+		seen[key] = true
 		unique = append(unique, machine)
 	}
 	return unique
@@ -246,7 +248,7 @@ func (l Lister) runWithAgents(ctx context.Context, machine string) ([]byte, erro
 // remoteListingCommand emits one authoritative listing and its backend kind.
 // An explicit per-machine backend never probes the other multiplexer.
 func (l Lister) remoteListingCommand(machine string, withAgents bool) string {
-	configured := strings.ToLower(strings.TrimSpace(l.Backends[strings.TrimSpace(machine)]))
+	configured := strings.ToLower(strings.TrimSpace(l.Backends[config.NormalizeMachineName(machine)]))
 	if configured == string(backend.Tmux) || configured == string(backend.Herdr) {
 		kind := Kind(configured)
 		listing := l.backendCommandFor(backend.Kind(configured))

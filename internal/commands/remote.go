@@ -15,6 +15,7 @@ import (
 	"github.com/vieitesss/nexo/internal/backend/herdr"
 	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/proxy"
 	"github.com/vieitesss/nexo/internal/remote"
 )
@@ -60,7 +61,7 @@ func runRemoteList(ctx context.Context, invocation Invocation) error {
 		return fmt.Errorf("remote list accepts no arguments")
 	}
 	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithBackends(invocation.Config.Remote.Backends)
-	results := lister.List(ctx, invocation.Config.Remote.Machines)
+	results := lister.List(ctx, invocation.Config.Remote.ConfiguredMachines())
 	if invocation.JSON {
 		return json.NewEncoder(invocation.Stdout).Encode(results)
 	}
@@ -75,7 +76,7 @@ func runRemoteOpen(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	if !configuredMachine(invocation.Config.Remote.Machines, machine) {
+	if !invocation.Config.Remote.IsMachineConfigured(machine) {
 		return fmt.Errorf("remote machine %q is not configured", machine)
 	}
 	result, err := listRemoteMachine(ctx, invocation, machine)
@@ -90,7 +91,7 @@ func runRemoteNew(ctx context.Context, invocation Invocation) error {
 		return errors.New("remote new requires MACHINE [NAME]")
 	}
 	machine := strings.TrimSpace(invocation.Args[1])
-	if err := validateRemoteMachine(invocation.Config.Remote.Machines, machine); err != nil {
+	if err := validateRemoteMachine(invocation.Config.Remote.ConfiguredMachines(), machine); err != nil {
 		return err
 	}
 	name, err := remoteContainerName(invocation)
@@ -241,14 +242,14 @@ func runRemoteAttach(ctx context.Context, invocation Invocation) error {
 	} else {
 		machine = strings.TrimSpace(invocation.Args[1])
 		container = tmux.CanonicalContainerName(strings.TrimSpace(invocation.Args[2]))
-		if err := validateRemoteMachine(invocation.Config.Remote.Machines, machine); err != nil {
+		if err := validateRemoteMachine(invocation.Config.Remote.ConfiguredMachines(), machine); err != nil {
 			return err
 		}
 		if container == "" {
 			return errors.New("remote attach requires a container")
 		}
 	}
-	if invocation.Selection.Kind == backend.Herdr && !configuredMachine(invocation.Config.Remote.Machines, machine) {
+	if invocation.Selection.Kind == backend.Herdr && !invocation.Config.Remote.IsMachineConfigured(machine) {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
 	transport := tmux.NewCommandTransport(invocation.Config.Remote)
@@ -517,8 +518,9 @@ func configuredMachine(machines []string, machine string) bool {
 	if machine == "" || strings.HasPrefix(machine, "-") {
 		return false
 	}
+	machine = config.NormalizeMachineName(machine)
 	for _, configured := range machines {
-		if strings.TrimSpace(configured) == machine {
+		if config.NormalizeMachineName(configured) == machine {
 			return true
 		}
 	}

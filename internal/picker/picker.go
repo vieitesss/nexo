@@ -179,7 +179,7 @@ func MergeContainerPlaces(base, extra []Place) []Place {
 }
 
 func containerPlaceKey(place Place) string {
-	return place.Machine + "\x00" + place.ContainerName
+	return strings.ToLower(strings.TrimSpace(place.Machine)) + "\x00" + place.ContainerName
 }
 
 func mergeContainerPlace(left, right Place) Place {

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -34,16 +35,64 @@ func (r RemoteConfig) EffectiveTransport() string {
 	return transport
 }
 
+// NormalizeMachineName returns the comparison form used for remote machine
+// names.
+func NormalizeMachineName(machine string) string {
+	return strings.ToLower(strings.TrimSpace(machine))
+}
+
+// ConfiguredMachines returns the configured remote machines, including names
+// that occur only as keys in remote.backends. The first spelling wins while
+// matching remains case-insensitive and whitespace-tolerant.
+func (r RemoteConfig) ConfiguredMachines() []string {
+	machines := make([]string, 0, len(r.Machines)+len(r.Backends))
+	seen := make(map[string]bool, len(r.Machines)+len(r.Backends))
+	add := func(machine string) {
+		machine = strings.TrimSpace(machine)
+		key := NormalizeMachineName(machine)
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		machines = append(machines, machine)
+	}
+	for _, machine := range r.Machines {
+		add(machine)
+	}
+	backendMachines := make([]string, 0, len(r.Backends))
+	for machine := range r.Backends {
+		backendMachines = append(backendMachines, machine)
+	}
+	sort.Strings(backendMachines)
+	for _, machine := range backendMachines {
+		add(machine)
+	}
+	return machines
+}
+
+// IsMachineConfigured reports whether machine is named by remote.machines or
+// remote.backends.
+func (r RemoteConfig) IsMachineConfigured(machine string) bool {
+	key := NormalizeMachineName(machine)
+	if key == "" {
+		return false
+	}
+	for _, configured := range r.ConfiguredMachines() {
+		if NormalizeMachineName(configured) == key {
+			return true
+		}
+	}
+	return false
+}
+
 // BackendFor returns the configured remote backend, defaulting to auto.
 func (r RemoteConfig) BackendFor(machine string) string {
-	machine = strings.TrimSpace(machine)
-	backend := strings.TrimSpace(r.Backends[machine])
-	if backend == "" {
-		for configured, value := range r.Backends {
-			if strings.TrimSpace(configured) == machine {
-				backend = value
-				break
-			}
+	machine = NormalizeMachineName(machine)
+	backend := ""
+	for configured, value := range r.Backends {
+		if NormalizeMachineName(configured) == machine {
+			backend = value
+			break
 		}
 	}
 	backend = strings.ToLower(strings.TrimSpace(backend))
@@ -83,19 +132,19 @@ func remoteValidationKey(err error) string {
 
 func validateRemote(remote RemoteConfig) error {
 	localMachine, _ := os.Hostname()
-	configured := make(map[string]bool, len(remote.Machines))
-	for _, machine := range remote.Machines {
+	configured := make(map[string]bool, len(remote.Machines)+len(remote.Backends))
+	for _, machine := range remote.ConfiguredMachines() {
 		trimmed := strings.TrimSpace(machine)
-		configured[trimmed] = true
+		configured[NormalizeMachineName(trimmed)] = true
 		if strings.HasPrefix(trimmed, "-") {
 			return fmt.Errorf("machine %q starts with '-' and would be interpreted as an ssh option", machine)
 		}
-		if trimmed == "local" || (localMachine != "" && trimmed == localMachine) {
+		if NormalizeMachineName(trimmed) == "local" || (localMachine != "" && NormalizeMachineName(trimmed) == NormalizeMachineName(localMachine)) {
 			return fmt.Errorf("machine alias %q refers to the local machine", machine)
 		}
 	}
 	for machine, value := range remote.Backends {
-		if !configured[strings.TrimSpace(machine)] {
+		if !configured[NormalizeMachineName(machine)] {
 			return fmt.Errorf("backend is configured for unknown machine %q", machine)
 		}
 		switch strings.ToLower(strings.TrimSpace(value)) {

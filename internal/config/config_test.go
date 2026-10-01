@@ -151,24 +151,25 @@ func TestLoadParsesRemoteBackends(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidRemoteBackends(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		config  string
-		message string
-	}{
-		{name: "unknown machine", config: "[remote]\nmachines = [\"devbox\"]\n[remote.backends]\nother = \"tmux\"\n", message: "unknown machine"},
-		{name: "unknown value", config: "[remote]\nmachines = [\"devbox\"]\n[remote.backends]\ndevbox = \"screen\"\n", message: "invalid remote backend"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, []byte(test.config), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := Load(path)
-			if err == nil || !strings.Contains(err.Error(), test.message) || !strings.Contains(err.Error(), "remote.backends") {
-				t.Fatalf("Load() error = %v, want %q and remote.backends", err, test.message)
-			}
-		})
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[remote]\n[remote.backends]\nother = \"tmux\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want backend-only machine to be accepted", err)
+	}
+	if !got.Remote.IsMachineConfigured(" OTHER ") {
+		t.Fatalf("remote machine set = %#v, want backend-only machine", got.Remote.ConfiguredMachines())
+	}
+
+	path = filepath.Join(t.TempDir(), "invalid-backend.toml")
+	if err := os.WriteFile(path, []byte("[remote]\nmachines = [\"devbox\"]\n[remote.backends]\ndevbox = \"screen\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Load(path)
+	if err == nil || !strings.Contains(err.Error(), "invalid remote backend") || !strings.Contains(err.Error(), "remote.backends") {
+		t.Fatalf("Load() error = %v, want invalid backend and remote.backends", err)
 	}
 }
 

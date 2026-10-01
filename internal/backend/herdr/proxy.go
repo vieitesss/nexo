@@ -27,9 +27,9 @@ func (b *Backend) ConfigureRemoteConfig(remote config.RemoteConfig, configPath s
 		return
 	}
 	b.proxyConfigPath = configPath
-	b.remoteMachines = make(map[string]bool, len(remote.Machines))
-	for _, machine := range remote.Machines {
-		machine = strings.TrimSpace(machine)
+	b.remoteMachines = make(map[string]bool, len(remote.ConfiguredMachines()))
+	for _, machine := range remote.ConfiguredMachines() {
+		machine = config.NormalizeMachineName(machine)
 		if machine != "" {
 			b.remoteMachines[machine] = true
 		}
@@ -83,19 +83,26 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return "", err
 	}
+	machine = config.NormalizeMachineName(machine)
 	workspaces, err := b.listWorkspaces(ctx)
 	if err != nil {
 		return "", err
 	}
 	identity := machine + "/" + container
 	for _, workspace := range workspaces {
-		if workspace.Tokens[proxyToken] == identity {
+		if proxyIdentityMatches(workspace.Tokens[proxyToken], machine, container) {
 			return workspace.ID, nil
 		}
 	}
-	if b.remoteMachines[machine] {
+	if b.remoteMachines[config.NormalizeMachineName(machine)] {
 		for _, workspace := range workspaces {
-			if workspace.Label != identity {
+			// A workspace already tagged with a different identity is never
+			// adopted: the token is authoritative and the label must not
+			// override it.
+			if strings.TrimSpace(workspace.Tokens[proxyToken]) != "" {
+				continue
+			}
+			if !proxyIdentityMatches(workspace.Label, machine, container) {
 				continue
 			}
 			if err := b.adoptProxyWorkspace(ctx, workspace.ID, identity); err != nil {
@@ -123,6 +130,7 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return err
 	}
+	machine = config.NormalizeMachineName(machine)
 	command, err := b.proxyPaneCommand(machine, container)
 	if err != nil {
 		return err
@@ -220,6 +228,10 @@ func (b *Backend) ProxyTarget(ctx context.Context, paneID string) (string, error
 			continue
 		}
 		if identity := strings.TrimSpace(workspace.Tokens[proxyToken]); identity != "" {
+			machine, container, ok := splitProxyIdentity(identity)
+			if ok && b.remoteMachines[config.NormalizeMachineName(machine)] {
+				return config.NormalizeMachineName(machine) + "/" + container, nil
+			}
 			return identity, nil
 		}
 		if machine, container, ok := b.proxyLabelTarget(workspace.Label); ok {
@@ -248,18 +260,35 @@ func (b *Backend) proxyLabelTarget(label string) (string, string, bool) {
 		return "", "", false
 	}
 	machine, container := label[:separator], label[separator+1:]
-	if !b.remoteMachines[machine] {
+	if !b.remoteMachines[config.NormalizeMachineName(machine)] {
 		return "", "", false
 	}
-	return machine, container, true
+	return config.NormalizeMachineName(machine), container, true
 }
 
 func (b *Backend) proxyWorkspaceTarget(current workspace) (string, string, bool) {
 	if identity := strings.TrimSpace(current.Tokens[proxyToken]); identity != "" {
-		machine, container, ok := b.proxyLabelTarget(identity)
-		return machine, container, ok
+		machine, container, ok := splitProxyIdentity(identity)
+		if !ok || !b.remoteMachines[config.NormalizeMachineName(machine)] {
+			return "", "", false
+		}
+		return config.NormalizeMachineName(machine), container, true
 	}
 	return b.proxyLabelTarget(current.Label)
+}
+
+func proxyIdentityMatches(identity, machine, container string) bool {
+	identityMachine, identityContainer, ok := splitProxyIdentity(identity)
+	return ok && config.NormalizeMachineName(identityMachine) == config.NormalizeMachineName(machine) && identityContainer == container
+}
+
+func splitProxyIdentity(identity string) (string, string, bool) {
+	identity = strings.TrimSpace(identity)
+	separator := strings.IndexByte(identity, '/')
+	if separator <= 0 || separator == len(identity)-1 {
+		return "", "", false
+	}
+	return strings.TrimSpace(identity[:separator]), strings.TrimSpace(identity[separator+1:]), true
 }
 
 func decodeCreatedWorkspace(output []byte) (workspaceID, paneID string) {
