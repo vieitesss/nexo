@@ -75,6 +75,18 @@ so the terminal's own palette decides the exact contrast. Against the
 conventional xterm palette both variants reach the WCAG AA 4.5:1 ratio on the
 row background and on the TUI's selection background.
 
+## Project actions
+
+Press `Ctrl-O` on a selected project row to open the clone form without leaving the
+Projects tab. The tabbed view remains visible behind the border-only modal. Its
+source stage has editable protocol and repository fields; the destination stage
+validates a new path before Git runs. Enter advances from any field and submits
+from the destination stage, while Escape cancels. Completed stages collapse to a
+summary and can be reopened with Left; a failed source or destination remains
+inline. Cloning refreshes the project catalog and selects the new project without
+opening or focusing a container. The configured `[clone]` section supplies SSH
+and HTTPS prefixes.
+
 ## Keys
 
 See the picker key table in the README for the complete list. Left/Right only
@@ -110,7 +122,9 @@ interface paints no background, so those are not used on screen.
 Semantic colours stay as terminal ANSI codes and follow the user's theme:
 agent state is red, yellow or green, Git additions and deletions are bright
 green and bright red, and errors are red. The selected row is the only painted
-background — one blue bar with a single foreground. Bold names and headers keep
+background — one blue bar with a single foreground. Modal forms use a border/frame
+but do not paint their body, so the selected-row rule remains intact. Bold names
+and headers keep
 their weight on the selected row, and agent state dots, state words and stopped
 ages keep exactly the same terminal ANSI colour they have when unselected.
 

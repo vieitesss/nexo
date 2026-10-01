@@ -33,6 +33,7 @@ type inputState struct {
 
 	confirmKill    bool
 	killTargets    []picker.ContainerRef
+	form           *stagedForm
 	renameMode     bool
 	renameInput    []rune
 	renameTarget   picker.ContainerRef
@@ -287,10 +288,23 @@ func foldPrefixStyled(row row) string {
 func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 	if msg.Type == tea.KeyCtrlC {
 		s.cancelled = true
+		s.form = nil
 		s.confirmKill = false
 		s.renameMode = false
 		s.killTargets = nil
 		return inputEffect{quit: true}
+	}
+	if s.form != nil {
+		effect := s.form.key(msg)
+		if effect.Canceled {
+			s.form = nil
+			s.actionInFlight = false
+			return inputEffect{rebuild: true}
+		}
+		if effect.Submitted {
+			s.actionInFlight = true
+		}
+		return inputEffect{rebuild: effect.Changed || effect.Submitted, cmd: effect.Cmd}
 	}
 	if s.actionInFlight {
 		return inputEffect{}
@@ -356,6 +370,14 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 	case tea.KeyCtrlT:
 		s.toggleMark(frame.rows)
 		return inputEffect{rebuild: true}
+	case tea.KeyCtrlO:
+		if s.tab == ProjectsTab {
+			if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ProjectKind {
+				s.form = newCloneForm(s.deps, s.ctx)
+				return inputEffect{rebuild: true}
+			}
+		}
+		return inputEffect{}
 	case tea.KeyCtrlX:
 		refs := append([]picker.ContainerRef(nil), frame.markedTargets()...)
 		if len(refs) == 0 {

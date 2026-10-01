@@ -12,6 +12,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	gitops "github.com/vieitesss/nexo/internal/git"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/remote"
@@ -72,7 +73,7 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 }
 
 func tuiDependencies(ctx context.Context, invocation Invocation, tab string, initial []capabilities.Agent, initialErr error, initialRead ...bool) (tui.Deps, error) {
-	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Theme: invocation.Config.TUI.EffectiveTheme(), Agents: append([]capabilities.Agent(nil), initial...), Input: invocation.Stdin, Output: invocation.Stdout}
+	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Theme: invocation.Config.TUI.EffectiveTheme(), Agents: append([]capabilities.Agent(nil), initial...), Input: invocation.Stdin, Output: invocation.Stdout, CloneConfig: invocation.Config.Clone, ProjectPaths: invocation.Config.Paths, Home: os.Getenv("HOME")}
 	deps.ConfigPath = invocation.ConfigPath
 	if deps.ConfigPath == "" {
 		deps.ConfigPath = config.DefaultPath()
@@ -126,6 +127,9 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 	}
 	deps.RemoteCommands = remotePlaceCommands(ctx, invocation)
 	deps.RemoteMachines = append([]string(nil), invocation.Config.Remote.ConfiguredMachines()...)
+	deps.CloneProject = func(cloneCtx context.Context, source, destination string) error {
+		return gitops.Clone(cloneCtx, invocation.Runner, source, destination)
+	}
 	deps.OpenProject = func(openCtx context.Context, place picker.Place) error {
 		opener, ok := invocation.Adapter.(capabilities.ProjectOpener)
 		if !ok {

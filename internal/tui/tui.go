@@ -19,6 +19,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/startup"
 )
@@ -77,9 +78,15 @@ type Deps struct {
 	RemoteCommands             []tea.Cmd
 	RemoteMachines             []string
 
-	OpenProject     func(context.Context, picker.Place) error
-	OpenContainer   func(context.Context, picker.Place) error
-	FocusAgent      func(context.Context, AgentRef) error
+	OpenProject   func(context.Context, picker.Place) error
+	OpenContainer func(context.Context, picker.Place) error
+	FocusAgent    func(context.Context, AgentRef) error
+	// CloneProject is the backend-neutral Git action used by the Projects-tab
+	// staged form. It must not open or focus a container.
+	CloneProject    func(context.Context, string, string) error
+	CloneConfig     config.CloneConfig
+	ProjectPaths    []string
+	Home            string
 	KillContainers  func(context.Context, []picker.ContainerRef) error
 	RenameContainer func(context.Context, picker.ContainerRef, string) error
 
@@ -248,8 +255,9 @@ type pullRequestMsg struct {
 }
 
 type actionMsg struct {
-	kind string
-	err  error
+	kind        string
+	destination string
+	err         error
 }
 
 type agentRecord struct {
@@ -284,6 +292,7 @@ type Model struct {
 	trace                   *startup.Trace
 	initialSelectionPending bool
 	userInteracted          bool
+	selectAfterRefresh      string
 }
 
 // NewModel creates a model with the requested opening tab. It does not do I/O.
@@ -300,6 +309,8 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	}
 	deps.Projects = append([]picker.Place(nil), deps.Projects...)
 	deps.Containers = append([]capabilities.Container(nil), deps.Containers...)
+	deps.CloneConfig = deps.CloneConfig.WithDefaults()
+	deps.ProjectPaths = append([]string(nil), deps.ProjectPaths...)
 	deps.Agents = append([]capabilities.Agent(nil), deps.Agents...)
 	remoteMachines := make([]string, 0, len(deps.RemoteMachines))
 	seenRemoteMachines := make(map[string]bool, len(deps.RemoteMachines))
@@ -466,6 +477,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SetSize(msg.Width, msg.Height)
 		return m, nil
 	case actionMsg:
+		if msg.kind == "clone" {
+			if m.input.form != nil {
+				m.input.form.finish(msg.err)
+			}
+			if msg.err != nil {
+				m.input.actionInFlight = false
+				return m, nil
+			}
+			m.input.form = nil
+			m.input.actionInFlight = false
+			m.selectAfterRefresh = msg.destination
+			cmd := m.source.ReloadProjects()
+			if cmd == nil {
+				m.selectAfterRefresh = ""
+			}
+			m.rebuild(false)
+			return m, cmd
+		}
 		if msg.err != nil {
 			m.toast = msg.err.Error()
 			m.source.remoteCommands = append([]tea.Cmd(nil), m.deps.RemoteCommands...)
@@ -577,6 +606,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if update.changed || tabChanged {
 			m.rebuildSource()
+		}
+		if update.projectsUpdated && m.selectAfterRefresh != "" {
+			candidate := "project:" + m.selectAfterRefresh
+			for _, value := range m.rows {
+				if value.id == candidate {
+					m.input.cursor = candidate
+					m.selectAfterRefresh = ""
+					break
+				}
+			}
 		}
 		return m, update.cmd
 	}

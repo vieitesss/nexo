@@ -27,6 +27,7 @@ type Config struct {
 	Agents         AgentsConfig `toml:"agents"`
 	TUI            TUIConfig    `toml:"tui"`
 	Remote         RemoteConfig `toml:"remote"`
+	Clone          CloneConfig  `toml:"clone"`
 }
 
 // Load reads a required configuration file.
@@ -80,6 +81,11 @@ func parse(contents []byte, path string) (Config, error) {
 		ProjectsConfig
 		Agents AgentsConfig `toml:"agents"`
 		TUI    TUIConfig    `toml:"tui"`
+		Clone  struct {
+			DefaultProtocol string `toml:"default-protocol"`
+			SSHPrefix       string `toml:"ssh-prefix"`
+			HTTPSPrefix     string `toml:"https-prefix"`
+		} `toml:"clone"`
 		Remote struct {
 			Machines         []string          `toml:"machines"`
 			Backends         map[string]string `toml:"backends"`
@@ -97,6 +103,11 @@ func parse(contents []byte, path string) (Config, error) {
 		ProjectsConfig: raw.ProjectsConfig,
 		Agents:         raw.Agents,
 		TUI:            raw.TUI,
+		Clone: CloneConfig{
+			DefaultProtocol: raw.Clone.DefaultProtocol,
+			SSHPrefix:       raw.Clone.SSHPrefix,
+			HTTPSPrefix:     raw.Clone.HTTPSPrefix,
+		},
 		Remote: RemoteConfig{
 			Machines:  raw.Remote.Machines,
 			Backends:  raw.Remote.Backends,
@@ -133,11 +144,15 @@ func parse(contents []byte, path string) (Config, error) {
 	if err := validateAgents(cfg.Agents); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, highlightColorKey)
 	}
+	if err := validateClone(cfg.Clone); err != nil {
+		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "clone.default-protocol")
+	}
 	if err := validateRemote(cfg.Remote); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, remoteValidationKey(err))
 	}
 	cfg.Agents = cfg.Agents.WithDefaults()
 	cfg.TUI = cfg.TUI.WithDefaults()
+	cfg.Clone = cfg.Clone.WithDefaults()
 	return cfg, nil
 }
 
