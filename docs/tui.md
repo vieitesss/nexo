@@ -87,6 +87,12 @@ inline. Cloning refreshes the project catalog and selects the new project withou
 opening or focusing a container. The configured `[clone]` section supplies SSH
 and HTTPS prefixes.
 
+Press `Ctrl-D` in the Projects tab to create an empty directory. The directory
+form reuses the clone form's stage, inline errors, `Enter`/`Escape` behaviour
+and add-parent offer, but runs no Git command and creates missing parents.
+Creation never opens or focuses a container; on success the catalog refreshes
+and selects the new directory.
+
 ## Keys
 
 See the picker key table in the README for the complete list. Left/Right only
