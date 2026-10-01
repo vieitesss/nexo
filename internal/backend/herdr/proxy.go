@@ -16,6 +16,7 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/proxy"
+	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
 const proxyToken = "nexo-proxy"
@@ -27,13 +28,8 @@ func (b *Backend) ConfigureRemoteConfig(remote config.RemoteConfig, configPath s
 		return
 	}
 	b.proxyConfigPath = configPath
-	b.remoteMachines = make(map[string]bool, len(remote.ConfiguredMachines()))
-	for _, machine := range remote.ConfiguredMachines() {
-		machine = config.NormalizeMachineName(machine)
-		if machine != "" {
-			b.remoteMachines[machine] = true
-		}
-	}
+	b.remoteMachines = proxyidentity.NewMachineSet(remote.ConfiguredMachines())
+	b.proxyPolicy = proxyidentity.NewPolicy(remote.ConfiguredMachines())
 }
 
 // ValidateProxyIdentity rejects identity values that Herdr would normalize,
@@ -83,35 +79,8 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return "", err
 	}
-	machine = config.NormalizeMachineName(machine)
-	workspaces, err := b.listWorkspaces(ctx)
-	if err != nil {
-		return "", err
-	}
-	identity := machine + "/" + container
-	for _, workspace := range workspaces {
-		if proxyIdentityMatches(workspace.Tokens[proxyToken], machine, container) {
-			return workspace.ID, nil
-		}
-	}
-	if b.remoteMachines[config.NormalizeMachineName(machine)] {
-		for _, workspace := range workspaces {
-			// A workspace already tagged with a different identity is never
-			// adopted: the token is authoritative and the label must not
-			// override it.
-			if strings.TrimSpace(workspace.Tokens[proxyToken]) != "" {
-				continue
-			}
-			if !proxyIdentityMatches(workspace.Label, machine, container) {
-				continue
-			}
-			if err := b.adoptProxyWorkspace(ctx, workspace.ID, identity); err != nil {
-				return "", err
-			}
-			return workspace.ID, nil
-		}
-	}
-	return "", nil
+	identity := proxyidentity.NewIdentity(machine, container)
+	return b.proxyPolicy.Resolve(ctx, identity, herdrProxyStore{backend: b})
 }
 
 func (b *Backend) adoptProxyWorkspace(ctx context.Context, workspaceID, identity string) error {
@@ -130,7 +99,8 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return err
 	}
-	machine = config.NormalizeMachineName(machine)
+	identity := proxyidentity.NewIdentity(machine, container)
+	machine, container = identity.Machine, identity.Container
 	command, err := b.proxyPaneCommand(machine, container)
 	if err != nil {
 		return err
@@ -144,8 +114,8 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 		return err
 	}
 
-	identity := machine + "/" + container
-	label := identity
+	identityValue := identity.String()
+	label := identityValue
 	output, err := b.run(ctx, "workspace", "create", "--label", label,
 		"--env", "NEXO_PROXY_MACHINE="+machine,
 		"--env", "NEXO_PROXY_CONTAINER="+container, "--focus")
@@ -160,10 +130,10 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 		}
 		return failure
 	}
-	if _, err := b.run(ctx, "workspace", "report-metadata", workspaceID, "--source", "nexo", "--token", proxyToken+"="+identity); err != nil {
+	if _, err := b.run(ctx, "workspace", "report-metadata", workspaceID, "--source", "nexo", "--token", proxyToken+"="+identityValue); err != nil {
 		return b.operationWithCleanup(err, workspaceID)
 	}
-	if err := b.verifyProxyToken(ctx, workspaceID, identity); err != nil {
+	if err := b.verifyProxyToken(ctx, workspaceID, identityValue); err != nil {
 		return b.operationWithCleanup(err, workspaceID)
 	}
 	if _, err := b.run(ctx, "pane", "send-text", paneID, command+"\n"); err != nil {
@@ -227,12 +197,11 @@ func (b *Backend) ProxyTarget(ctx context.Context, paneID string) (string, error
 		if workspace.ID != workspaceID {
 			continue
 		}
-		if identity := strings.TrimSpace(workspace.Tokens[proxyToken]); identity != "" {
-			machine, container, ok := splitProxyIdentity(identity)
-			if ok && b.remoteMachines[config.NormalizeMachineName(machine)] {
-				return config.NormalizeMachineName(machine) + "/" + container, nil
+		if identityValue := strings.TrimSpace(workspace.Tokens[proxyToken]); identityValue != "" {
+			if identity, ok := proxyidentity.ParseValue(identityValue); ok && b.remoteMachines.Contains(identity.Machine) {
+				return proxyidentity.NewIdentity(identity.Machine, identity.Container).String(), nil
 			}
-			return identity, nil
+			return identityValue, nil
 		}
 		if machine, container, ok := b.proxyLabelTarget(workspace.Label); ok {
 			identity := machine + "/" + container
@@ -254,41 +223,47 @@ func (b *Backend) listWorkspaces(ctx context.Context) ([]workspace, error) {
 	return decodeWorkspaceList(output)
 }
 
+type herdrProxyStore struct{ backend *Backend }
+
+func (s herdrProxyStore) ListProxyCandidates(ctx context.Context) ([]proxyidentity.Candidate, error) {
+	workspaces, err := s.backend.listWorkspaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]proxyidentity.Candidate, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		candidates = append(candidates, proxyidentity.Candidate{
+			ID:             workspace.ID,
+			Label:          workspace.Label,
+			TaggedIdentity: workspace.Tokens[proxyToken],
+		})
+	}
+	return candidates, nil
+}
+
+func (s herdrProxyStore) AdoptProxy(ctx context.Context, workspaceID string, identity proxyidentity.Identity) error {
+	return s.backend.adoptProxyWorkspace(ctx, workspaceID, identity.String())
+}
+
 func (b *Backend) proxyLabelTarget(label string) (string, string, bool) {
-	separator := strings.IndexByte(label, '/')
-	if separator <= 0 || separator == len(label)-1 {
+	identity, ok := proxyidentity.ParseValue(label)
+	if !ok || !b.remoteMachines.Contains(identity.Machine) {
 		return "", "", false
 	}
-	machine, container := label[:separator], label[separator+1:]
-	if !b.remoteMachines[config.NormalizeMachineName(machine)] {
-		return "", "", false
-	}
-	return config.NormalizeMachineName(machine), container, true
+	identity = proxyidentity.NewIdentity(identity.Machine, identity.Container)
+	return identity.Machine, identity.Container, true
 }
 
 func (b *Backend) proxyWorkspaceTarget(current workspace) (string, string, bool) {
-	if identity := strings.TrimSpace(current.Tokens[proxyToken]); identity != "" {
-		machine, container, ok := splitProxyIdentity(identity)
-		if !ok || !b.remoteMachines[config.NormalizeMachineName(machine)] {
+	if identityValue := strings.TrimSpace(current.Tokens[proxyToken]); identityValue != "" {
+		identity, ok := proxyidentity.ParseValue(identityValue)
+		if !ok || !b.remoteMachines.Contains(identity.Machine) {
 			return "", "", false
 		}
-		return config.NormalizeMachineName(machine), container, true
+		identity = proxyidentity.NewIdentity(identity.Machine, identity.Container)
+		return identity.Machine, identity.Container, true
 	}
 	return b.proxyLabelTarget(current.Label)
-}
-
-func proxyIdentityMatches(identity, machine, container string) bool {
-	identityMachine, identityContainer, ok := splitProxyIdentity(identity)
-	return ok && config.NormalizeMachineName(identityMachine) == config.NormalizeMachineName(machine) && identityContainer == container
-}
-
-func splitProxyIdentity(identity string) (string, string, bool) {
-	identity = strings.TrimSpace(identity)
-	separator := strings.IndexByte(identity, '/')
-	if separator <= 0 || separator == len(identity)-1 {
-		return "", "", false
-	}
-	return strings.TrimSpace(identity[:separator]), strings.TrimSpace(identity[separator+1:]), true
 }
 
 func decodeCreatedWorkspace(output []byte) (workspaceID, paneID string) {

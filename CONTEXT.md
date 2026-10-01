@@ -97,6 +97,11 @@ container on another machine. Closing or detaching a proxy never closes the
 remote container.
 _Avoid_: mirror, remote session (that is what a proxy attaches to)
 
+**Proxy identity**:
+The machine/container pair that identifies a proxy independently of its local
+container label or native metadata. Machine matching is case-insensitive;
+container spelling remains native to the selected backend.
+
 **Place catalog**:
 The backend-neutral module that combines project candidates, local and remote
 container snapshots, machine identity, proxy merging, and agent decoration

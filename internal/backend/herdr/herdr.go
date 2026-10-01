@@ -13,6 +13,7 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/lifecycle"
 	"github.com/vieitesss/nexo/internal/projects"
+	"github.com/vieitesss/nexo/internal/proxyidentity"
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
@@ -23,12 +24,13 @@ type Backend struct {
 	agents *Source
 
 	proxyConfigPath string
-	remoteMachines  map[string]bool
+	remoteMachines  proxyidentity.MachineSet
+	proxyPolicy     proxyidentity.Policy
 }
 
 // New constructs a Herdr backend using the supplied command runner.
 func New(r runner.CommandRunner) *Backend {
-	return &Backend{Runner: r, agents: NewAgentSource(r)}
+	return &Backend{Runner: r, agents: NewAgentSource(r), remoteMachines: proxyidentity.NewMachineSet(nil), proxyPolicy: proxyidentity.NewPolicy(nil)}
 }
 
 // OpenContainer focuses an existing Herdr workspace by stable workspace ID.

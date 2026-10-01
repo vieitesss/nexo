@@ -37,24 +37,9 @@ func TestRemoteOpenRoutesThroughConfiguredRemoteProxy(t *testing.T) {
 	}
 }
 
-func TestRemoteOpenCanonicalizesTmuxContainerName(t *testing.T) {
-	proxy := &recordingRemoteProxy{}
-	err := (remoteCommand{}).Run(context.Background(), Invocation{
-		Selection: backend.Selection{Kind: backend.Tmux},
-		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
-		Adapter:   proxy,
-		Args:      []string{"open", "devbox/app.v1:blue"},
-	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if proxy.opened != [2]string{"devbox", "app_v1_blue"} {
-		t.Fatalf("proxy call = %#v, want canonical devbox/app_v1_blue", proxy.opened)
-	}
-}
-
 type recordingKiller struct {
-	closed string
+	closed      string
+	proxyTarget [2]string
 }
 
 func (k *recordingKiller) KillContainer(_ context.Context, id string) error {
@@ -64,7 +49,8 @@ func (k *recordingKiller) KillContainer(_ context.Context, id string) error {
 
 func (*recordingKiller) Proxy(context.Context, string, string) error { return nil }
 
-func (*recordingKiller) ProxySessionID(context.Context, string, string) (string, error) {
+func (k *recordingKiller) ProxySessionID(_ context.Context, machine, container string) (string, error) {
+	k.proxyTarget = [2]string{machine, container}
 	return "$7", nil
 }
 
@@ -87,6 +73,28 @@ func TestRemoteCloseOnlyKillsLocalProxy(t *testing.T) {
 	}
 	if killer.closed != "$7" {
 		t.Fatalf("closed target = %q, want stable proxy session id", killer.closed)
+	}
+}
+
+func TestRemoteCloseLeavesContainerSpellingToTheAdapter(t *testing.T) {
+	killer := &recordingKiller{}
+	err := (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Herdr},
+		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
+		Adapter:   killer,
+		Runner: runner.Func(func(_ context.Context, name string, _ ...string) ([]byte, error) {
+			if name == "ssh" {
+				t.Fatal("remote close must not probe SSH")
+			}
+			return nil, nil
+		}),
+		Args: []string{"close", "devbox/app.v1:blue"},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if killer.proxyTarget != [2]string{"devbox", "app.v1:blue"} {
+		t.Fatalf("proxy target = %#v, want native spelling", killer.proxyTarget)
 	}
 }
 

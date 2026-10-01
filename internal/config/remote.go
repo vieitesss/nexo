@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
 // RemoteConfig controls the machines queried by remote place sources.
@@ -38,7 +40,7 @@ func (r RemoteConfig) EffectiveTransport() string {
 // NormalizeMachineName returns the comparison form used for remote machine
 // names.
 func NormalizeMachineName(machine string) string {
-	return strings.ToLower(strings.TrimSpace(machine))
+	return proxyidentity.NormalizeMachineName(machine)
 }
 
 // ConfiguredMachines returns the configured remote machines, including names

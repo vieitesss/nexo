@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
-	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
 var (
@@ -49,8 +49,8 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 			if !proxy {
 				continue
 			}
-		} else if machineName, containerName, ok := splitProxyIdentity(fields[1]); ok && b.isRemoteMachine(machineName) {
-			proxyMachine, proxyContainer, proxy = config.NormalizeMachineName(machineName), CanonicalContainerName(strings.TrimSpace(containerName)), true
+		} else if identity, ok := proxyidentity.ParseValue(fields[1]); ok && b.isRemoteMachine(identity.Machine) {
+			proxyMachine, proxyContainer, proxy = proxyidentity.NormalizeMachineName(identity.Machine), CanonicalContainerName(identity.Container), true
 		}
 		var activity *time.Time
 		if len(fields) >= 3 {
@@ -79,12 +79,12 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 	return containers, nil
 }
 
-func (b *Backend) proxyTarget(identity string) (string, string, bool) {
-	machine, container, ok := splitProxyIdentity(identity)
-	if !ok || !b.isRemoteMachine(machine) {
+func (b *Backend) proxyTarget(value string) (string, string, bool) {
+	identity, ok := proxyidentity.ParseValue(value)
+	if !ok || !b.isRemoteMachine(identity.Machine) {
 		return "", "", false
 	}
-	return config.NormalizeMachineName(machine), CanonicalContainerName(container), true
+	return proxyidentity.NormalizeMachineName(identity.Machine), CanonicalContainerName(identity.Container), true
 }
 
 func (b *Backend) activePane(ctx context.Context, sessionID string) (string, error) {

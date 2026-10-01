@@ -15,8 +15,8 @@ import (
 	"github.com/vieitesss/nexo/internal/backend/herdr"
 	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
-	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/proxy"
+	"github.com/vieitesss/nexo/internal/proxyidentity"
 	"github.com/vieitesss/nexo/internal/remote"
 )
 
@@ -72,11 +72,12 @@ func runRemoteOpen(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) != 2 {
 		return errors.New("remote open requires MACHINE/CONTAINER")
 	}
-	machine, container, err := parseRemoteTarget(invocation.Args[1])
+	target, err := proxyidentity.ParseTarget(invocation.Args[1])
 	if err != nil {
 		return err
 	}
-	if !invocation.Config.Remote.IsMachineConfigured(machine) {
+	machine, container := target.Machine, target.Container
+	if !proxyidentity.NewMachineSet(invocation.Config.Remote.ConfiguredMachines()).Contains(machine) {
 		return fmt.Errorf("remote machine %q is not configured", machine)
 	}
 	result, err := listRemoteMachine(ctx, invocation, machine)
@@ -183,13 +184,13 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 			return errors.New("current session is not a nexo proxy")
 		}
 	}
-	machine, container, err := parseRemoteTarget(target)
+	identity, err := proxyidentity.ParseTarget(target)
 	if err != nil {
 		return err
 	}
+	machine, container := identity.Machine, identity.Container
 	// Closing is local-only. Do not probe the remote machine: links are often
 	// down precisely when a stale local proxy needs to be removed.
-	container = tmux.CanonicalContainerName(container)
 	if _, ok := invocation.Adapter.(capabilities.RemoteProxy); !ok {
 		return fmt.Errorf("backend %q does not support remote proxies", invocation.Selection.Kind)
 	}
@@ -241,7 +242,7 @@ func runRemoteAttach(ctx context.Context, invocation Invocation) error {
 		}
 	} else {
 		machine = strings.TrimSpace(invocation.Args[1])
-		container = tmux.CanonicalContainerName(strings.TrimSpace(invocation.Args[2]))
+		container = strings.TrimSpace(invocation.Args[2])
 		if err := validateRemoteMachine(invocation.Config.Remote.ConfiguredMachines(), machine); err != nil {
 			return err
 		}
@@ -409,10 +410,6 @@ func openRemoteContainer(ctx context.Context, invocation Invocation, machine, co
 		}
 		return openNativeHerdrContainer(ctx, invocation, machine, container)
 	case remote.KindTmux:
-		container = tmux.CanonicalContainerName(container)
-		if err := tmux.ValidateProxyIdentity(machine, container); err != nil {
-			return err
-		}
 		proxy, ok := invocation.Adapter.(capabilities.RemoteProxy)
 		if !ok {
 			return fmt.Errorf("backend %q does not support remote proxies", invocation.Selection.Kind)
@@ -486,45 +483,14 @@ func createHerdrRemoteWorkspace(ctx context.Context, invocation Invocation, mach
 	return nil
 }
 
-func parseRemoteTarget(target string) (string, string, error) {
-	target = strings.TrimSpace(target)
-	separator := strings.IndexByte(target, '/')
-	if separator <= 0 || separator == len(target)-1 {
-		return "", "", errors.New("remote target must be MACHINE/CONTAINER")
-	}
-	machine := strings.TrimSpace(target[:separator])
-	container := strings.TrimSpace(target[separator+1:])
-	if machine == "" || strings.HasPrefix(machine, "-") {
-		return "", "", errors.New("remote target has an invalid machine")
-	}
-	if container == "" {
-		return "", "", errors.New("remote target has an empty container")
-	}
-	return machine, container, nil
-}
-
 func validateRemoteMachine(machines []string, machine string) error {
 	if strings.HasPrefix(machine, "-") {
 		return fmt.Errorf("machine %q starts with '-'", machine)
 	}
-	if !configuredMachine(machines, machine) {
+	if !proxyidentity.NewMachineSet(machines).Contains(machine) {
 		return fmt.Errorf("remote machine %q is not configured", machine)
 	}
 	return nil
-}
-
-func configuredMachine(machines []string, machine string) bool {
-	machine = strings.TrimSpace(machine)
-	if machine == "" || strings.HasPrefix(machine, "-") {
-		return false
-	}
-	machine = config.NormalizeMachineName(machine)
-	for _, configured := range machines {
-		if config.NormalizeMachineName(configured) == machine {
-			return true
-		}
-	}
-	return false
 }
 
 func writeRemoteResults(stdout io.Writer, results []remote.MachineResult) error {
