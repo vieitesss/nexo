@@ -144,6 +144,173 @@ func TestTmuxGlancePreservesACustomSecondRow(t *testing.T) {
 	}
 }
 
+// TestTmuxGlanceSkipsAHiddenCustomRow pins that enabling glance while the
+// custom row is beyond the displayed count still preserves it.
+func TestTmuxGlanceSkipsAHiddenCustomRow(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	for _, name := range []string{"TMUX", "TMUX_PANE", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"} {
+		t.Setenv(name, "")
+	}
+	ctx := context.Background()
+	server := "nexo-test-glance-hidden-" + strings.ReplaceAll(t.Name(), "/", "-")
+	runTmux := throwawayTmux(server)
+	t.Cleanup(func() { _, _ = runTmux("kill-server") })
+
+	pi := fakeHarness(t)
+	if output, err := runTmux("new-session", "-d", "-s", "work", pi+" 600"); err != nil {
+		t.Fatalf("create session: %v: %s", err, output)
+	}
+	if output, err := runTmux("set-option", "-g", "status-format[1]", "USER-ROW"); err != nil {
+		t.Fatalf("set hidden custom row: %v: %s", err, output)
+	}
+
+	source := NewAgentSource(throwawayRunner(server))
+	setStateDir(source, t.TempDir())
+	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}})
+	if err := source.Glance(ctx, GlanceOn); err != nil {
+		t.Fatalf("Glance(on) error = %v", err)
+	}
+	if got := readGlanceOption(t, runTmux, "status"); got != "3" {
+		t.Fatalf("status = %q, want 3", got)
+	}
+	if got := readGlanceOption(t, runTmux, "status-format[1]"); got != "USER-ROW" {
+		t.Fatalf("status-format[1] = %q, want the hidden custom row preserved", got)
+	}
+	if got := readGlanceOption(t, runTmux, "status-format[2]"); !strings.HasPrefix(got, "nexo │") {
+		t.Fatalf("status-format[2] = %q, want the glance row", got)
+	}
+
+	if err := source.Glance(ctx, GlanceOff); err != nil {
+		t.Fatalf("Glance(off) error = %v", err)
+	}
+	if got := readGlanceOption(t, runTmux, "status"); got != "on" {
+		t.Fatalf("status after off = %q, want on", got)
+	}
+	if got := readGlanceOption(t, runTmux, "status-format[1]"); got != "USER-ROW" {
+		t.Fatalf("status-format[1] after off = %q, want the custom row", got)
+	}
+	if got := readGlanceOption(t, runTmux, "status-format[2]"); got != "" {
+		t.Fatalf("status-format[2] after off = %q, want unset", got)
+	}
+}
+
+// TestTmuxGlanceSessionLocalOverride pins that a session with local status
+// settings still shows the row and gets its exact originals back.
+func TestTmuxGlanceSessionLocalOverride(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	for _, name := range []string{"TMUX", "TMUX_PANE", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"} {
+		t.Setenv(name, "")
+	}
+	ctx := context.Background()
+	server := "nexo-test-glance-local-" + strings.ReplaceAll(t.Name(), "/", "-")
+	runTmux := throwawayTmux(server)
+	t.Cleanup(func() { _, _ = runTmux("kill-server") })
+
+	pi := fakeHarness(t)
+	for _, session := range []string{"work", "other"} {
+		if output, err := runTmux("new-session", "-d", "-s", session, pi+" 600"); err != nil {
+			t.Fatalf("create session %s: %v: %s", session, err, output)
+		}
+	}
+	for _, args := range [][]string{
+		{"set-option", "-t", "other", "status", "3"},
+		{"set-option", "-t", "other", "status-format[1]", "LOCAL"},
+	} {
+		if output, err := runTmux(args...); err != nil {
+			t.Fatalf("set local option %v: %v: %s", args, err, output)
+		}
+	}
+
+	source := NewAgentSource(throwawayRunner(server))
+	setStateDir(source, t.TempDir())
+	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}})
+	if err := source.Glance(ctx, GlanceOn); err != nil {
+		t.Fatalf("Glance(on) error = %v", err)
+	}
+	if got := readGlanceOption(t, runTmux, "status"); got != "4" {
+		t.Fatalf("global status = %q, want 4", got)
+	}
+	if got := readGlanceSessionOption(t, runTmux, "other", "status"); got != "4" {
+		t.Fatalf("other local status = %q, want 4", got)
+	}
+	if got := readGlanceSessionOption(t, runTmux, "other", "status-format[1]"); got != "LOCAL" {
+		t.Fatalf("other local row = %q, want LOCAL preserved", got)
+	}
+	if got := readGlanceOption(t, runTmux, "status-format[3]"); !strings.HasPrefix(got, "nexo │") {
+		t.Fatalf("status-format[3] = %q, want the glance row", got)
+	}
+
+	if err := source.Glance(ctx, GlanceOff); err != nil {
+		t.Fatalf("Glance(off) error = %v", err)
+	}
+	if got := readGlanceOption(t, runTmux, "status"); got != "on" {
+		t.Fatalf("global status after off = %q, want on", got)
+	}
+	if got := readGlanceSessionOption(t, runTmux, "other", "status"); got != "3" {
+		t.Fatalf("other local status after off = %q, want 3", got)
+	}
+	if got := readGlanceSessionOption(t, runTmux, "other", "status-format[1]"); got != "LOCAL" {
+		t.Fatalf("other local row after off = %q, want LOCAL", got)
+	}
+	if got := readGlanceOption(t, runTmux, "status-format[3]"); got != "" {
+		t.Fatalf("status-format[3] after off = %q, want unset", got)
+	}
+}
+
+// TestTmuxGlanceRoundTripsExactRowValues pins that padded and explicitly
+// empty custom rows survive an on/off cycle byte for byte.
+func TestTmuxGlanceRoundTripsExactRowValues(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	for _, name := range []string{"TMUX", "TMUX_PANE", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"} {
+		t.Setenv(name, "")
+	}
+	for name, value := range map[string]string{"padded": "  PAD  ", "empty": ""} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			server := "nexo-test-glance-exact-" + strings.ReplaceAll(t.Name(), "/", "-")
+			runTmux := throwawayTmux(server)
+			t.Cleanup(func() { _, _ = runTmux("kill-server") })
+
+			pi := fakeHarness(t)
+			if output, err := runTmux("new-session", "-d", "-s", "work", pi+" 600"); err != nil {
+				t.Fatalf("create session: %v: %s", err, output)
+			}
+			if output, err := runTmux("set-option", "-g", "status-format[1]", value); err != nil {
+				t.Fatalf("set custom row: %v: %s", err, output)
+			}
+
+			source := NewAgentSource(throwawayRunner(server))
+			setStateDir(source, t.TempDir())
+			source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}})
+			if err := source.Glance(ctx, GlanceOn); err != nil {
+				t.Fatalf("Glance(on) error = %v", err)
+			}
+			if got := readGlanceOptionRaw(t, runTmux, "status-format[1]"); got != value {
+				t.Fatalf("status-format[1] during on = %q, want %q", got, value)
+			}
+			if err := source.Glance(ctx, GlanceOff); err != nil {
+				t.Fatalf("Glance(off) error = %v", err)
+			}
+			listing, err := runTmux("show-options", "-g", "status-format")
+			if err != nil {
+				t.Fatalf("list status-format: %v: %s", err, listing)
+			}
+			if !strings.Contains(string(listing), "status-format[1]") {
+				t.Fatalf("status-format[1] missing after off, want present: %s", listing)
+			}
+			if got := readGlanceOptionRaw(t, runTmux, "status-format[1]"); got != value {
+				t.Fatalf("status-format[1] after off = %q, want %q", got, value)
+			}
+		})
+	}
+}
+
 func readGlanceOption(t *testing.T, runTmux func(...string) ([]byte, error), name string) string {
 	t.Helper()
 	output, err := runTmux("show-options", "-gqv", name)
@@ -151,4 +318,22 @@ func readGlanceOption(t *testing.T, runTmux func(...string) ([]byte, error), nam
 		t.Fatalf("read option %s: %v: %s", name, err, output)
 	}
 	return strings.TrimSpace(string(output))
+}
+
+func readGlanceOptionRaw(t *testing.T, runTmux func(...string) ([]byte, error), name string) string {
+	t.Helper()
+	output, err := runTmux("show-options", "-gqv", name)
+	if err != nil {
+		t.Fatalf("read option %s: %v: %s", name, err, output)
+	}
+	return strings.TrimRight(string(output), "\r\n")
+}
+
+func readGlanceSessionOption(t *testing.T, runTmux func(...string) ([]byte, error), session, name string) string {
+	t.Helper()
+	output, err := runTmux("show-options", "-qv", "-t", session, name)
+	if err != nil {
+		t.Fatalf("read session %s option %s: %v: %s", session, name, err, output)
+	}
+	return strings.TrimRight(string(output), "\r\n")
 }
