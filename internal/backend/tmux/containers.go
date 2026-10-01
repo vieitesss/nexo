@@ -125,7 +125,11 @@ func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) 
 	if b == nil || b.Runner == nil {
 		return false, errors.New("tmux active-project check requires a command runner")
 	}
-	output, err := b.run(ctx, "list-panes", "-a", "-F", "#{pane_current_path}")
+	// q: asks tmux for a reversibly quoted record. Raw newline-delimited
+	// pane_current_path output cannot represent a filename containing a newline
+	// or preserve a trailing carriage return, so decode failures are safety
+	// errors rather than evidence that the project is idle.
+	output, err := b.run(ctx, "list-panes", "-a", "-F", "#{q:pane_current_path}")
 	if err != nil {
 		if isNoServer(err) {
 			return false, nil
@@ -133,11 +137,11 @@ func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) 
 		return false, err
 	}
 	path = filepath.Clean(path)
-	for _, line := range strings.Split(string(output), "\n") {
-		panePath := strings.TrimSuffix(line, "\r")
-		if panePath == "" {
-			continue
-		}
+	panePaths, decodeErr := decodePanePathRecords(string(output), strings.ContainsAny(path, "\r\n"))
+	if decodeErr != nil {
+		return false, decodeErr
+	}
+	for _, panePath := range panePaths {
 		if projectPathContains(path, panePath) {
 			return true, nil
 		}
@@ -167,6 +171,64 @@ func projectPathContains(project, pane string) bool {
 func descendantPath(parent, child string) bool {
 	rel, err := filepath.Rel(parent, child)
 	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+func decodePanePathRecords(output string, sensitive bool) ([]string, error) {
+	parts := strings.Split(output, "\n")
+	paths := make([]string, 0, len(parts))
+	for index, part := range parts {
+		if index == len(parts)-1 && part == "" {
+			continue
+		}
+		if part == "" {
+			continue
+		}
+		path, quoted, err := decodeTmuxQuotedPath(part)
+		if err != nil {
+			return nil, err
+		}
+		if !quoted && (strings.ContainsAny(path, "\r\n") || sensitive) {
+			return nil, errors.New("tmux pane path output is not safely encoded")
+		}
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
+// decodeTmuxQuotedPath accepts tmux's q: shell quoting and a plain record for
+// compatibility with older servers. Backslash escapes are decoded without
+// trimming any filename bytes.
+func decodeTmuxQuotedPath(record string) (string, bool, error) {
+	start := 0
+	if strings.HasPrefix(record, "$'") {
+		start = 1
+	}
+	if len(record)-start < 2 || record[start] != '\'' || record[len(record)-1] != '\'' {
+		return record, false, nil
+	}
+	inner := record[start+1 : len(record)-1]
+	var decoded strings.Builder
+	for index := 0; index < len(inner); index++ {
+		if inner[index] != '\\' {
+			decoded.WriteByte(inner[index])
+			continue
+		}
+		if index+1 >= len(inner) {
+			return "", true, errors.New("tmux pane path has an incomplete escape")
+		}
+		index++
+		switch inner[index] {
+		case 'n':
+			decoded.WriteByte('\n')
+		case 'r':
+			decoded.WriteByte('\r')
+		default:
+			decoded.WriteByte(inner[index])
+		}
+	}
+	return decoded.String(), true, nil
 }
 
 // KillContainer kills one selected tmux session.

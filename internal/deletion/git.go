@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -71,9 +72,9 @@ func (g GitInspector) Inspect(ctx context.Context, path string) (GitState, error
 	if commonDir == "" || top == "" || gitDir == "" {
 		return state, errors.New("repository identity is incomplete")
 	}
-	if filepath.Clean(gitDir) != filepath.Clean(commonDir) || filepath.Clean(filepath.Dir(commonDir)) != filepath.Clean(top) {
+	if isRegisteredWorktree(gitDir, commonDir) {
 		state.LinkedWorktree = true
-		state.PrimaryPath = filepath.Clean(filepath.Dir(commonDir))
+		state.PrimaryPath = primaryFromCommonDir(commonDir)
 	}
 
 	worktrees, wtErr := g.run(checkCtx, path, "worktree", "list", "--porcelain")
@@ -119,11 +120,16 @@ func (g GitInspector) Inspect(ctx context.Context, path string) (GitState, error
 	}
 	remoteNames := strings.Fields(string(remotes))
 	state.RemoteChecked = true
+	verifiedRemoteOIDs := make(map[string]bool)
 	for _, remote := range remoteNames {
-		if _, checkErr := g.run(checkCtx, path, "ls-remote", remote); checkErr != nil {
+		remoteOutput, checkErr := g.run(checkCtx, path, "ls-remote", remote)
+		if checkErr != nil {
 			state.RemoteCheckError = fmt.Sprintf("%s: %v", remote, checkErr)
 			state.RemoteChecked = false
 			return state, nil
+		}
+		for _, oid := range remoteOIDs(remoteOutput) {
+			verifiedRemoteOIDs[oid] = true
 		}
 	}
 	for _, branch := range branchRecords {
@@ -158,6 +164,44 @@ func (g GitInspector) Inspect(ctx context.Context, path string) (GitState, error
 			return state, fmt.Errorf("parse branch %q divergence: %w", branch.Name, parseErr)
 		} else if count > 0 {
 			state.Unpushed = true
+		}
+	}
+
+	// A detached HEAD is not represented by for-each-ref. Check it separately
+	// and compare its reachable history against the remote OIDs verified above.
+	// Any inability to establish that boundary is conservative local-only data.
+	if detached, detachedErr := g.detachedHead(checkCtx, path); detachedErr != nil {
+		return state, detachedErr
+	} else if detached {
+		headOID, headErr := g.run(checkCtx, path, "rev-parse", "--verify", "--quiet", "HEAD")
+		if headErr != nil {
+			return state, fmt.Errorf("read detached HEAD: %w", headErr)
+		}
+		head := firstField(headOID)
+		if head == "" {
+			return state, errors.New("detached HEAD identity is empty")
+		}
+		if len(verifiedRemoteOIDs) == 0 {
+			state.Unpushed = true
+		} else {
+			remoteOIDs := make([]string, 0, len(verifiedRemoteOIDs))
+			for remoteOID := range verifiedRemoteOIDs {
+				remoteOIDs = append(remoteOIDs, remoteOID)
+			}
+			sort.Strings(remoteOIDs)
+			args := []string{"rev-list", "--count", "HEAD", "--not"}
+			args = append(args, remoteOIDs...)
+			countOutput, countErr := g.run(checkCtx, path, args...)
+			if countErr != nil {
+				return state, fmt.Errorf("compare detached HEAD with verified remote: %w", countErr)
+			}
+			count, parseErr := strconv.Atoi(strings.TrimSpace(string(countOutput)))
+			if parseErr != nil {
+				return state, fmt.Errorf("parse detached HEAD divergence: %w", parseErr)
+			}
+			if count > 0 {
+				state.Unpushed = true
+			}
 		}
 	}
 
@@ -207,6 +251,61 @@ func parseBranches(output []byte) []branchRecord {
 func branchHasCommit(ctx context.Context, inspector GitInspector, path, branch string) bool {
 	_, err := inspector.run(ctx, path, "rev-parse", "--verify", "--quiet", branch)
 	return err == nil
+}
+
+func (g GitInspector) detachedHead(ctx context.Context, path string) (bool, error) {
+	output, err := g.run(ctx, path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err == nil {
+		if strings.TrimSpace(string(output)) == "" {
+			return false, errors.New("symbolic HEAD identity is empty")
+		}
+		return false, nil
+	}
+	// symbolic-ref exits non-zero for a detached HEAD. Verify that HEAD itself
+	// exists so a malformed repository remains a hard inspection failure.
+	if _, headErr := g.run(ctx, path, "rev-parse", "--verify", "--quiet", "HEAD"); headErr != nil {
+		return false, fmt.Errorf("inspect HEAD attachment: %w", headErr)
+	}
+	return true, nil
+}
+
+func remoteOIDs(output []byte) []string {
+	seen := make(map[string]bool)
+	var result []string
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || seen[fields[0]] {
+			continue
+		}
+		seen[fields[0]] = true
+		result = append(result, fields[0])
+	}
+	return result
+}
+
+func isRegisteredWorktree(gitDir, commonDir string) bool {
+	gitDir, commonDir = filepath.Clean(gitDir), filepath.Clean(commonDir)
+	if gitDir == commonDir {
+		return false
+	}
+	relative, err := filepath.Rel(commonDir, gitDir)
+	if err != nil || filepath.IsAbs(relative) {
+		return false
+	}
+	parts := strings.Split(relative, string(filepath.Separator))
+	if len(parts) != 2 || parts[0] != "worktrees" || parts[1] == "" {
+		return false
+	}
+	// Git's --git-dir for a linked checkout is the registered
+	// common/worktrees/<name> directory. A separate-git-dir standalone
+	// checkout has gitDir == commonDir and is excluded above. The caller has
+	// already verified both values through rev-parse, so no extra filesystem
+	// read is needed here (and fakes can model the identity directly).
+	return true
+}
+
+func primaryFromCommonDir(commonDir string) string {
+	return filepath.Clean(filepath.Dir(commonDir))
 }
 
 type worktreeInfo struct {
@@ -298,6 +397,27 @@ func parseStatus(output []byte) (dirty, untracked, unpushed, hasUpstream bool) {
 	return dirty, untracked, unpushed, hasUpstream
 }
 
+// VerifyWorktreeRemoval checks the same non-force refusal facts after a
+// worktree has been identity-staged but before Git removes its registration.
+func (g GitInspector) VerifyWorktreeRemoval(ctx context.Context, path string) error {
+	status, err := g.run(ctx, path, "status", "--porcelain=v2", "--untracked-files=all")
+	if err != nil {
+		return fmt.Errorf("verify worktree status: %w", err)
+	}
+	dirty, untracked, _, _ := parseStatus(status)
+	if dirty || untracked {
+		return errors.New("git refused deletion: worktree has tracked or untracked changes")
+	}
+	submodules, err := g.run(ctx, path, "submodule", "status", "--recursive")
+	if err != nil {
+		return fmt.Errorf("verify worktree submodules: %w", err)
+	}
+	if strings.TrimSpace(string(submodules)) != "" {
+		return errors.New("git refused deletion: worktree contains submodules")
+	}
+	return nil
+}
+
 // RemoveWorktree deliberately omits --force. Git's refusal is a hard safety
 // blocker, even when a caller requested force for other warnings.
 func (g GitInspector) RemoveWorktree(ctx context.Context, repo, path string) error {
@@ -309,4 +429,20 @@ func (g GitInspector) RemoveWorktree(ctx context.Context, repo, path string) err
 		return fmt.Errorf("git worktree remove %q: %w", path, err)
 	}
 	return nil
+}
+
+// RemoveWorktreeChecked repeats the no-follow and identity checks while the
+// deletion transaction is serialized, immediately before invoking Git.
+func (g GitInspector) RemoveWorktreeChecked(ctx context.Context, repo, path string, fs FileSystem, expected string) error {
+	if err := validateAncestors(fs, filepath.Clean(path)); err != nil {
+		return fmt.Errorf("validate worktree path: %w", err)
+	}
+	current, err := Fingerprint(fs, path)
+	if err != nil {
+		return fmt.Errorf("recheck worktree %q: %w", path, err)
+	}
+	if expected != "" && current != expected {
+		return fmt.Errorf("path changed since preflight: %q", path)
+	}
+	return g.RemoveWorktree(ctx, repo, path)
 }

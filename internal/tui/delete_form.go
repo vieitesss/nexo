@@ -132,6 +132,8 @@ func (f *stagedForm) finishDeletePreflight(plan *deletion.Plan, err error) {
 	}
 	f.inFlight = false
 	f.deletePreflightPending = false
+	f.deletePreflightScroll = 0
+	f.deletePreflightSeen = f.viewportHeight == 0
 	if err != nil {
 		f.stageError = err.Error()
 		return

@@ -60,6 +60,10 @@ type stagedForm struct {
 	deleteIdentity         string
 	deleteIdentityValid    bool
 	deletePlan             *deletion.Plan
+	deletePreflightScroll  int
+	deletePreflightSeen    bool
+	viewportHeight         int
+	viewportWidth          int
 }
 
 func newStagedForm(ctx context.Context, stages []formStage, validate func(*stagedForm) formValidation, submit func(context.Context, map[string]string, uint64) tea.Cmd) *stagedForm {
@@ -163,6 +167,27 @@ func (f *stagedForm) key(msg tea.KeyMsg) formEffect {
 	if f.inFlight {
 		return formEffect{}
 	}
+	if f.deletePreflightEnabled && f.stage == f.deleteStageIndex() {
+		switch msg.Type {
+		case tea.KeyUp:
+			return f.scrollDeletePreflight(-1)
+		case tea.KeyDown:
+			return f.scrollDeletePreflight(1)
+		case tea.KeyPgUp:
+			return f.scrollDeletePreflight(-max(1, f.viewportHeight-1))
+		case tea.KeyPgDown:
+			return f.scrollDeletePreflight(max(1, f.viewportHeight-1))
+		case tea.KeyEnter, tea.KeyRight, tea.KeyTab:
+			if !f.deletePreflightSeen {
+				f.stageError = "scroll through the complete preflight before continuing"
+				return formEffect{Changed: true}
+			}
+			if msg.Type == tea.KeyTab {
+				return f.nextField()
+			}
+			return f.advance()
+		}
+	}
 	field := f.currentField()
 	switch msg.Type {
 	case tea.KeyTab:
@@ -225,6 +250,10 @@ func (f *stagedForm) key(msg tea.KeyMsg) formEffect {
 }
 
 func (f *stagedForm) advance() formEffect {
+	if f.deletePreflightEnabled && f.stage == f.deleteStageIndex() && !f.deletePreflightSeen {
+		f.stageError = "scroll through the complete preflight before continuing"
+		return formEffect{Changed: true}
+	}
 	if !f.applyValidation() {
 		return formEffect{Changed: true}
 	}
@@ -266,6 +295,33 @@ func (f *stagedForm) previousField() formEffect {
 		return formEffect{Changed: true}
 	}
 	return formEffect{}
+}
+
+func (f *stagedForm) deleteStageIndex() int {
+	for index, stage := range f.stages {
+		if stage.ID == "preflight" {
+			return index
+		}
+	}
+	return -1
+}
+
+func (f *stagedForm) scrollDeletePreflight(delta int) formEffect {
+	if f.viewportHeight <= 0 {
+		return formEffect{}
+	}
+	width := f.viewportWidth
+	if width <= 0 {
+		width = 80
+	}
+	lines := formLinesForWidth(f.renderLines(), width)
+	maxScroll := max(0, len(lines)-f.viewportHeight)
+	f.deletePreflightScroll = min(maxScroll, max(0, f.deletePreflightScroll+delta))
+	if f.deletePreflightScroll >= maxScroll {
+		f.deletePreflightSeen = true
+	}
+	f.stageError = ""
+	return formEffect{Changed: true}
 }
 
 func (f *stagedForm) finish(err error) {

@@ -50,9 +50,12 @@ func Discover(cfg config.ProjectsConfig, home string) Discovery {
 					continue
 				}
 				if info.Mode()&os.ModeSymlink != 0 {
-					// A link in the wildcard namespace is an ambiguous parent;
-					// never walk its target and manufacture target children.
-					discovery.Warnings = append(discovery.Warnings, fmt.Sprintf("skip %q: wildcard parent is a symlink", intermediatePath))
+					// Discovery may follow an alias for navigation and Git
+					// association, but every emitted path remains lexical. The
+					// deletion boundary performs its own no-follow check.
+					if targetInfo, targetErr := os.Stat(intermediatePath); targetErr == nil && targetInfo.IsDir() {
+						discovery.addChildren(intermediatePath, intermediatePath)
+					}
 					continue
 				}
 				if !info.IsDir() {
@@ -89,9 +92,10 @@ func Discover(cfg config.ProjectsConfig, home string) Discovery {
 				continue
 			}
 			if info.Mode()&os.ModeSymlink != 0 {
-				// Keep the lexical link entry independent of its target so a
-				// target disappearing after discovery does not erase membership.
-				discovery.add(lexical, homePath)
+				// Keep the lexical link entry independent of its target while
+				// retaining Git association for navigation and grouping.
+				git, linked := gitStatus(lexical)
+				discovery.add(lexical, homePath, git, linked)
 				continue
 			}
 			if git, linked := gitStatus(lexical); git {
@@ -128,19 +132,10 @@ func validateDirectory(path string) error {
 		return errors.New("path is empty")
 	}
 	path = lexicalPath(path)
-	for current := path; ; current = filepath.Dir(current) {
-		info, err := os.Lstat(current)
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return errors.New("path traverses a symlink")
-		}
-		if current == filepath.Dir(current) {
-			break
-		}
-	}
-	info, err := os.Lstat(path)
+	// Discovery is non-destructive and may resolve a configured alias or HOME
+	// link so existing project navigation and Git association keep working.
+	// Deletion separately validates every ancestor with Lstat.
+	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
@@ -188,9 +183,10 @@ func (d *Discovery) addChildren(path, group string) {
 			continue
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			// The link itself is the candidate. Its target is never needed for
-			// membership, so dangling links remain deletable candidates.
-			d.add(lexical, group)
+			// Keep the lexical link identity while retaining Git association
+			// from its resolved target for non-destructive navigation.
+			git, linked := gitStatus(lexical)
+			d.add(lexical, group, git, linked)
 			continue
 		}
 		if !info.IsDir() {

@@ -93,15 +93,119 @@ func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) 
 	}
 	path = filepath.Clean(path)
 	for _, workspace := range workspaces {
-		workspacePath := workspace.ProjectPath()
-		if workspacePath == "" {
-			return false, fmt.Errorf("workspace %q has no project path", workspace.ID)
+		usagePaths, usageErr := b.workspaceUsagePaths(ctx, workspace)
+		if usageErr != nil {
+			return false, usageErr
 		}
-		if herdrPathContains(path, workspacePath) {
-			return true, nil
+		if len(usagePaths) == 0 {
+			return false, fmt.Errorf("workspace %q has no project or pane path", workspace.ID)
+		}
+		for _, workspacePath := range usagePaths {
+			if herdrPathContains(path, workspacePath) {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
+}
+
+func (b *Backend) workspaceUsagePaths(ctx context.Context, value workspace) ([]string, error) {
+	paths := value.ProjectPaths()
+	inlinePanes := append(append([]workspacePane(nil), value.Panes...), panesFromTabs(value.Tabs)...)
+	paneCount := len(inlinePanes)
+	unknownPanePath := false
+	for _, pane := range inlinePanes {
+		if firstNonEmpty(pane.Path, pane.CWD, pane.WorkingDirectory) == "" {
+			unknownPanePath = true
+			break
+		}
+	}
+	// Workspace summaries from older Herdr versions expose only the root. Ask
+	// the pane service for the authoritative live cwd set whenever the summary
+	// does not account for every pane or leaves one pane's cwd unknown.
+	if value.ID == "" && (unknownPanePath || value.PaneCount > paneCount) {
+		return nil, errors.New("herdr workspace has uninspectable pane usage")
+	}
+	if value.ID != "" && (value.PaneCount == 0 || paneCount < value.PaneCount || unknownPanePath) {
+		output, err := b.run(ctx, "pane", "list", "--workspace", value.ID)
+		if err != nil {
+			return nil, err
+		}
+		panePaths, decodeErr := decodePanePaths(output)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if value.PaneCount > 0 && len(panePaths) < value.PaneCount {
+			return nil, fmt.Errorf("herdr workspace %q returned only %d of %d pane paths", value.ID, len(panePaths), value.PaneCount)
+		}
+		paths = append(paths, panePaths...)
+	}
+	return uniquePaths(paths), nil
+}
+
+func decodePanePaths(output []byte) ([]string, error) {
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(output, &envelope); err != nil {
+		return nil, fmt.Errorf("decode herdr pane list: %w", err)
+	}
+	raw := output
+	if len(envelope.Result) != 0 && string(envelope.Result) != "null" {
+		raw = envelope.Result
+	}
+	var result struct {
+		Type  string          `json:"type"`
+		Panes json.RawMessage `json:"panes"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("decode herdr pane list: %w", err)
+	}
+	if result.Type != "" && result.Type != "pane_list" {
+		return nil, fmt.Errorf("decode herdr pane list: unexpected result type %q", result.Type)
+	}
+	if len(result.Panes) == 0 || string(result.Panes) == "null" {
+		return nil, errors.New("herdr pane list omitted pane paths")
+	}
+	var panes []struct {
+		Path             string `json:"path"`
+		CWD              string `json:"cwd"`
+		WorkingDirectory string `json:"working_directory"`
+	}
+	if err := json.Unmarshal(result.Panes, &panes); err != nil {
+		return nil, fmt.Errorf("decode herdr pane list: %w", err)
+	}
+	paths := make([]string, 0, len(panes))
+	for _, pane := range panes {
+		panePath := firstNonEmpty(pane.Path, pane.CWD, pane.WorkingDirectory)
+		if panePath == "" {
+			return nil, errors.New("herdr pane list contains a pane without a path")
+		}
+		paths = append(paths, panePath)
+	}
+	return paths, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func uniquePaths(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 func herdrPathContains(project, candidate string) bool {
@@ -555,19 +659,19 @@ type workspacePane struct {
 }
 
 func (w workspace) ProjectPath() string {
-	for _, value := range []string{w.Path, w.CWD, w.Root, w.Worktree} {
-		if value != "" {
-			return value
-		}
+	paths := w.ProjectPaths()
+	if len(paths) == 0 {
+		return ""
 	}
+	return paths[0]
+}
+
+func (w workspace) ProjectPaths() []string {
+	paths := []string{w.Path, w.CWD, w.Root, w.Worktree}
 	for _, pane := range append(append([]workspacePane(nil), w.Panes...), panesFromTabs(w.Tabs)...) {
-		for _, value := range []string{pane.Path, pane.CWD, pane.WorkingDirectory} {
-			if value != "" {
-				return value
-			}
-		}
+		paths = append(paths, pane.Path, pane.CWD, pane.WorkingDirectory)
 	}
-	return ""
+	return uniquePaths(paths)
 }
 
 func panesFromTabs(tabs []workspaceTab) []workspacePane {

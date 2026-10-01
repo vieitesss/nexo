@@ -96,6 +96,9 @@ func preflightDelete(ctx context.Context, invocation Invocation, path, selection
 		} else {
 			state, gitErr := (deletion.GitInspector{Runner: invocation.Runner}).Inspect(ctx, path)
 			observation.Git, observation.GitError = state, gitErr
+			if gitErr == nil && state.LinkedWorktree && state.PrimaryPath != "" {
+				observation.RepositoryFingerprint, observation.GitError = deletion.Fingerprint(deletion.OSFileSystem{}, state.PrimaryPath)
+			}
 		}
 	}
 	checker, ok := invocation.Adapter.(capabilities.ProjectUseChecker)
@@ -108,9 +111,35 @@ func preflightDelete(ctx context.Context, invocation Invocation, path, selection
 }
 
 func executeDelete(ctx context.Context, invocation Invocation, plan deletion.Plan, force, permanent bool) error {
+	fresh, err := preflightDelete(ctx, invocation, lexicalAbs(plan.Path), plan.Fingerprint)
+	if err != nil {
+		return fmt.Errorf("recheck %q before deletion: %w", plan.Path, err)
+	}
+	if !sameDeletePlan(plan, fresh) {
+		return errors.New("safety facts changed after confirmation; deletion was refused; reopen the preflight")
+	}
 	trash := deletion.CommandTrash{Runner: invocation.Runner}
 	git := deletion.GitInspector{Runner: invocation.Runner}
-	return deletion.Execute(ctx, plan, force, permanent, deletion.OSFileSystem{}, git, trash)
+	return deletion.Execute(ctx, fresh, force, permanent, deletion.OSFileSystem{}, git, trash)
+}
+
+func sameDeletePlan(confirmed, fresh deletion.Plan) bool {
+	if confirmed.Path != fresh.Path || confirmed.Action != fresh.Action || confirmed.Symlink != fresh.Symlink || confirmed.Repository != fresh.Repository || confirmed.Fingerprint != fresh.Fingerprint || confirmed.RepositoryFingerprint != fresh.RepositoryFingerprint || confirmed.CanProceed != fresh.CanProceed {
+		return false
+	}
+	return sameFindings(confirmed.Warnings, fresh.Warnings) && sameFindings(confirmed.Blockers, fresh.Blockers)
+}
+
+func sameFindings(left, right []deletion.Finding) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func parseDeleteArgs(args []string) (deleteArgs, error) {
@@ -171,11 +200,7 @@ func writeDeletePlan(out interface{ Write([]byte) (int, error) }, plan deletion.
 }
 
 func findingText(findings []deletion.Finding) string {
-	parts := make([]string, 0, len(findings))
-	for _, finding := range findings {
-		parts = append(parts, finding.Message)
-	}
-	return strings.Join(parts, "; ")
+	return deletion.FormatFindings(findings)
 }
 
 func lexicalAbs(path string) string {

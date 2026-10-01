@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vieitesss/nexo/internal/runner"
 
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/deletion"
@@ -75,6 +78,13 @@ func (r *deleteRunner) Run(context.Context, string, ...string) ([]byte, error) {
 type deleteUseChecker struct{}
 
 func (deleteUseChecker) ProjectActive(context.Context, string) (bool, error) { return false, nil }
+
+type togglingDeleteUseChecker struct{ calls int }
+
+func (c *togglingDeleteUseChecker) ProjectActive(context.Context, string) (bool, error) {
+	c.calls++
+	return c.calls > 1, nil
+}
 
 func setDeleteTestEnv(t *testing.T) {
 	t.Helper()
@@ -188,6 +198,93 @@ func TestDeleteFailsClosedWithoutActiveUseCapability(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "active project use") {
 		t.Fatalf("Run() = %v, want unavailable safety capability blocker", err)
+	}
+}
+
+func TestDeleteRechecksActiveUseBeforeMutation(t *testing.T) {
+	setDeleteTestEnv(t)
+	root := t.TempDir()
+	candidate := filepath.Join(root, "candidate")
+	if err := os.Mkdir(candidate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checker := &togglingDeleteUseChecker{}
+	invocation := Invocation{
+		Runner:  &deleteRunner{err: errors.New("not a git repository")},
+		Adapter: checker,
+		Config:  config.Config{ProjectsConfig: config.ProjectsConfig{Paths: []string{root}}},
+	}
+	plan, err := preflightDelete(context.Background(), invocation, candidate, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executeDelete(context.Background(), invocation, plan, true, true); err == nil || !strings.Contains(err.Error(), "safety facts changed") {
+		t.Fatalf("executeDelete() = %v, want stale active-use refusal", err)
+	}
+	if _, err := os.Lstat(candidate); err != nil {
+		t.Fatalf("candidate changed after stale active-use refusal: %v", err)
+	}
+}
+
+func TestDeleteRechecksDependentWorktreeBeforeMutation(t *testing.T) {
+	setDeleteTestEnv(t)
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitTestCommand(t, repo, "init", "-q")
+	gitTestCommand(t, repo, "config", "user.email", "test@example.invalid")
+	gitTestCommand(t, repo, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(repo, "tracked"), []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTestCommand(t, repo, "add", "tracked")
+	gitTestCommand(t, repo, "commit", "-qm", "initial")
+	invocation := Invocation{Runner: runner.ExecRunner{}, Adapter: deleteUseChecker{}, Config: config.Config{ProjectsConfig: config.ProjectsConfig{Paths: []string{root}}}}
+	plan, err := preflightDelete(context.Background(), invocation, repo, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(root, "linked")
+	gitTestCommand(t, repo, "worktree", "add", "-q", linked)
+	if err := executeDelete(context.Background(), invocation, plan, true, true); err == nil || !strings.Contains(err.Error(), "safety facts changed") {
+		t.Fatalf("executeDelete() = %v, want stale dependent-worktree refusal", err)
+	}
+	if _, err := os.Lstat(repo); err != nil {
+		t.Fatalf("primary checkout changed after stale dependent-worktree refusal: %v", err)
+	}
+}
+
+func gitTestCommand(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	command.Env = append(os.Environ(), "HOME="+os.Getenv("HOME"))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+}
+
+func TestDeleteAllowsCandidateBelowHomeWhileProtectingHome(t *testing.T) {
+	setDeleteTestEnv(t)
+	home := os.Getenv("HOME")
+	candidate := filepath.Join(home, "candidate")
+	if err := os.Mkdir(candidate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command, _ := NewRegistry().Lookup("delete")
+	var out bytes.Buffer
+	if err := command.Run(context.Background(), Invocation{
+		Runner:  &deleteRunner{err: errors.New("not a git repository")},
+		Adapter: deleteUseChecker{},
+		Stdout:  &out,
+		Config:  config.Config{ProjectsConfig: config.ProjectsConfig{Paths: []string{home}}},
+		Args:    []string{"--dry-run", candidate},
+	}); err != nil {
+		t.Fatalf("candidate under HOME was blocked: %v", err)
+	}
+	if strings.Contains(out.String(), "protected home") {
+		t.Fatalf("candidate inherited HOME protection: %q", out.String())
 	}
 }
 

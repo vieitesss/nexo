@@ -100,8 +100,41 @@ func TestDiscoverCanonicalizesAndDeduplicatesCandidates(t *testing.T) {
 	}
 
 	got := Discover(config.ProjectsConfig{Paths: []string{root, link}}, home)
-	if len(got.Candidates) != 1 || got.Candidates[0].Path != candidate {
-		t.Fatalf("candidates = %#v, want one lexical candidate", got.Candidates)
+	want := []Candidate{
+		{Path: candidate, Group: root},
+		{Path: filepath.Join(link, "one"), Group: link},
+	}
+	if !reflect.DeepEqual(got.Candidates, want) {
+		t.Fatalf("candidates = %#v, want lexical aliases %#v", got.Candidates, want)
+	}
+}
+
+func TestDiscoverPreservesLinkedParentAndHomeGitAssociation(t *testing.T) {
+	home := t.TempDir()
+	realParent := filepath.Join(home, "real-parent")
+	if err := os.MkdirAll(filepath.Join(realParent, "repo", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkedParent := filepath.Join(home, "linked-parent")
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	configured := Discover(config.ProjectsConfig{Paths: []string{linkedParent}}, home)
+	if len(configured.Candidates) != 1 || configured.Candidates[0].Path != filepath.Join(linkedParent, "repo") || !configured.Candidates[0].Git || configured.Candidates[0].Group != linkedParent {
+		t.Fatalf("linked parent discovery = %#v, want lexical Git candidate", configured.Candidates)
+	}
+
+	realHome := filepath.Join(home, "real-home")
+	if err := os.MkdirAll(filepath.Join(realHome, "home-repo", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkedHome := filepath.Join(home, "linked-home")
+	if err := os.Symlink(realHome, linkedHome); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	fromHome := Discover(config.ProjectsConfig{GitFromHome: true}, linkedHome)
+	if len(fromHome.Candidates) != 1 || fromHome.Candidates[0].Path != filepath.Join(linkedHome, "home-repo") || !fromHome.Candidates[0].Git {
+		t.Fatalf("linked HOME discovery = %#v, want lexical Git candidate", fromHome.Candidates)
 	}
 }
 
@@ -153,10 +186,12 @@ func TestDiscoverDoesNotTraverseWildcardSymlinkParentsOrDropDanglingLinks(t *tes
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	wildcard := Discover(config.ProjectsConfig{Paths: []string{root + string(filepath.Separator) + "*"}}, home)
-	for _, candidate := range wildcard.Candidates {
-		if candidate.Path == filepath.Join(alias, "child") {
-			t.Fatalf("wildcard followed symlink parent: %#v", wildcard.Candidates)
-		}
+	wantWildcard := []Candidate{
+		{Path: filepath.Join(alias, "child"), Group: alias},
+		{Path: filepath.Join(realGroup, "child"), Group: realGroup},
+	}
+	if !reflect.DeepEqual(wildcard.Candidates, wantWildcard) {
+		t.Fatalf("wildcard candidates = %#v, want lexical alias and real rows %#v", wildcard.Candidates, wantWildcard)
 	}
 	direct := Discover(config.ProjectsConfig{Paths: []string{root}}, home)
 	found := false

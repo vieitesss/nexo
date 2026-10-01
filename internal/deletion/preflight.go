@@ -49,36 +49,38 @@ type GitState struct {
 // Observation is the complete read-only input to Preflight. Callers gather
 // it before presenting a confirmation UI; Preflight itself performs no I/O.
 type Observation struct {
-	Path               string
-	Candidate          bool
-	Configured         bool
-	Protected          bool
-	ProtectedReason    string
-	Exists             bool
-	Directory          bool
-	Symlink            bool
-	NonEmpty           bool
-	Fingerprint        string
-	CurrentFingerprint string
-	PathChanged        bool
-	AncestorCheckError error
-	ActiveContainer    bool
-	ActiveCheckError   error
-	Git                GitState
-	GitError           error
+	Path                  string
+	Candidate             bool
+	Configured            bool
+	Protected             bool
+	ProtectedReason       string
+	Exists                bool
+	Directory             bool
+	Symlink               bool
+	NonEmpty              bool
+	Fingerprint           string
+	CurrentFingerprint    string
+	PathChanged           bool
+	AncestorCheckError    error
+	ActiveContainer       bool
+	ActiveCheckError      error
+	Git                   GitState
+	GitError              error
+	RepositoryFingerprint string
 }
 
 // Plan is the complete classification and the mutation kind chosen after a
 // successful preflight. Warnings remain in the plan so a UI can show them.
 type Plan struct {
-	Path        string    `json:"path"`
-	Action      string    `json:"action"` // trash, permanent, or worktree
-	Symlink     bool      `json:"symlink"`
-	Warnings    []Finding `json:"warnings,omitempty"`
-	Blockers    []Finding `json:"blockers,omitempty"`
-	Fingerprint string    `json:"fingerprint,omitempty"`
-	Repository  string    `json:"repository,omitempty"`
-	CanProceed  bool      `json:"can_proceed"`
+	Path                  string    `json:"path"`
+	Action                string    `json:"action"` // trash, permanent, or worktree
+	Symlink               bool      `json:"symlink"`
+	Warnings              []Finding `json:"warnings,omitempty"`
+	Blockers              []Finding `json:"blockers,omitempty"`
+	Fingerprint           string    `json:"fingerprint,omitempty"`
+	Repository            string    `json:"repository,omitempty"`
+	RepositoryFingerprint string    `json:"repository_fingerprint,omitempty"`
+	CanProceed            bool      `json:"can_proceed"`
 }
 
 // HasWarnings reports whether force/explicit confirmation is required.
@@ -88,7 +90,7 @@ func (p Plan) HasWarnings() bool { return len(p.Warnings) > 0 }
 // deliberately pure: no path is resolved, followed, or mutated here.
 func Preflight(observation Observation) Plan {
 	path := filepath.Clean(observation.Path)
-	plan := Plan{Path: path, Fingerprint: observation.Fingerprint}
+	plan := Plan{Path: path, Fingerprint: observation.Fingerprint, RepositoryFingerprint: observation.RepositoryFingerprint}
 	addBlocker := func(code, message string) {
 		plan.Blockers = append(plan.Blockers, Finding{Code: code, Severity: Blocker, Message: message})
 	}
@@ -221,8 +223,10 @@ func (OSFileSystem) Remove(path string) error                   { return os.Remo
 func (OSFileSystem) RemoveAll(path string) error                { return os.RemoveAll(path) }
 
 // Stage atomically moves a path to a private sibling after checking the
-// expected Lstat identity. The second identity check catches a replacement
-// racing with the rename before any destructive operation is attempted.
+// expected Lstat identity. The stage directory keeps the original basename so
+// an OS trash adapter sees the user's logical name rather than a random one.
+// The second identity check catches a replacement racing with the rename before
+// any destructive operation is attempted.
 func (OSFileSystem) Stage(path, expected string) (string, error) {
 	if expected == "" {
 		return "", errors.New("cannot stage a path without an identity")
@@ -238,19 +242,26 @@ func (OSFileSystem) Stage(path, expected string) (string, error) {
 		return "", fmt.Errorf("path changed since preflight: %q", path)
 	}
 	parent := filepath.Dir(path)
-	tmp, err := os.CreateTemp(parent, ".nexo-delete-*")
+	stageDir, err := os.MkdirTemp(parent, ".nexo-delete-*")
 	if err != nil {
 		return "", fmt.Errorf("prepare deletion stage: %w", err)
 	}
-	staged := tmp.Name()
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(staged)
-		return "", fmt.Errorf("prepare deletion stage: %w", err)
+	staged := filepath.Join(stageDir, filepath.Base(path))
+	if err := validateAncestors(OSFileSystem{}, path); err != nil {
+		_ = os.Remove(stageDir)
+		return "", fmt.Errorf("validate deletion path before stage: %w", err)
 	}
-	if err := os.Remove(staged); err != nil {
-		return "", fmt.Errorf("prepare deletion stage: %w", err)
+	current, err = Fingerprint(OSFileSystem{}, path)
+	if err != nil {
+		_ = os.Remove(stageDir)
+		return "", err
+	}
+	if current != expected {
+		_ = os.Remove(stageDir)
+		return "", fmt.Errorf("path changed while staging: %q", path)
 	}
 	if err := os.Rename(path, staged); err != nil {
+		_ = os.Remove(stageDir)
 		return "", fmt.Errorf("stage %q: %w", path, err)
 	}
 	stagedFingerprint, err := Fingerprint(OSFileSystem{}, staged)
@@ -265,14 +276,33 @@ func (OSFileSystem) Stage(path, expected string) (string, error) {
 
 // Restore puts a staged path back only when the original lexical name is
 // currently absent. It never overwrites a replacement installed by another
-// process.
+// process. The private stage directory is removed only after the inode has
+// returned to its original pathname.
 func (OSFileSystem) Restore(staged, path string) error {
 	if _, err := os.Lstat(path); err == nil {
 		return fmt.Errorf("cannot restore %q: pathname has been replaced", path)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.Rename(staged, path)
+	if err := os.Rename(staged, path); err != nil {
+		return err
+	}
+	return removeStageDir(staged)
+}
+
+// CleanupStaged removes the now-empty private stage directory after a
+// successful trash or permanent delete. It never touches the original parent.
+func (OSFileSystem) CleanupStaged(staged string) error { return removeStageDir(staged) }
+
+func removeStageDir(staged string) error {
+	dir := filepath.Dir(staged)
+	if !strings.HasPrefix(filepath.Base(dir), ".nexo-delete-") {
+		return nil
+	}
+	if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove deletion stage %q: %w", dir, err)
+	}
+	return nil
 }
 
 // Fingerprint returns a lexical-path identity used to detect replacement

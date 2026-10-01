@@ -12,20 +12,43 @@ import (
 // content is laid out to the available width before framing, so truncation
 // cannot eat the right border or make the edited value disappear.
 func overlayForm(lines []string, form *stagedForm, width, height int) []string {
-	if form == nil || width <= 4 || height <= 4 {
+	if form == nil {
+		return lines
+	}
+	if width <= 4 || height <= 4 {
+		if form.deletePreflightEnabled && form.stage == form.deleteStageIndex() {
+			form.deletePreflightSeen = false
+		}
 		return lines
 	}
 	contentWidth := max(1, width-8)
 	body := formLinesForWidth(form.renderLines(), contentWidth)
 	maxBody := max(1, height-4)
-	if len(body) > maxBody {
-		// Keep the first active-stage lines and the final controls/error line.
-		keep := maxBody - 1
-		if keep < 1 {
-			body = body[len(body)-maxBody:]
-		} else {
-			body = append(append([]string(nil), body[:keep]...), body[len(body)-1])
+	form.viewportHeight = maxBody
+	form.viewportWidth = contentWidth
+	if form.deletePreflightEnabled && form.stage == form.deleteStageIndex() {
+		maxScroll := max(0, len(body)-maxBody)
+		form.deletePreflightScroll = min(maxScroll, max(0, form.deletePreflightScroll))
+		if len(body) <= maxBody || form.deletePreflightScroll >= maxScroll {
+			form.deletePreflightSeen = true
 		}
+	}
+	if len(body) > maxBody {
+		start := 0
+		if form.deletePreflightEnabled && form.stage == form.deleteStageIndex() {
+			start = form.deletePreflightScroll
+		} else {
+			// Keep the active field visible on every stage, including the
+			// destructive confirmation stage where labels may be long.
+			for index, line := range body {
+				if strings.HasPrefix(line, "▸ ") {
+					start = max(0, index-maxBody/2)
+					break
+				}
+			}
+		}
+		start = min(start, len(body)-maxBody)
+		body = body[start : start+maxBody]
 	}
 	style := lipgloss.NewStyle().Width(contentWidth).Padding(0, 1).Border(lipgloss.RoundedBorder()).Foreground(palette.Fg)
 	modalLines := strings.Split(style.Render(strings.Join(body, "\n")), "\n")
@@ -65,11 +88,15 @@ func formLinesForWidth(lines []string, width int) []string {
 		}
 		if colon := strings.Index(line, ": "); colon >= 0 {
 			label := line[:colon+2]
+			value := line[colon+2:]
 			available := width - shell.StringWidth(label)
-			if available > 1 {
-				out = append(out, label+shell.TruncateLeft(line[colon+2:], available, "…"))
-				continue
+			if available <= 1 {
+				labelWidth := max(1, width/2)
+				label = shell.Truncate(label, labelWidth, "…")
+				available = max(1, width-shell.StringWidth(label))
 			}
+			out = append(out, label+shell.TruncateLeft(value, available, "…"))
+			continue
 		}
 		out = append(out, shell.Truncate(line, width, "…"))
 	}

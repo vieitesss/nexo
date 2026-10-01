@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -53,6 +54,67 @@ func TestProjectActiveBlocksDescendantAndPhysicalAliasButNotLinkTarget(t *testin
 	if linkActive {
 		t.Fatal("link target usage made link deletion active")
 	}
+}
+
+func TestProjectActivePreservesEmbeddedNewlineAndCarriageReturnPaths(t *testing.T) {
+	setSafetyEnv(t)
+	root := t.TempDir()
+	newlineProject := filepath.Join(root, "project\nname")
+	if err := os.MkdirAll(filepath.Join(newlineProject, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	carriageProject := filepath.Join(root, "project\r")
+	if err := os.MkdirAll(filepath.Join(carriageProject, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		project string
+		pane    string
+	}{
+		{name: "newline", project: newlineProject, pane: filepath.Join(newlineProject, "src")},
+		{name: "trailing carriage return", project: carriageProject, pane: filepath.Join(carriageProject, "src")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
+				return []byte(tmuxQuotePath(test.pane) + "\n"), nil
+			}))
+			active, err := backend.ProjectActive(context.Background(), test.project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !active {
+				t.Fatalf("ProjectActive() = false for pane %q", test.pane)
+			}
+		})
+	}
+	unsafe := New(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(newlineProject + "\n"), nil
+	}))
+	if _, err := unsafe.ProjectActive(context.Background(), newlineProject); err == nil {
+		t.Fatal("ProjectActive() error = nil for unencoded embedded-newline output")
+	}
+}
+
+func tmuxQuotePath(path string) string {
+	var quoted strings.Builder
+	quoted.WriteByte('\'')
+	for _, value := range path {
+		switch value {
+		case '\\':
+			quoted.WriteString("\\\\")
+		case '\n':
+			quoted.WriteString("\\n")
+		case '\r':
+			quoted.WriteString("\\r")
+		case '\'':
+			quoted.WriteString("\\'")
+		default:
+			quoted.WriteRune(value)
+		}
+	}
+	quoted.WriteByte('\'')
+	return quoted.String()
 }
 
 func TestProjectActiveFailsClosedWithoutRunner(t *testing.T) {
