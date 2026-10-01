@@ -198,6 +198,13 @@ func (l Lister) ListMachineWithAgents(ctx context.Context, machine string) Machi
 		// a backend mismatch must not hide otherwise valid containers.
 		if agents, agentErr := decodeAgents(agentOutput); agentErr == nil {
 			result.Agents = agents
+		} else {
+			warning := formatAgentWarning(agentErr.Error())
+			if result.Warning == "" {
+				result.Warning = warning
+			} else {
+				result.Warning += "; " + warning
+			}
 		}
 	}
 	return result
@@ -313,14 +320,15 @@ func (l Lister) remoteListingCommand(machine string, withAgents bool) string {
 // reports the first stderr line as a single warning instead of silence.
 func agentCapture(agents string) string {
 	return strings.Join([]string{
-		"agent_err=${TMPDIR:-/tmp}/nexo-agents-$$",
-		"agent_status=0",
-		"agent_output=$(" + agents + " 2>\"$agent_err\") || agent_status=$?",
+		"agent_err=$(mktemp \"${TMPDIR:-/tmp}/nexo-agents.XXXXXX\") || agent_err=",
+		"agents_status=0",
+		"agent_output=",
+		"if test -n \"$agent_err\"; then agent_output=$(" + agents + " 2>\"$agent_err\") || agents_status=$?; else agents_status=1; fi",
 		"printf '\\n%s\\n' " + ShellCommand(agentFrameStart),
 		"printf '%s\\n' \"$agent_output\"",
 		"printf '\\n%s\\n' " + ShellCommand(agentFrameEnd),
-		"if test $agent_status -ne 0; then agent_message=$(head -n 1 \"$agent_err\"); if test -z \"$agent_message\"; then agent_message='unknown error'; fi; printf '\\n%s%s\\n' " + ShellCommand(agentWarningFrameStart) + " \"$agent_message\"; fi",
-		"rm -f \"$agent_err\"",
+		"if test $agents_status -ne 0; then if test -n \"$agent_err\"; then agent_message=$(head -n 1 \"$agent_err\"); else agent_message='unable to create temporary file'; fi; if test -z \"$agent_message\"; then agent_message='unknown error'; fi; printf '\\n%s%s\\n' " + ShellCommand(agentWarningFrameStart) + " \"$agent_message\"; fi",
+		"if test -n \"$agent_err\"; then rm -f \"$agent_err\"; fi",
 	}, "; ")
 }
 
@@ -368,10 +376,10 @@ func (l Lister) backendAgentsCommand() string {
 	listing := l.backendCommand()
 	agents := ShellCommand("nexo", "--backend", string(l.Backend), "agents", "--json")
 	return strings.Join([]string{
-		"agent_status=0",
-		listing + " || agent_status=$?",
+		"listing_status=0",
+		listing + " || listing_status=$?",
 		agentCapture(agents),
-		"exit $agent_status",
+		"exit $listing_status",
 	}, "; ")
 }
 

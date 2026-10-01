@@ -117,13 +117,16 @@ func TestListMachineWithAgentsIgnoresMissingRemoteNexo(t *testing.T) {
 	}
 }
 
-func TestListMachineWithAgentsIgnoresInvalidRemoteAgentJSON(t *testing.T) {
+func TestListMachineWithAgentsReportsInvalidRemoteAgentJSONAsWarning(t *testing.T) {
 	lister := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("$1\tapi\n" + agentFrameStart + "\nnot-json\n" + agentFrameEnd + "\n"), nil
 	}), backend.Tmux, "")
 	result := lister.ListMachineWithAgents(context.Background(), "devbox")
 	if result.Error != "" || len(result.Containers) != 1 || len(result.Agents) != 0 {
 		t.Fatalf("result = %#v, want containers without invalid agent data", result)
+	}
+	if !strings.HasPrefix(result.Warning, "agents unavailable: decode remote nexo agents:") {
+		t.Fatalf("warning = %q, want agent decode warning", result.Warning)
 	}
 }
 
@@ -182,6 +185,56 @@ func TestRemoteAgentShellKeepsListingAndReportsWarning(t *testing.T) {
 	if result.Warning != "agents unavailable: nexo: command not found" {
 		t.Fatalf("warning = %q, want the first stderr line", result.Warning)
 	}
+}
+
+func TestNonDetectionAgentShellKeepsContainersWhenAgentsFail(t *testing.T) {
+	result, tempDir := runNonDetectionAgentShell(t,
+		"#!/bin/sh\nprintf '$1\\tapi\\n'\n",
+		"#!/bin/sh\nprintf 'nexo: command not found\\n' >&2\nexit 1\n",
+	)
+	if result.Error != "" || result.Kind != KindTmux || len(result.Containers) != 1 || result.Containers[0].Name != "api" {
+		t.Fatalf("result = %#v, want tmux container despite agent failure", result)
+	}
+	if result.Warning != "agents unavailable: nexo: command not found" {
+		t.Fatalf("warning = %q, want the first stderr line", result.Warning)
+	}
+	if entries, err := os.ReadDir(tempDir); err != nil {
+		t.Fatal(err)
+	} else if len(entries) != 0 {
+		t.Fatalf("agent temp files = %#v, want cleanup", entries)
+	}
+}
+
+func TestNonDetectionAgentShellPreservesContainerFailure(t *testing.T) {
+	result, _ := runNonDetectionAgentShell(t,
+		"#!/bin/sh\nprintf '$1\\tapi\\n'\nprintf 'tmux failed\\n' >&2\nexit 7\n",
+		"#!/bin/sh\nprintf '[]\\n'\n",
+	)
+	if result.Error == "" || len(result.Containers) != 0 {
+		t.Fatalf("result = %#v, want container listing failure", result)
+	}
+}
+
+func runNonDetectionAgentShell(t *testing.T, tmuxBody, nexoBody string) (MachineResult, string) {
+	t.Helper()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	bin := t.TempDir()
+	for name, body := range map[string]string{"tmux": tmuxBody, "nexo": nexoBody} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tempDir := t.TempDir()
+	env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "TMPDIR=" + tempDir}
+	runner := fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		command := exec.Command("sh", "-c", args[len(args)-1])
+		command.Env = env
+		return command.Output()
+	})
+	result := NewLister(runner, backend.Tmux, "").ListMachineWithAgents(context.Background(), "devbox")
+	return result, tempDir
 }
 
 func TestListMachineWithAgentsPinsHerdrBackend(t *testing.T) {
