@@ -135,11 +135,12 @@ func TestTUIFocusRoutesTwoRemoteHerdrPanesInOneContainer(t *testing.T) {
 	}
 }
 
-func TestTUIRejectsMixedRemoteKinds(t *testing.T) {
+func TestTUIRejectsUnsupportedRemoteKindAndProxiesTmuxFromHerdr(t *testing.T) {
 	for _, test := range []struct {
 		local, remote backend.Kind
+		wantError     bool
 	}{
-		{local: backend.Tmux, remote: backend.Herdr},
+		{local: backend.Tmux, remote: backend.Herdr, wantError: true},
 		{local: backend.Herdr, remote: backend.Tmux},
 	} {
 		t.Run(string(test.local)+"-"+string(test.remote), func(t *testing.T) {
@@ -156,11 +157,14 @@ func TestTUIRejectsMixedRemoteKinds(t *testing.T) {
 				Machine: "dev", Backend: string(test.remote),
 				Agent: capabilities.Agent{PaneID: "%7", Container: "api"},
 			})
-			if err == nil || !strings.Contains(err.Error(), "unsupported") {
-				t.Fatalf("error = %v, want explicit mixed-kind rejection", err)
+			if test.wantError {
+				if err == nil || !strings.Contains(err.Error(), "unsupported") {
+					t.Fatalf("error = %v, want unsupported remote kind", err)
+				}
+				return
 			}
-			if adapter.proxied != "" || adapter.focused != "" || len(runner.calls) != 0 {
-				t.Fatalf("mixed-kind action ran proxy=%q pane=%q calls=%v", adapter.proxied, adapter.focused, runner.calls)
+			if err != nil || adapter.proxied != "dev/api" {
+				t.Fatalf("error = %v proxy=%q, want Herdr proxy", err, adapter.proxied)
 			}
 		})
 	}

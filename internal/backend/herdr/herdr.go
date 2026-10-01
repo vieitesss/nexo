@@ -23,6 +23,7 @@ type Backend struct {
 	agents *Source
 
 	proxyConfigPath string
+	remoteMachines  map[string]bool
 }
 
 // New constructs a Herdr backend using the supplied command runner.

@@ -312,6 +312,10 @@ transport = "ssh"
 reconnect-initial = "1s"
 reconnect-max = "30s"
 
+# Optional per-machine multiplexer selection. Unlisted machines use auto.
+[remote.backends]
+devbox = "tmux"             # auto, tmux, or herdr
+
 ```
 
 <details>
@@ -329,6 +333,7 @@ reconnect-max = "30s"
 | `agents.notify` | `true` | Queue tmux working-to-stopped desktop notifications. Herdr notifications are native and unaffected. |
 | `agents.sound` | `false` | Play a short sound with tmux notifications. |
 | `remote.machines` | `[]` | SSH aliases to list and open. `local`, the local hostname, and aliases beginning with `-` are rejected. |
+| `remote.backends` | `{}` | Optional per-machine backend table. Each key must be in `remote.machines`; values are `auto`, `tmux`, or `herdr`. Unlisted machines use `auto`. |
 | `remote.ssh-config` | `""` | Optional absolute SSH config path for listing and SSH attachment. `~` is not expanded, so use a full path such as `/home/you/.ssh/config`; empty uses the normal SSH lookup. |
 | `remote.transport` | `ssh` | Proxy attachment transport: `ssh`, `mosh`, or `et`. Listing always uses SSH. |
 | `remote.reconnect-initial` | `1s` | Initial retry delay for SSH proxy attachments; must be positive and no greater than `reconnect-max`. |

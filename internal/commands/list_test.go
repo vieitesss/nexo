@@ -11,6 +11,7 @@ import (
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
+	"github.com/vieitesss/nexo/internal/runner"
 )
 
 type fakeContainerAdapter struct {
@@ -50,6 +51,39 @@ func TestListPlacesJSONIncludesContainersAndPreview(t *testing.T) {
 	}
 	if len(places) != 1 || places[0].Kind != picker.ContainerKind || places[0].ContainerID != "$1" || places[0].Machine != "host" || places[0].Preview != "shell$" {
 		t.Fatalf("places = %#v, want container place", places)
+	}
+}
+
+func TestListPlacesMergesLocalProxyWithRemoteContainer(t *testing.T) {
+	var output, stderr strings.Builder
+	runner := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "ssh" {
+			t.Fatalf("runner = %q, want ssh", name)
+		}
+		return []byte("__NEXO_REMOTE_KIND__tmux\n$9\tapi\n"), nil
+	})
+	err := listCommand{}.Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Config: config.Config{
+			ProjectsConfig: config.ProjectsConfig{Paths: []string{t.TempDir()}},
+			Remote:         config.RemoteConfig{Machines: []string{"dev"}, Backends: map[string]string{"dev": "tmux"}},
+		},
+		Adapter: fakeContainerAdapter{containers: []capabilities.Container{{ID: "workspace-1", Name: "api", Machine: "dev", Proxy: true}}},
+		Runner:  runner,
+		Stdout:  &output,
+		Stderr:  &stderr,
+		JSON:    true,
+		Args:    []string{"--places"},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	var places []picker.Place
+	if err := json.Unmarshal([]byte(output.String()), &places); err != nil {
+		t.Fatalf("JSON = %q: %v", output.String(), err)
+	}
+	if len(places) != 1 || places[0].Machine != "dev" || places[0].ContainerName != "api" || places[0].ContainerID != "workspace-1" || !places[0].Proxy {
+		t.Fatalf("places = %#v, want one local proxy place", places)
 	}
 }
 

@@ -583,16 +583,7 @@ func (m Model) matchCount(tab Tab) int {
 }
 
 func (m Model) containerPlaces() []picker.Place {
-	places := picker.ContainerPlaces(m.deps.Containers)
-	places = append(places, m.remotePlaces...)
-	filtered := places[:0]
-	for i := range places {
-		if places[i].Kind == picker.ContainerKind && places[i].Proxy {
-			continue
-		}
-		filtered = append(filtered, places[i])
-	}
-	places = filtered
+	places := picker.MergeContainerPlaces(picker.ContainerPlaces(m.deps.Containers), m.remotePlaces)
 	for i := range places {
 		if places[i].Kind == picker.ContainerKind {
 			places[i].Machine = normalizedMachine(places[i].Machine)
@@ -1636,6 +1627,9 @@ func (m Model) containerText(row row, marker string) (string, string) {
 		activity = activityAge(m.now(), *row.activity)
 	}
 	text := name
+	if row.place.Proxy {
+		text += "  " + muted().Render("local proxy")
+	}
 	lineWidth := max(1, m.width-shell.StringWidth(marker))
 	join := func(pills string, age string) string {
 		value := text

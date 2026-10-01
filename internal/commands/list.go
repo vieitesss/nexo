@@ -95,7 +95,7 @@ func listPlaces(ctx context.Context, invocation Invocation) error {
 		}
 	}
 	places := append(picker.ProjectPlaces(discovery.Candidates), picker.ContainerPlaces(containers)...)
-	remoteResults := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).List(ctx, invocation.Config.Remote.Machines)
+	remoteResults := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithBackends(invocation.Config.Remote.Backends).List(ctx, invocation.Config.Remote.Machines)
 	for _, result := range remoteResults {
 		if result.Error != "" {
 			if invocation.Stderr != nil {
@@ -105,7 +105,7 @@ func listPlaces(ctx context.Context, invocation Invocation) error {
 			}
 			continue
 		}
-		places = append(places, picker.ContainerPlaces(result.Containers)...)
+		places = picker.MergeContainerPlaces(places, picker.ContainerPlaces(result.Containers))
 	}
 	if invocation.JSON {
 		return json.NewEncoder(invocation.Stdout).Encode(places)

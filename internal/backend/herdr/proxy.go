@@ -22,11 +22,18 @@ const proxyToken = "nexo-proxy"
 
 // ConfigureRemoteConfig supplies the optional explicit config path forwarded to
 // the child process in a proxy pane.
-func (b *Backend) ConfigureRemoteConfig(_ config.RemoteConfig, configPath string) {
+func (b *Backend) ConfigureRemoteConfig(remote config.RemoteConfig, configPath string) {
 	if b == nil {
 		return
 	}
 	b.proxyConfigPath = configPath
+	b.remoteMachines = make(map[string]bool, len(remote.Machines))
+	for _, machine := range remote.Machines {
+		machine = strings.TrimSpace(machine)
+		if machine != "" {
+			b.remoteMachines[machine] = true
+		}
+	}
 }
 
 // ValidateProxyIdentity rejects identity values that Herdr would normalize,
@@ -67,8 +74,8 @@ func hasControlOrFormat(value string) bool {
 	return false
 }
 
-// ProxySessionID resolves an exact proxy identity from Herdr's metadata token.
-// Labels are display values and are deliberately not used for identity.
+// ProxySessionID resolves a proxy by token, adopting an exact configured
+// machine/container label when the token is absent.
 func (b *Backend) ProxySessionID(ctx context.Context, machine, container string) (string, error) {
 	if b == nil || b.Runner == nil {
 		return "", errors.New("herdr remote proxy requires a command runner")
@@ -86,7 +93,25 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 			return workspace.ID, nil
 		}
 	}
+	if b.remoteMachines[machine] {
+		for _, workspace := range workspaces {
+			if workspace.Label != identity {
+				continue
+			}
+			if err := b.adoptProxyWorkspace(ctx, workspace.ID, identity); err != nil {
+				return "", err
+			}
+			return workspace.ID, nil
+		}
+	}
 	return "", nil
+}
+
+func (b *Backend) adoptProxyWorkspace(ctx context.Context, workspaceID, identity string) error {
+	if _, err := b.run(ctx, "workspace", "report-metadata", workspaceID, "--source", "nexo", "--token", proxyToken+"="+identity); err != nil {
+		return fmt.Errorf("adopt proxy workspace %s: %w", workspaceID, err)
+	}
+	return b.verifyProxyToken(ctx, workspaceID, identity)
 }
 
 // Proxy opens or focuses a local Herdr workspace whose pane runs the shared
@@ -191,9 +216,20 @@ func (b *Backend) ProxyTarget(ctx context.Context, paneID string) (string, error
 		return "", err
 	}
 	for _, workspace := range workspaces {
-		if workspace.ID == workspaceID {
-			return workspace.Tokens[proxyToken], nil
+		if workspace.ID != workspaceID {
+			continue
 		}
+		if identity := strings.TrimSpace(workspace.Tokens[proxyToken]); identity != "" {
+			return identity, nil
+		}
+		if machine, container, ok := b.proxyLabelTarget(workspace.Label); ok {
+			identity := machine + "/" + container
+			if err := b.adoptProxyWorkspace(ctx, workspace.ID, identity); err != nil {
+				return "", err
+			}
+			return identity, nil
+		}
+		return "", nil
 	}
 	return "", nil
 }
@@ -204,6 +240,26 @@ func (b *Backend) listWorkspaces(ctx context.Context) ([]workspace, error) {
 		return nil, err
 	}
 	return decodeWorkspaceList(output)
+}
+
+func (b *Backend) proxyLabelTarget(label string) (string, string, bool) {
+	separator := strings.IndexByte(label, '/')
+	if separator <= 0 || separator == len(label)-1 {
+		return "", "", false
+	}
+	machine, container := label[:separator], label[separator+1:]
+	if !b.remoteMachines[machine] {
+		return "", "", false
+	}
+	return machine, container, true
+}
+
+func (b *Backend) proxyWorkspaceTarget(current workspace) (string, string, bool) {
+	if identity := strings.TrimSpace(current.Tokens[proxyToken]); identity != "" {
+		machine, container, ok := b.proxyLabelTarget(identity)
+		return machine, container, ok
+	}
+	return b.proxyLabelTarget(current.Label)
 }
 
 func decodeCreatedWorkspace(output []byte) (workspaceID, paneID string) {

@@ -50,6 +50,39 @@ func TestContainerWidthDegradesPillsDotsThenAge(t *testing.T) {
 	}
 }
 
+func TestRemoteProxyMergesWithRemoteContainerAndRemainsVisibleWhenStale(t *testing.T) {
+	model := NewModel(context.Background(), Deps{
+		Containers:     []capabilities.Container{{ID: "workspace-1", Name: "api", Machine: "dev", Proxy: true}},
+		RemoteMachines: []string{"dev"},
+	}, ContainersTab)
+	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Backend: "tmux", Places: picker.ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "api", Machine: "dev"}})})
+	rows := model.Rows()
+	count := 0
+	for _, row := range rows {
+		if strings.HasPrefix(row, "container:dev:") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("rows = %v, want one merged remote row", rows)
+	}
+	model.SetSize(100, 12)
+	plain := shell.Plain(model.View())
+	if !strings.Contains(plain, "local proxy") {
+		t.Fatalf("view = %q, want local proxy indicator", plain)
+	}
+	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Error: "offline"})
+	count = 0
+	for _, row := range model.Rows() {
+		if strings.HasPrefix(row, "container:dev:") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("stale rows = %v, want proxy retained after remote failure", model.Rows())
+	}
+}
+
 func TestContainerOrderingHeadersAndProxyFreeData(t *testing.T) {
 	old := time.Now().Add(-12 * time.Minute)
 	recent := time.Now().Add(-time.Minute)

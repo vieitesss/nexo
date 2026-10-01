@@ -150,6 +150,60 @@ func ContainerPlaces(containers []capabilities.Container) []Place {
 	return places
 }
 
+// MergeContainerPlaces combines local proxy rows with their remote container.
+// A proxy's local ID is retained so local close actions still target the proxy;
+// the remote row supplies the open action and remote metadata when available.
+func MergeContainerPlaces(base, extra []Place) []Place {
+	merged := append([]Place(nil), base...)
+	indexes := make(map[string]int)
+	for index, place := range merged {
+		if place.Kind == ContainerKind {
+			indexes[containerPlaceKey(place)] = index
+		}
+	}
+	for _, place := range extra {
+		if place.Kind != ContainerKind {
+			merged = append(merged, place)
+			continue
+		}
+		key := containerPlaceKey(place)
+		index, exists := indexes[key]
+		if !exists {
+			indexes[key] = len(merged)
+			merged = append(merged, place)
+			continue
+		}
+		merged[index] = mergeContainerPlace(merged[index], place)
+	}
+	return merged
+}
+
+func containerPlaceKey(place Place) string {
+	return place.Machine + "\x00" + place.ContainerName
+}
+
+func mergeContainerPlace(left, right Place) Place {
+	if left.Proxy == right.Proxy {
+		if left.OpenAction == nil {
+			left.OpenAction = right.OpenAction
+		}
+		return left
+	}
+	proxy, remote := left, right
+	if !proxy.Proxy {
+		proxy, remote = right, left
+	}
+	proxy.SearchText = remote.SearchText
+	proxy.DisplayRemainder = remote.DisplayRemainder
+	proxy.Preview = remote.Preview
+	proxy.Activity = remote.Activity
+	proxy.Agents = remote.Agents
+	if remote.OpenAction != nil {
+		proxy.OpenAction = remote.OpenAction
+	}
+	return proxy
+}
+
 // Match is the result of matching a query against text.
 type Match struct {
 	Score     int

@@ -40,6 +40,48 @@ func TestListMachineUsesSSHBatchModeAndOptionalConfig(t *testing.T) {
 	}
 }
 
+func TestListMachineUsesExplicitTmuxBackendWithoutProbe(t *testing.T) {
+	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		command := args[len(args)-1]
+		if strings.Contains(command, "herdr' 'status") || strings.Contains(command, "herdr' 'workspace") {
+			t.Fatalf("remote command = %q, want no Herdr probe", command)
+		}
+		return []byte(remoteKindFrameStart + "tmux\n$1\tapi\n"), nil
+	}), backend.Herdr, "").WithBackends(map[string]string{"devbox": "tmux"}).WithKindDetection()
+	result := lister.ListMachine(context.Background(), "devbox")
+	if result.Error != "" || result.Kind != KindTmux || len(result.Containers) != 1 || result.Containers[0].Name != "api" {
+		t.Fatalf("result = %#v, want explicit tmux listing", result)
+	}
+}
+
+func TestListMachineUsesExplicitHerdrBackendWithoutProbe(t *testing.T) {
+	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		command := args[len(args)-1]
+		if strings.Contains(command, "herdr' 'status") || strings.Contains(command, "tmux' 'list-sessions") {
+			t.Fatalf("remote command = %q, want only Herdr listing", command)
+		}
+		return []byte(remoteKindFrameStart + "herdr\n{\"result\":{\"type\":\"workspace_list\",\"workspaces\":[]}}\n"), nil
+	}), backend.Tmux, "").WithBackends(map[string]string{"gpu1": "herdr"}).WithKindDetection()
+	result := lister.ListMachine(context.Background(), "gpu1")
+	if result.Error != "" || result.Kind != KindHerdr || len(result.Containers) != 0 {
+		t.Fatalf("result = %#v, want explicit Herdr listing", result)
+	}
+}
+
+func TestListMachineWithAgentsUsesConfiguredBackendForAgents(t *testing.T) {
+	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		command := args[len(args)-1]
+		if strings.Contains(command, "herdr' 'status") || !strings.Contains(command, "'nexo' '--backend' 'tmux' 'agents' '--json'") {
+			t.Fatalf("remote command = %q, want configured tmux agent command without probe", command)
+		}
+		return []byte(remoteKindFrameStart + "tmux\n$1\tapi\n" + agentFrameStart + "\n[]\n" + agentFrameEnd + "\n"), nil
+	}), backend.Herdr, "").WithBackends(map[string]string{"devbox": "tmux"}).WithKindDetection()
+	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	if result.Error != "" || result.Kind != KindTmux || len(result.Containers) != 1 {
+		t.Fatalf("result = %#v, want configured tmux listing and agents", result)
+	}
+}
+
 func TestListMachineWithAgentsReadsRemoteNexoJSONInOnePinnedSSHCommand(t *testing.T) {
 	calls := 0
 	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {

@@ -41,12 +41,23 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 	machine := localMachine()
 	containers := make([]capabilities.Container, 0, len(workspaces))
 	for _, workspace := range workspaces {
-		if strings.TrimSpace(workspace.Tokens[proxyToken]) != "" {
+		proxyMachine, proxyContainer, isProxy := b.proxyWorkspaceTarget(workspace)
+		if !isProxy && strings.TrimSpace(workspace.Tokens[proxyToken]) != "" {
 			continue
 		}
 		paneID, paneErr := b.focusedPane(ctx, workspace.ID)
 		if paneErr != nil {
 			return nil, paneErr
+		}
+		if isProxy {
+			containers = append(containers, capabilities.Container{
+				ID:           workspace.ID,
+				Name:         proxyContainer,
+				Machine:      proxyMachine,
+				ActivePaneID: paneID,
+				Proxy:        true,
+			})
+			continue
 		}
 		containers = append(containers, capabilities.Container{
 			ID:           workspace.ID,

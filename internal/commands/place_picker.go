@@ -169,7 +169,7 @@ func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
 	if len(invocation.Config.Remote.Machines) == 0 || invocation.Runner == nil {
 		return nil
 	}
-	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithKindDetection()
+	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithBackends(invocation.Config.Remote.Backends).WithKindDetection()
 	commands := make([]tea.Cmd, 0, len(invocation.Config.Remote.Machines))
 	seen := make(map[string]bool)
 	for _, configured := range invocation.Config.Remote.Machines {
