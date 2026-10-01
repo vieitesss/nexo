@@ -43,7 +43,10 @@ type inputState struct {
 	selectedPlace    *picker.Place
 	selectedAgent    *capabilities.Agent
 	selectedAgentRef AgentRef
-	cancelled        bool
+
+	selectedRemoteTarget *RemoteTarget
+	selectedRemoteName   string
+	cancelled            bool
 }
 
 type inputEffect struct {
@@ -95,9 +98,10 @@ func (s *inputState) setQuery(query string) {
 func (s *inputState) reconcileSelection(oldRows, rows []row) {
 	old := s.cursor
 	oldIndex := -1
+	oldKind := machineRow
 	for index, candidate := range oldRows {
 		if candidate.id == old {
-			oldIndex = index
+			oldIndex, oldKind = index, candidate.kind
 			break
 		}
 	}
@@ -116,6 +120,16 @@ func (s *inputState) reconcileSelection(oldRows, rows []row) {
 		}
 	}
 	if oldIndex >= 0 {
+		// A query refinement can drop the selected real result while other real
+		// results still match. Prefer the nearest remaining matched item so the
+		// cursor never slides onto a synthetic creation row and turns Enter into
+		// a create action.
+		if oldKind == itemRow {
+			if nearest, ok := nearestCursorableWhere(rows, oldIndex, func(candidate row) bool { return candidate.kind == itemRow && candidate.matched }); ok {
+				s.cursor = nearest
+				return
+			}
+		}
 		if nearest, ok := nearestCursorable(rows, oldIndex); ok {
 			s.cursor = nearest
 			return
@@ -137,6 +151,13 @@ func (s *inputState) reconcileSelection(oldRows, rows []row) {
 }
 
 func nearestCursorable(rows []row, index int) (string, bool) {
+	return nearestCursorableWhere(rows, index, func(row) bool { return true })
+}
+
+// nearestCursorableWhere returns the cursorable row closest to index for which
+// match is true. Distance is measured in row positions, so the caller chooses
+// which rows are acceptable candidates and the scan keeps index locality.
+func nearestCursorableWhere(rows []row, index int, match func(row) bool) (string, bool) {
 	if len(rows) == 0 {
 		return "", false
 	}
@@ -148,7 +169,7 @@ func nearestCursorable(rows []row, index int) (string, bool) {
 	}
 	for distance := 0; distance < len(rows); distance++ {
 		for _, candidate := range []int{index + distance, index - distance} {
-			if candidate < 0 || candidate >= len(rows) || !rows[candidate].cursorable {
+			if candidate < 0 || candidate >= len(rows) || !rows[candidate].cursorable || !match(rows[candidate]) {
 				continue
 			}
 			return rows[candidate].id, true
@@ -296,7 +317,7 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 				s.form.cancel()
 				s.form.cancel = nil
 			}
-			s.form.generation++
+			s.form.nextGeneration()
 			s.actionGeneration = s.form.generation
 		}
 		s.form = nil
@@ -656,8 +677,32 @@ func foldParent(current row) string {
 }
 
 func (s *inputState) accept(rows []row) inputEffect {
-	current, ok := s.currentItem(rows)
+	current, ok := s.currentRow(rows)
 	if !ok {
+		return inputEffect{}
+	}
+	if current.kind == newContainerRow {
+		name := strings.TrimSpace(string(s.query))
+		target := RemoteTarget{Machine: current.machine, Backend: current.backend}
+		if name == "" {
+			s.form = newRemoteNewForm(s.ctx, target, "")
+			return inputEffect{rebuild: true}
+		}
+		if message := remoteContainerNameError(name); message != "" {
+			// A multiline paste is a search query, not a valid name. Prefill a
+			// form so the shared policy surfaces the error inline instead of
+			// quitting with a name the backend rejects later.
+			form := newRemoteNewForm(s.ctx, target, name)
+			form.applyValidation()
+			s.form = form
+			return inputEffect{rebuild: true}
+		}
+		s.selectedRemoteTarget = &target
+		s.selectedRemoteName = name
+		s.cancelled = false
+		return inputEffect{quit: true}
+	}
+	if current.kind != itemRow {
 		return inputEffect{}
 	}
 	if current.itemKind == "agent" {

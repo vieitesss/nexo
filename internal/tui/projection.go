@@ -38,6 +38,7 @@ type rowProjection struct {
 	remoteAgents   []agentRecord
 	remoteMachines []string
 	remoteLoaded   map[string]bool
+	remoteBackends map[string]string
 	groupErrors    map[string]string
 	groupWarnings  map[string]string
 }
@@ -53,6 +54,7 @@ func (m Model) projection() rowProjection {
 		remoteAgents:   append([]agentRecord(nil), m.source.remoteAgents...),
 		remoteMachines: append([]string(nil), m.source.remoteMachines...),
 		remoteLoaded:   m.source.remoteLoaded,
+		remoteBackends: m.source.remoteBackends,
 		groupErrors:    m.source.groupErrors,
 		groupWarnings:  m.source.groupWarnings,
 	}
@@ -391,6 +393,9 @@ func (p rowProjection) containerRows() []row {
 		}
 		rows = append(rows, row{id: "machine:" + machine, kind: machineRow, label: shortenMachine(machine), group: machine, machine: machine, count: len(children), remoteErr: remoteErr, remoteWarn: remoteWarn, loading: isRemote && !p.remoteLoaded[machine]})
 		rows = append(rows, children...)
+		if isRemote && p.remoteLoaded[machine] && remoteErr == "" && p.remoteBackends[machine] != "" {
+			rows = append(rows, row{id: "new:" + machine, kind: newContainerRow, label: newContainerLabel, machine: machine, group: machine, depth: 2, cursorable: true, backend: p.remoteBackends[machine]})
+		}
 		if machineIndex < len(machines)-1 {
 			rows = append(rows, row{kind: separatorRow})
 		}

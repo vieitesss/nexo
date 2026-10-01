@@ -20,6 +20,9 @@ type MachineStatus struct {
 	Loaded  bool
 	Warning string
 	Error   string
+	// Backend is the multiplexer kind a successful remote listing resolved.
+	// It lets a row carry the resolved kind so an action never probes again.
+	Backend string
 }
 
 // CatalogSnapshot is the coherent read interface of a Catalog. Places are
@@ -42,6 +45,7 @@ type Catalog struct {
 	localContainers []Place
 	localAgents     []capabilities.Agent
 	remote          map[string]remoteSnapshot
+	loading         map[string]bool
 	machines        []string
 }
 
@@ -95,6 +99,25 @@ func (c *Catalog) SetRemoteMachines(machines []string) {
 	}
 }
 
+// MarkRemoteLoading flags the given machines as awaiting a fresh listing.
+// Their last containers stay visible, but the snapshot reports them unloaded
+// with no backend, warning or error, so a coordinated reload hides action rows
+// and stale errors until ApplyRemote accepts the current result. Marking the
+// catalog itself keeps the policy independent of cached status that a local
+// refresh would otherwise restore.
+func (c *Catalog) MarkRemoteLoading(machines []string) {
+	for _, machine := range machines {
+		machine = NormalizeMachine(machine)
+		if machine == "" || machine == LocalMachine() {
+			continue
+		}
+		if c.loading == nil {
+			c.loading = make(map[string]bool)
+		}
+		c.loading[machine] = true
+	}
+}
+
 // ApplyRemote replaces one remote machine's places and agents. A failed or
 // empty batch removes stale remote rows while local proxies remain available
 // to MergeContainerPlaces. The machine value is the stable namespace; display
@@ -104,6 +127,7 @@ func (c *Catalog) ApplyRemote(batch RemoteBatch) {
 	if machine == "" || machine == LocalMachine() {
 		return
 	}
+	delete(c.loading, machine)
 	if c.remote == nil {
 		c.remote = make(map[string]remoteSnapshot)
 	}
@@ -181,7 +205,16 @@ func (c *Catalog) Snapshot() CatalogSnapshot {
 	status := make(map[string]MachineStatus, len(c.remote)+1)
 	status[localMachine] = MachineStatus{Loaded: true}
 	for machine, source := range c.remote {
-		status[machine] = source.status
+		resolved := MachineStatus{
+			Loaded:  source.status.Loaded,
+			Warning: source.status.Warning,
+			Error:   source.status.Error,
+			Backend: source.backend,
+		}
+		if c.loading[machine] {
+			resolved = MachineStatus{}
+		}
+		status[machine] = resolved
 	}
 	machines := c.snapshotMachines(places, agents)
 	return CatalogSnapshot{

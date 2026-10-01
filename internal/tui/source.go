@@ -63,6 +63,7 @@ type sourceState struct {
 
 	remoteMachines []string
 	remoteLoaded   map[string]bool
+	remoteBackends map[string]string
 	groupErrors    map[string]string
 	groupWarnings  map[string]string
 	refreshErr     error
@@ -97,7 +98,8 @@ func newSource(ctx context.Context, catalog *picker.Catalog, deps Deps, cancel c
 		pullRequestLoader: deps.PullRequestLoader,
 		remoteCommands:    append([]tea.Cmd(nil), deps.RemoteCommands...),
 		remoteMachines:    append([]string(nil), remoteMachines...),
-		remoteLoaded:      make(map[string]bool), groupErrors: make(map[string]string),
+		remoteLoaded:      make(map[string]bool), remoteBackends: make(map[string]string),
+		groupErrors:   make(map[string]string),
 		groupWarnings: make(map[string]string), refreshErr: deps.AgentError,
 		cancelLoads: cancel, gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
 		prSlots:     make(chan struct{}, pullRequestConcurrency(deps.PullRequestLoader)),
@@ -206,8 +208,12 @@ func (s *sourceState) Reload() tea.Cmd {
 	if len(s.remoteCommands) > 0 {
 		s.generations.remotes++
 		pending.remotes = len(s.remoteCommands)
-		for machine := range s.remoteLoaded {
+		if s.catalog != nil {
+			s.catalog.MarkRemoteLoading(s.remoteMachines)
+		}
+		for _, machine := range s.remoteMachines {
 			s.remoteLoaded[machine] = false
+			delete(s.remoteBackends, machine)
 			delete(s.groupErrors, machine)
 			delete(s.groupWarnings, machine)
 		}
@@ -372,6 +378,7 @@ func (s *sourceState) syncCatalog() {
 	}
 	s.remoteMachines = nil
 	s.remoteLoaded = make(map[string]bool)
+	s.remoteBackends = make(map[string]string)
 	s.groupErrors = make(map[string]string)
 	s.groupWarnings = make(map[string]string)
 	for _, machine := range snapshot.Machines {
@@ -381,6 +388,7 @@ func (s *sourceState) syncCatalog() {
 		s.remoteMachines = append(s.remoteMachines, machine)
 		status := snapshot.Status[machine]
 		s.remoteLoaded[machine] = status.Loaded
+		s.remoteBackends[machine] = status.Backend
 		s.groupErrors[machine] = sanitize(status.Error)
 		s.groupWarnings[machine] = sanitize(status.Warning)
 	}
