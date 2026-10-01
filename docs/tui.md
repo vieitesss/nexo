@@ -104,11 +104,20 @@ an in-flight extraction, and late results from a canceled action are ignored. A
 successful extraction refreshes the catalog, selects the new worktree, and opens
 and focuses it according to the selected backend's worktree policy.
 
+Press `Ctrl-Y` on a selected project row to open the delete preflight. The
+border-only staged form keeps the exact lexical path (including a symlink),
+shows that warnings are overridable but blockers are not, and offers OS trash
+by default or an explicit permanent mode. `yes` in the warning field is the
+TUI equivalent of `--force`; Git worktrees always use non-force `git worktree
+remove`. Escape cancels, and Enter submits from any field. A successful delete
+refreshes the Projects catalog and keeps selection near the removed row.
+
 ## Keys
 
-See the picker key table in the README for the complete list. Left/Right only
-fold project rows and project folders; they do not fold machine groups in the
-Agents or Containers tabs. In the search row, Ctrl-W deletes back to whitespace, Alt-Backspace
+See the picker key table in the README for the complete list. `Ctrl-Y` opens
+project deletion; it is intentionally separate from container kill (`Ctrl-X`).
+Left/Right only fold project rows and project folders; they do not fold machine
+groups in the Agents or Containers tabs. In the search row, Ctrl-W deletes back to whitespace, Alt-Backspace
 deletes back to the previous alphanumeric word boundary, and Ctrl-U clears the
 query.
 
