@@ -208,6 +208,40 @@ func TestLoadParsesAgentHighlightColor(t *testing.T) {
 	}
 }
 
+// TestLoadAcceptsHighlightColoursAndStyles pins the two documented forms a
+// valid highlight value may take.
+func TestLoadAcceptsHighlightColoursAndStyles(t *testing.T) {
+	for _, value := range []string{"red", "colour123", "#ff0000", "brightwhite", "bg=red,bold", "fg=colour123,underscore"} {
+		t.Run(value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte("[agents]\nhighlight-color = "+strconv.Quote(value)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err != nil {
+				t.Fatalf("Load() error = %v, want %q accepted", err, value)
+			}
+		})
+	}
+}
+
+// TestLoadRejectsInvalidHighlightColour pins MUST 3: a bad highlight value is
+// rejected at the config boundary instead of killing the watcher on the first
+// unseen agent.
+func TestLoadRejectsInvalidHighlightColour(t *testing.T) {
+	for _, value := range []string{"not-a-colour", "colour256", "#ff00", "bg=not-a-colour,bold", "bold", "bg=red,nope"} {
+		t.Run(value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte("[agents]\nhighlight-color = "+strconv.Quote(value)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), highlightColorKey) {
+				t.Fatalf("Load() error = %v, want %s validation", err, highlightColorKey)
+			}
+		})
+	}
+}
+
 func TestLoadParsesRemoteSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[remote]\nmachines = [\"devbox\", \"gpu1\"]\nssh-config = \"/tmp/ssh-config\"\n"), 0o600); err != nil {
