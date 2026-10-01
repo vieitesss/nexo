@@ -91,7 +91,11 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 		projectWarningsMu.Lock()
 		projectWarnings = nil
 		projectWarningsMu.Unlock()
-		discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
+		projectConfig := invocation.Config.ProjectsConfig
+		if current, loadErr := config.LoadOptional(deps.ConfigPath); loadErr == nil {
+			projectConfig = current.ProjectsConfig
+		}
+		discovery := projects.Discover(projectConfig, os.Getenv("HOME"))
 		projectWarningsMu.Lock()
 		projectWarnings = append(projectWarnings, discovery.Warnings...)
 		projectWarningsMu.Unlock()
@@ -99,6 +103,14 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 			return nil, discoveryCtx.Err()
 		}
 		return picker.ProjectPlaces(discovery.Candidates), nil
+	}
+	deps.AddProjectPath = func(addCtx context.Context, parent string) error {
+		if err := addCtx.Err(); err != nil {
+			return err
+		}
+		configPath := deps.ConfigPath
+		_, _, err := config.AddProjectPath(configPath, parent, os.Getenv("HOME"))
+		return err
 	}
 	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
 		// Container discovery is a source command. It must not delay the first

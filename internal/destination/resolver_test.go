@@ -46,6 +46,24 @@ func TestResolverOffersUnconfiguredParent(t *testing.T) {
 	}
 }
 
+func TestDefaultPathDerivesCompleteOperands(t *testing.T) {
+	for _, test := range []struct {
+		source string
+		want   string
+	}{
+		{"https://github.com/owner/repo.git", "/work/repo"},
+		{"git@github.com:owner/repo.git", "/work/repo"},
+		{"alice@example.com:team/repo.git", "/work/repo"},
+		{"/src/repo.git", "/work/repo"},
+		{"repo.git", "/work/repo"},
+	} {
+		got, err := DefaultPath(test.source, "/work", "/home/tester")
+		if err != nil || got != test.want {
+			t.Fatalf("DefaultPath(%q) = %q, %v; want %q", test.source, got, err, test.want)
+		}
+	}
+}
+
 func TestResolverExpandsHome(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "projects"), 0o755); err != nil {

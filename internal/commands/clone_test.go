@@ -38,11 +38,43 @@ func TestCloneCommandPassesCompleteSourceToGit(t *testing.T) {
 	if err := command.Run(context.Background(), Invocation{Runner: runner, Stdout: &output, Args: []string{"git@github.com:owner/repo.git", "/tmp/new-repo"}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if want := []cloneCall{{name: "git", args: []string{"clone", "git@github.com:owner/repo.git", "/tmp/new-repo"}}}; !reflect.DeepEqual(runner.calls, want) {
+	if want := []cloneCall{{name: "git", args: []string{"clone", "--", "git@github.com:owner/repo.git", "/tmp/new-repo"}}}; !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("Git calls = %#v, want %#v", runner.calls, want)
 	}
 	if !strings.Contains(output.String(), "cloned git@github.com:owner/repo.git") {
 		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestCloneCommandResolvesOmittedDestination(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	runner := &cloneRunner{}
+	command, _ := NewRegistry().Lookup("clone")
+	var output bytes.Buffer
+	if err := command.Run(context.Background(), Invocation{Runner: runner, Stdout: &output, JSON: true, Args: []string{"https://example.test/team/repo.git"}}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	want := filepath.Join(root, "repo")
+	if !strings.Contains(output.String(), `"destination":"`+want+`"`) {
+		t.Fatalf("JSON = %q, want resolved destination %q", output.String(), want)
+	}
+	if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0].args, []string{"clone", "--", "https://example.test/team/repo.git", want}) {
+		t.Fatalf("Git calls = %#v", runner.calls)
+	}
+}
+
+func TestCloneCommandRejectsExistingOmittedDestination(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "repo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	runner := &cloneRunner{}
+	command, _ := NewRegistry().Lookup("clone")
+	err := command.Run(context.Background(), Invocation{Runner: runner, Args: []string{"https://example.test/team/repo.git"}})
+	if err == nil || !strings.Contains(err.Error(), "already exists") || len(runner.calls) != 0 {
+		t.Fatalf("Run() = %v, calls = %#v; want existing destination refusal", err, runner.calls)
 	}
 }
 

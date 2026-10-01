@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
+	"strings"
 
 	"github.com/vieitesss/nexo/internal/runner"
 )
@@ -20,12 +22,20 @@ func Clone(ctx context.Context, commandRunner runner.CommandRunner, source, dest
 	if source == "" {
 		return errors.New("git clone requires a source")
 	}
-	args := []string{"clone", source}
+	args := []string{"clone", "--", source}
 	if destination != "" {
 		args = append(args, destination)
 	}
-	if _, err := commandRunner.Run(ctx, "git", args...); err != nil {
-		return fmt.Errorf("git clone %q: %w", source, err)
+	output, err := commandRunner.Run(ctx, "git", args...)
+	if err != nil {
+		message := fmt.Sprintf("git clone %q: %v", source, err)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && strings.TrimSpace(string(exitErr.Stderr)) != "" {
+			message += ": " + strings.TrimSpace(string(exitErr.Stderr))
+		} else if strings.TrimSpace(string(output)) != "" {
+			message += ": " + strings.TrimSpace(string(output))
+		}
+		return fmt.Errorf("%s: %w", message, err)
 	}
 	return nil
 }

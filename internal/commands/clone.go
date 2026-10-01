@@ -38,29 +38,34 @@ func (cloneCommand) Run(ctx context.Context, invocation Invocation) error {
 		return errors.New("clone requires a command runner")
 	}
 
-	resolved := parsed.Destination
-	var restore func() error
-	if parsed.Destination != "" {
-		result, resolveErr := destination.New(destination.Options{
-			Paths: invocation.Config.Paths,
-			Home:  os.Getenv("HOME"),
-		}).Resolve(parsed.Destination)
-		if resolveErr != nil {
-			return resolveErr
+	home := os.Getenv("HOME")
+	requested := parsed.Destination
+	if requested == "" {
+		cwd, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			return fmt.Errorf("get working directory: %w", cwdErr)
 		}
-		resolved = result.Path
-		if parsed.AddParent && result.AddParent {
-			restore, err = addParentToConfig(invocation, result.Path)
-			if err != nil {
-				return err
-			}
+		requested, err = destination.DefaultPath(parsed.Source, cwd, home)
+		if err != nil {
+			return err
 		}
-	} else if parsed.AddParent {
-		return UsageError{Err: errors.New("clone --add-parent requires a destination")}
 	}
-
-	if err := gitops.Clone(ctx, invocation.Runner, parsed.Source, resolved); err != nil {
-		return restoreConfigOnFailure(err, restore, "clone")
+	resolvedResult, err := destination.New(destination.Options{Paths: invocation.Config.Paths, Home: home}).Resolve(requested)
+	if err != nil {
+		return err
+	}
+	resolved := resolvedResult.Path
+	sourceOperand := destination.ExpandHome(parsed.Source, home)
+	if err := gitops.Clone(ctx, invocation.Runner, sourceOperand, resolved); err != nil {
+		if _, statErr := os.Lstat(resolved); statErr == nil {
+			return fmt.Errorf("%w (partial destination %q remains; remove it before retrying)", err, resolved)
+		}
+		return err
+	}
+	if parsed.AddParent && resolvedResult.AddParent {
+		if _, err := addParentToConfig(invocation, resolved); err != nil {
+			return fmt.Errorf("clone succeeded but add parent: %w", err)
+		}
 	}
 
 	if invocation.Stdout == nil {
@@ -69,29 +74,30 @@ func (cloneCommand) Run(ctx context.Context, invocation Invocation) error {
 	result := cloneJSON{Source: parsed.Source, Destination: resolved}
 	if invocation.JSON {
 		if err := json.NewEncoder(invocation.Stdout).Encode(result); err != nil {
-			if restore != nil {
-				if restoreErr := restore(); restoreErr != nil {
-					return errors.Join(err, fmt.Errorf("restore config after clone output: %w", restoreErr))
-				}
-			}
 			return err
 		}
 		return nil
 	}
-	if resolved == "" {
-		_, err = fmt.Fprintf(invocation.Stdout, "cloned %s\n", parsed.Source)
-	} else {
-		_, err = fmt.Fprintf(invocation.Stdout, "cloned %s to %s\n", parsed.Source, resolved)
-	}
+	_, err = fmt.Fprintf(invocation.Stdout, "cloned %s to %s\n", parsed.Source, resolved)
 	return err
 }
 
 func parseCloneArgs(args []string) (cloneArgs, error) {
 	var parsed cloneArgs
 	positionals := make([]string, 0, 2)
+	endOptions := false
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
+		if endOptions {
+			if arg == "" {
+				return cloneArgs{}, errors.New("clone arguments may not be empty")
+			}
+			positionals = append(positionals, arg)
+			continue
+		}
 		switch arg {
+		case "--":
+			endOptions = true
 		case "--add-parent":
 			if parsed.AddParent {
 				return cloneArgs{}, errors.New("--add-parent may be provided only once")
