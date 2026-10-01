@@ -67,7 +67,8 @@ Agent rows use one dot and a state that is easy to scan:
 Backends are native-first: when a multiplexer provides a capability, nexo uses
 it; nexo only fills gaps such as tmux screen polling or remote attachment.
 See the settled design in [CONTEXT.md](CONTEXT.md) and
-[docs/adr](docs/adr).
+[docs/adr](docs/adr). For repeatable startup measurements, see
+[docs/startup.md](docs/startup.md).
 
 ## Install
 
