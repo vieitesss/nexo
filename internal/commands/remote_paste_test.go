@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -72,6 +73,38 @@ func assertPanes(t *testing.T, paster *fakeRemotePaster, want string) {
 		if pane != want {
 			t.Fatalf("panes = %#v, want every call to use %q", paster.panes, want)
 		}
+	}
+}
+
+func TestRemotePassthroughLeavesOutsideProxyToLocalBinding(t *testing.T) {
+	t.Setenv("TMUX_PANE", "%9")
+	paster := &fakeRemotePaster{}
+	err := runRemotePassthrough(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Adapter:   paster,
+		Args:      []string{"passthrough", "C-h", "C-j"},
+	})
+	var handled HandledError
+	if !errors.As(err, &handled) {
+		t.Fatalf("error = %v, want handled status for the local fallback", err)
+	}
+	if len(paster.keys) != 0 {
+		t.Fatalf("keys = %#v, want no bytes injected outside a proxy", paster.keys)
+	}
+}
+
+func TestRemotePassthroughForwardsInsideProxy(t *testing.T) {
+	t.Setenv("TMUX_PANE", "%9")
+	paster := &fakeRemotePaster{target: "devbox/api"}
+	if err := runRemotePassthrough(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Adapter:   paster,
+		Args:      []string{"passthrough", "C-h", "C-j"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(paster.keys, [][]string{{"C-h", "C-j"}}) {
+		t.Fatalf("keys = %#v, want forwarded sequence", paster.keys)
 	}
 }
 

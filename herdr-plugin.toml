@@ -29,6 +29,17 @@ title = "Open nexo projects"
 contexts = ["workspace", "tab", "pane"]
 command = ["herdr", "plugin", "pane", "open", "--plugin", "nexo", "--entrypoint", "tui-projects"]
 
+# Record native workspace focus transitions so `nexo previous` and
+# `nexo remote previous` observe navigation performed outside nexo. These are
+# status/history hooks, not key bindings: keys stay in the user's Herdr config.
+[[events]]
+on = "workspace.focused"
+command = ["nexo", "--backend=herdr", "focus"]
+
+[[events]]
+on = "pane.focused"
+command = ["nexo", "--backend=herdr", "focus"]
+
 [[panes]]
 id = "tui"
 title = "nexo TUI"

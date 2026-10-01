@@ -175,6 +175,47 @@ Commands:
   target, the current proxy is used where the active backend exposes one.
 - `nexo remote list` lists remote containers and includes each machine's
   detected kind in `--json` output. Listing always uses SSH.
+- `nexo previous` opens the last non-proxy container on this machine that is
+  not the current one. It skips proxies, containers that no longer exist, and
+  the container that currently owns the pane, and does nothing when nothing
+  else is live.
+- `nexo remote previous` switches to or opens the most recently used remote
+  proxy on a machine other than the one currently attached, skipping machines
+  that are no longer configured. It does nothing when nothing is eligible. The
+  proxy identity is recorded as a machine/container pair, so reconnects do not
+  replace it with the local proxy label.
+
+Both commands read the same durable history that focus hooks and events write:
+tmux records `pane-focus-in` and `client-session-changed` through `nexo tmux
+init`, and the Herdr plugin declares `[[events]]` hooks for
+`workspace.focused` and `pane.focused` that run `nexo --backend=herdr focus`.
+
+### Root-key passthrough
+
+`nexo remote passthrough KEY...` is a user-bound helper for root-table keys.
+Inside a proxy it sends the key sequence through the attached pane to the
+remote multiplexer. Outside a proxy it injects nothing and exits with a
+handled non-zero status, so the binding's own fallback runs the original local
+action. It uses the backend's native key names and safe send-keys argument
+handling. Nexo never installs this binding, and `none` means simply that the
+user does not bind the command.
+
+In tmux, `run-shell` does not inherit `TMUX_PANE`, so capture the current pane
+explicitly and give the binding its local fallback after `||`:
+
+```tmux
+bind-key -T root C-h run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-h || tmux select-pane -L'
+bind-key -T root C-j run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-j || tmux select-pane -D'
+bind-key -T root C-k run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-k || tmux select-pane -U'
+bind-key -T root C-l run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-l || tmux select-pane -R'
+```
+
+In Herdr, add a key action in the user's key/action configuration whose shell
+command falls back to the native action:
+
+```sh
+nexo --backend=herdr remote passthrough ctrl+h || herdr pane focus --direction left
+```
 
 ### Clipboard image paste
 

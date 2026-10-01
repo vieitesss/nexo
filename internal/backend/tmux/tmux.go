@@ -12,6 +12,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/git"
 	"github.com/vieitesss/nexo/internal/lifecycle"
 	"github.com/vieitesss/nexo/internal/projects"
@@ -30,6 +31,8 @@ type Backend struct {
 	proxyConfig     config.RemoteConfig
 	proxyConfigPath string
 	remoteMachines  proxyidentity.MachineSet
+	usageStateDir   string
+	usageServer     string
 }
 
 // New constructs a tmux backend using the supplied command runner. The
@@ -218,7 +221,17 @@ func (b *Backend) runGit(ctx context.Context, args ...string) ([]byte, error) {
 // OpenProject opens path in a tmux session and focuses it unless NoFocus is
 // set. Shared lifecycle policy normalizes the result at this module's seam.
 func (b *Backend) OpenProject(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
-	return lifecycle.OpenProject(ctx, path, options, b.openProjectNative)
+	container, err := lifecycle.OpenProject(ctx, path, options, b.openProjectNative)
+	if err != nil {
+		return container, err
+	}
+	if options.NoFocus || container.ID == "" {
+		return container, nil
+	}
+	if err := b.recordTarget(ctx, container.ID); err != nil {
+		return container, err
+	}
+	return container, nil
 }
 
 func (b *Backend) openProjectNative(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
@@ -352,11 +365,116 @@ func (b *Backend) OpenContainer(ctx context.Context, id string) error {
 	if strings.TrimSpace(id) == "" {
 		return errors.New("tmux container opener requires an id")
 	}
+	var err error
 	if b.Inside {
-		_, err := b.runClient(ctx, "switch-client", "-t", id)
+		_, err = b.runClient(ctx, "switch-client", "-t", id)
+	} else {
+		err = b.runInteractive(ctx, "attach-session", "-t", id)
+	}
+	if err != nil {
 		return err
 	}
-	return b.runInteractive(ctx, "attach-session", "-t", id)
+	return b.recordTarget(ctx, id)
+}
+
+func (b *Backend) usageStore(ctx context.Context) containerstate.Store {
+	return containerstate.New(b.usageStateDir, "tmux", localMachine(), b.serverName(ctx))
+}
+
+// serverName resolves and caches the tmux socket path that scopes native IDs.
+func (b *Backend) serverName(ctx context.Context) string {
+	if b.usageServer != "" {
+		return b.usageServer
+	}
+	output, err := b.run(ctx, "display-message", "-p", "#{socket_path}")
+	if err != nil {
+		return "default"
+	}
+	name := strings.TrimSpace(string(output))
+	if name == "" {
+		return "default"
+	}
+	b.usageServer = name
+	return name
+}
+
+func (b *Backend) recordContainer(ctx context.Context, entry containerstate.Entry) error {
+	if b == nil {
+		return errors.New("tmux container state is unavailable")
+	}
+	return b.usageStore(ctx).Record(entry)
+}
+
+// RecentContainers returns the recorded identities for this tmux server.
+func (b *Backend) RecentContainers(ctx context.Context) ([]containerstate.Entry, error) {
+	if b == nil || b.Runner == nil {
+		return nil, errors.New("tmux container history requires a command runner")
+	}
+	return b.usageStore(ctx).Entries()
+}
+
+// CurrentContainerID reports the session that owns the calling pane.
+func (b *Backend) CurrentContainerID(ctx context.Context) (string, error) {
+	if b == nil || b.Runner == nil {
+		return "", errors.New("tmux container history requires a command runner")
+	}
+	return b.currentContainer(ctx)
+}
+
+// CurrentProxyMachine reports the remote machine attached by the calling pane.
+func (b *Backend) CurrentProxyMachine(ctx context.Context) (string, error) {
+	pane := strings.TrimSpace(os.Getenv("TMUX_PANE"))
+	if pane == "" {
+		return "", nil
+	}
+	target, err := b.ProxyTarget(ctx, pane)
+	if err != nil || strings.TrimSpace(target) == "" {
+		return "", nil
+	}
+	identity, ok := proxyidentity.ParseValue(target)
+	if !ok {
+		return "", nil
+	}
+	return proxyidentity.NormalizeMachineName(identity.Machine), nil
+}
+
+// RecordFocusedPane records the container owning a pane after a focus hook.
+// A proxy's metadata is authoritative, so reconnecting its attachment never
+// turns the entry into a local container.
+func (b *Backend) RecordFocusedPane(ctx context.Context, paneID string) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("tmux container state requires a command runner")
+	}
+	return b.recordTarget(ctx, paneID)
+}
+
+// recordTarget classifies one tmux target from authoritative session metadata
+// and records it. Failed lookups are silent: a vanished pane or session is not
+// a focus transition.
+func (b *Backend) recordTarget(ctx context.Context, target string) error {
+	output, err := b.run(ctx, "display-message", "-p", "-t", target, "#{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}")
+	if err != nil {
+		return nil
+	}
+	fields := strings.Split(strings.TrimSpace(string(output)), "\t")
+	if len(fields) < 2 {
+		return nil
+	}
+	if len(fields) >= 4 {
+		if server := strings.TrimSpace(fields[3]); server != "" {
+			b.usageServer = server
+		}
+	}
+	if len(fields) >= 3 {
+		if machine, container, ok := b.proxyTarget(fields[2]); ok {
+			return b.recordContainer(ctx, containerstate.Entry{ID: strings.TrimSpace(fields[0]), Name: container, Machine: machine, Proxy: true})
+		}
+	}
+	id := strings.TrimSpace(fields[0])
+	if id == "" {
+		id = strings.TrimSpace(target)
+	}
+	return b.recordContainer(ctx, containerstate.Entry{ID: id, Name: strings.TrimSpace(fields[1]), Machine: localMachine()})
 }
 
 // ConfigureAgents applies the shared agents configuration to the tmux source.

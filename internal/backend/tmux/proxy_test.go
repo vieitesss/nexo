@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/proxy"
 )
 
@@ -235,6 +236,61 @@ func (c *blockingProxyClock) Sleep(ctx context.Context, _ time.Duration) error {
 	}
 }
 
+func TestProxyHistorySurvivesReconnectWithChangedNativeID(t *testing.T) {
+	stateDir := t.TempDir()
+	socket := "/tmp/tmux-1000/default"
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"list-sessions -F #{session_id}\t#{session_name}\t#{@nexo-proxy}":                         []byte("$1\tdevbox/api\tdevbox/api\n"),
+		"display-message -p #{socket_path}":                                                       []byte(socket + "\n"),
+		"display-message -p -t $1 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}": []byte("$1\tdevbox/api\tdevbox/api\t" + socket + "\n"),
+		"display-message -p -t %2 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}": []byte("$2\tdevbox/api\tdevbox/api\t" + socket + "\n"),
+	}}
+	backend := New(runner, true)
+	backend.usageStateDir = stateDir
+	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"devbox"}}, "")
+	if err := backend.Proxy(context.Background(), "devbox", "api"); err != nil {
+		t.Fatal(err)
+	}
+	// The reconnect transport loop never touches history; a later focus event
+	// observes the recreated proxy with a new native session id.
+	transport := &fakeProxyTransport{failures: 1}
+	if err := proxy.RunReconnect(context.Background(), transport, &fakeProxyClock{}, nil, "devbox", "api", time.Second, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.RecordFocusedPane(context.Background(), "%2"); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := New(runner, true)
+	fresh.usageStateDir = stateDir
+	entries, err := fresh.RecentContainers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %#v, want one canonical proxy identity", entries)
+	}
+	entry := entries[0]
+	if entry.Machine != "devbox" || entry.Name != "api" || !entry.Proxy || entry.ID != "$2" {
+		t.Fatalf("proxy history = %#v, want devbox/api proxy with the recreated native id", entry)
+	}
+
+	// A local selection must never see the proxy identity.
+	store := containerstate.New(stateDir, "tmux", localMachine(), socket)
+	if err := store.Record(containerstate.Entry{ID: "$7", Name: "local", Machine: localMachine()}); err != nil {
+		t.Fatal(err)
+	}
+	freshEntries, err := fresh.RecentContainers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range freshEntries {
+		if current.Proxy && current.ID == "$7" {
+			t.Fatalf("proxy exclusion broken: %#v", freshEntries)
+		}
+	}
+}
+
 func TestProxySessionIDMatchesMetadataExactly(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"list-sessions -F #{session_id}\t#{@nexo-proxy}": []byte("$0\tdevbox/prod-long\n$1\tdevbox/prod\n"),
@@ -257,10 +313,10 @@ func TestProxySwitchesExistingSessionWithoutCreatingDuplicate(t *testing.T) {
 	if err := backend.Proxy(context.Background(), "devbox", "$1"); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
-	if len(runner.calls) != 4 {
-		t.Fatalf("tmux calls = %#v, want list, two options, and switch", runner.calls)
+	if len(runner.calls) != 5 {
+		t.Fatalf("tmux calls = %#v, want list, two options, switch, and classification", runner.calls)
 	}
-	if runner.calls[0].args[1] != "list-sessions" || runner.calls[1].args[1] != "set-option" || runner.calls[2].args[1] != "set-option" || runner.calls[3].args[0] != "switch-client" {
+	if runner.calls[0].args[1] != "list-sessions" || runner.calls[1].args[1] != "set-option" || runner.calls[2].args[1] != "set-option" || runner.calls[3].args[0] != "switch-client" || runner.calls[4].args[1] != "display-message" {
 		t.Fatalf("tmux calls = %#v, want existing proxy switch", runner.calls)
 	}
 	if got := runner.calls[3].args[2]; got != "$1" {

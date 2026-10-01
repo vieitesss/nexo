@@ -294,9 +294,13 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	}
 	if b.Inside {
 		_, err = b.runClient(ctx, "switch-client", "-t", sessionID)
+	} else {
+		err = b.runInteractive(ctx, "attach-session", "-t", sessionID)
+	}
+	if err != nil {
 		return err
 	}
-	return b.runInteractive(ctx, "attach-session", "-t", sessionID)
+	return b.recordTarget(ctx, sessionID)
 }
 
 func (b *Backend) proxyPaneCommand(machine, container string) (string, error) {

@@ -52,6 +52,16 @@ func (e UsageError) Error() string {
 
 func (e UsageError) Unwrap() error { return e.Err }
 
+// HandledError reports a binding outcome that the multiplexer binding handles
+// itself. The CLI exits non-zero without printing, so a user binding such as
+// `nexo ... remote passthrough C-h || tmux select-pane -L` runs the original
+// local action when passthrough is not inside a proxy.
+type HandledError struct {
+	Reason string
+}
+
+func (e HandledError) Error() string { return e.Reason }
+
 // Command is a registered nexo subcommand.
 type Command interface {
 	Name() string

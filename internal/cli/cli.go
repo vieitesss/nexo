@@ -195,6 +195,10 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		Args:         options.Args,
 	}); err != nil {
 		trace.Mark("command-failed")
+		var handledErr commands.HandledError
+		if errors.As(err, &handledErr) {
+			return 1
+		}
 		writeError(stderr, err)
 		var usageErr commands.UsageError
 		if errors.As(err, &usageErr) {

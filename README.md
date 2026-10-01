@@ -221,9 +221,11 @@ nexo --help
 | `nexo list` | List configured project candidates; use `--places` to include local and configured remote containers. |
 | `nexo tui [agents\|containers\|projects]` | Render the TUI in the terminal supplied by your binding. With no tab, open Agents for unseen-stopped agents, otherwise Containers. |
 | `nexo agents` | List agent panes; add `watch` or `seen PANE_ID`. |
+| `nexo previous` | Open the last non-proxy container on this machine other than the current one; it skips proxies, stale containers, and the current container, and is a no-op when nothing else is live. |
 | `nexo open PATH` | Open a discovered project candidate; add `--no-focus` to create or reuse its container without switching to it. Herdr also accepts `--workspace-id ID`. |
 | `nexo clone [--add-parent] SOURCE [DESTINATION]` | Clone a repository with Git; the optional flag adds the destination parent to project paths. Add `--json` for structured output. |
-| `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, `close [MACHINE/CONTAINER]`, or `paste [KEY...]`. |
+| `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, `close [MACHINE/CONTAINER]`, `previous`, `paste [KEY...]`, or `passthrough KEY...`. |
+| `nexo focus` | Record the container named by a backend focus event; it is the command declared by the Herdr plugin's `[[events]]` hook. |
 | `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch`, `--add-parent`, or `--no-focus`. |
 | `nexo worktree extract REPO DESTINATION` | Move the branch checked out in `REPO` into a new worktree and leave a return branch behind; add `--return-branch`, `--add-parent`, or `--no-focus`. |
 | `nexo tmux init` | Install tmux focus hooks and the agent watcher (tmux backend only). |
@@ -258,6 +260,8 @@ nexo --backend=tmux remote list --json
 nexo --backend=tmux remote open devbox/api
 nexo --backend=herdr remote new devbox feature-api
 nexo --backend=tmux remote close devbox/api
+nexo --backend=tmux previous
+nexo --backend=tmux remote previous
 
 # Bind an image paste key in tmux; the key argument is replayed on pass-through.
 # run-shell does not inherit TMUX_PANE, so the binding passes it explicitly.
@@ -266,6 +270,16 @@ nexo --backend=tmux remote close devbox/api
 
 # Bind the glance row toggle; nexo installs no key itself.
 # bind -n M-g run-shell 'nexo --backend=tmux tmux glance toggle'
+
+# Forward root-table navigation keys while a proxy is attached. Outside a
+# proxy nexo exits without injecting keys, so the binding's `||` fallback runs
+# the original local action.
+# bind-key -T root C-h run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-h || tmux select-pane -L'
+# bind-key -T root C-j run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-j || tmux select-pane -D'
+# bind-key -T root C-k run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-k || tmux select-pane -U'
+# bind-key -T root C-l run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-l || tmux select-pane -R'
+# Bind `nexo previous` and `nexo remote previous` yourself when desired;
+# `none` means there is no user binding.
 
 # Create a worktree and add its parent to project discovery.
 nexo --backend=tmux worktree create --new-branch --add-parent \

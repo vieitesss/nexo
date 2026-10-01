@@ -11,9 +11,14 @@ current Herdr pane:
 - `nexo.tui-projects` opens Projects.
 
 The manifest uses only the Herdr 0.9.0 plugin fields documented at
-[herdr.dev/docs/plugins](https://herdr.dev/docs/plugins/). It has no `[[events]]`
-hooks: nexo reads Herdr's native agent state directly, and Herdr owns its own
-agent notifications.
+[herdr.dev/docs/plugins](https://herdr.dev/docs/plugins/). It declares two
+`[[events]]` hooks, for `workspace.focused` and `pane.focused`, that run
+`nexo --backend=herdr focus`. The command records the focused workspace as a
+container identity for `nexo previous` and `nexo remote previous`, including
+navigation the user performs with Herdr's own keys. These are status/history
+hooks, not key bindings: keys stay entirely in the user's Herdr config. nexo
+still reads Herdr's native agent state directly, and Herdr owns its own agent
+notifications.
 
 ## Install or link
 
