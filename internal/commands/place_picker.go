@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/remote"
 )
@@ -41,7 +42,7 @@ func containerActionResolver(invocation Invocation) capabilities.ContainerAction
 	}
 	return configuredContainerResolver{
 		local:  localContainerResolver{adapter: invocation.Adapter},
-		remote: configuredRemoteMachines(invocation.Config.Remote.Machines),
+		remote: configuredRemoteMachines(invocation.Config.Remote.ConfiguredMachines()),
 		proxy:  proxy,
 	}
 }
@@ -49,7 +50,7 @@ func containerActionResolver(invocation Invocation) capabilities.ContainerAction
 func configuredRemoteMachines(machines []string) map[string]bool {
 	configured := make(map[string]bool, len(machines))
 	for _, machine := range machines {
-		machine = strings.TrimSpace(machine)
+		machine = config.NormalizeMachineName(machine)
 		if machine != "" {
 			configured[machine] = true
 		}
@@ -67,7 +68,7 @@ func (r configuredContainerResolver) ResolveContainerActions(ctx context.Context
 	if isLocalContainer(machine) {
 		return r.local.ResolveContainerActions(ctx, machine)
 	}
-	if r.remote[machine] {
+	if r.remote[config.NormalizeMachineName(machine)] {
 		if r.proxy != nil {
 			return remoteContainerActions{machine: machine, proxy: r.proxy}, nil
 		}
@@ -162,22 +163,25 @@ func (a localContainerActions) KillContainers(ctx context.Context, ids []string)
 }
 
 func isLocalContainer(machine string) bool {
-	return machine == "" || machine == "local" || machine == picker.LocalMachine()
+	machine = strings.TrimSpace(machine)
+	return machine == "" || config.NormalizeMachineName(machine) == "local" || config.NormalizeMachineName(machine) == config.NormalizeMachineName(picker.LocalMachine())
 }
 
 func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
-	if len(invocation.Config.Remote.Machines) == 0 || invocation.Runner == nil {
+	machines := invocation.Config.Remote.ConfiguredMachines()
+	if len(machines) == 0 || invocation.Runner == nil {
 		return nil
 	}
 	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithBackends(invocation.Config.Remote.Backends).WithKindDetection()
-	commands := make([]tea.Cmd, 0, len(invocation.Config.Remote.Machines))
+	commands := make([]tea.Cmd, 0, len(machines))
 	seen := make(map[string]bool)
-	for _, configured := range invocation.Config.Remote.Machines {
+	for _, configured := range machines {
 		machine := strings.TrimSpace(configured)
-		if machine == "" || seen[machine] {
+		key := config.NormalizeMachineName(machine)
+		if key == "" || seen[key] {
 			continue
 		}
-		seen[machine] = true
+		seen[key] = true
 		commands = append(commands, func() tea.Msg {
 			result := lister.ListMachineWithAgents(ctx, machine)
 			places := picker.ContainerPlaces(result.Containers)

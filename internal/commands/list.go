@@ -95,7 +95,7 @@ func listPlaces(ctx context.Context, invocation Invocation) error {
 		}
 	}
 	places := append(picker.ProjectPlaces(discovery.Candidates), picker.ContainerPlaces(containers)...)
-	remoteResults := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithBackends(invocation.Config.Remote.Backends).List(ctx, invocation.Config.Remote.Machines)
+	remoteResults := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithBackends(invocation.Config.Remote.Backends).List(ctx, invocation.Config.Remote.ConfiguredMachines())
 	for _, result := range remoteResults {
 		if result.Error != "" {
 			if invocation.Stderr != nil {

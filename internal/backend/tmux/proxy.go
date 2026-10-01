@@ -61,6 +61,10 @@ func (b *Backend) ConfigureRemoteConfig(remote config.RemoteConfig, configPath s
 	}
 	b.proxyConfig = remote
 	b.proxyConfigPath = configPath
+	b.remoteMachines = make(map[string]bool)
+	for _, machine := range remote.ConfiguredMachines() {
+		b.remoteMachines[config.NormalizeMachineName(machine)] = true
+	}
 }
 
 // ValidateProxyIdentity rejects values that cannot safely be represented by a
@@ -106,11 +110,13 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 	if b == nil || b.Runner == nil {
 		return "", errors.New("tmux remote proxy requires a command runner")
 	}
-	container = CanonicalContainerName(container)
+	machine = strings.TrimSpace(machine)
+	container = CanonicalContainerName(strings.TrimSpace(container))
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return "", err
 	}
-	identity := strings.TrimSpace(machine) + "/" + strings.TrimSpace(container)
+	machine = config.NormalizeMachineName(machine)
+	identity := machine + "/" + container
 	output, err := b.run(ctx, "list-sessions", "-F", "#{session_id}\t#{@nexo-proxy}")
 	if err != nil {
 		if isNoServer(err) {
@@ -120,11 +126,56 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 	}
 	for _, line := range strings.Split(strings.TrimRight(string(output), "\r\n"), "\n") {
 		fields := strings.SplitN(line, "\t", 2)
-		if len(fields) == 2 && fields[1] == identity {
+		if len(fields) == 2 && proxyIdentityMatches(fields[1], machine, container) {
 			return fields[0], nil
 		}
 	}
+	if !b.isRemoteMachine(machine) {
+		return "", nil
+	}
+	// A user-created session has no metadata. Match its exact display name and
+	// adopt it before returning, so opening it can never create a duplicate.
+	output, err = b.run(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}")
+	if err != nil {
+		if isNoServer(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	for _, line := range strings.Split(strings.TrimRight(string(output), "\r\n"), "\n") {
+		fields := strings.SplitN(line, "\t", 2)
+		if len(fields) != 2 || !proxySessionNameMatches(fields[1], machine, container) {
+			continue
+		}
+		if _, err := b.run(ctx, "set-option", "-t", fields[0], proxySessionOption, identity); err != nil {
+			return "", err
+		}
+		return fields[0], nil
+	}
 	return "", nil
+}
+
+func (b *Backend) isRemoteMachine(machine string) bool {
+	return b != nil && b.remoteMachines[config.NormalizeMachineName(machine)]
+}
+
+func proxyIdentityMatches(identity, machine, container string) bool {
+	identityMachine, identityContainer, ok := splitProxyIdentity(identity)
+	return ok && config.NormalizeMachineName(identityMachine) == config.NormalizeMachineName(machine) && identityContainer == container
+}
+
+func proxySessionNameMatches(name, machine, container string) bool {
+	identityMachine, identityContainer, ok := splitProxyIdentity(name)
+	return ok && config.NormalizeMachineName(identityMachine) == config.NormalizeMachineName(machine) && CanonicalContainerName(identityContainer) == container
+}
+
+func splitProxyIdentity(identity string) (string, string, bool) {
+	identity = strings.TrimSpace(identity)
+	separator := strings.IndexByte(identity, '/')
+	if separator <= 0 || separator == len(identity)-1 {
+		return "", "", false
+	}
+	return strings.TrimSpace(identity[:separator]), strings.TrimSpace(identity[separator+1:]), true
 }
 
 // Proxy opens or switches to a local proxy container. The remote attachment
@@ -139,6 +190,7 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return err
 	}
+	machine = config.NormalizeMachineName(machine)
 
 	name := machine + "/" + container
 	if _, err := b.proxyPaneCommand(machine, container); err != nil {

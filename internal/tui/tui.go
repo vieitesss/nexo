@@ -233,6 +233,17 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	deps.Projects = append([]picker.Place(nil), deps.Projects...)
 	deps.Containers = append([]capabilities.Container(nil), deps.Containers...)
 	deps.Agents = append([]capabilities.Agent(nil), deps.Agents...)
+	remoteMachines := make([]string, 0, len(deps.RemoteMachines))
+	seenRemoteMachines := make(map[string]bool, len(deps.RemoteMachines))
+	for _, machine := range deps.RemoteMachines {
+		machine = normalizeRemoteMachine(machine)
+		if machine == "" || seenRemoteMachines[machine] {
+			continue
+		}
+		seenRemoteMachines[machine] = true
+		remoteMachines = append(remoteMachines, machine)
+	}
+	deps.RemoteMachines = remoteMachines
 	now := deps.Now
 	if now == nil {
 		now = time.Now
@@ -243,7 +254,7 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 		groupErrors: make(map[string]string), gitErrors: make(map[string]string), now: now, refreshErr: deps.AgentError,
 		remoteMachines: append([]string(nil), deps.RemoteMachines...), remoteLoaded: make(map[string]bool), refreshInFlight: new(bool), gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
 	}
-	for _, machine := range deps.RemoteMachines {
+	for _, machine := range remoteMachines {
 		m.remoteLoaded[machine] = false
 	}
 	m.rebuild(false)
@@ -1130,40 +1141,40 @@ func (m *Model) revealProjectAncestors(path string) {
 }
 
 func (m *Model) applyRemote(msg picker.RemoteBatch) {
-	if msg.Machine == "" {
+	machine := normalizeRemoteMachine(msg.Machine)
+	if machine == "" {
 		return
 	}
-	m.groupErrors[msg.Machine] = sanitize(msg.Error)
-	m.remoteLoaded[msg.Machine] = true
+	m.groupErrors[machine] = sanitize(msg.Error)
+	m.remoteLoaded[machine] = true
 	seen := false
-	for _, machine := range m.remoteMachines {
-		if machine == msg.Machine {
+	for _, configured := range m.remoteMachines {
+		if configured == machine {
 			seen = true
 		}
 	}
 	if !seen {
-		m.remoteMachines = append(m.remoteMachines, msg.Machine)
+		m.remoteMachines = append(m.remoteMachines, machine)
 	}
 	updatedPlaces := m.remotePlaces[:0]
 	for _, place := range m.remotePlaces {
-		if place.Machine != msg.Machine {
+		if normalizeRemoteMachine(place.Machine) != machine {
 			updatedPlaces = append(updatedPlaces, place)
 		}
 	}
 	for i := range msg.Places {
-		if msg.Places[i].Machine == "" {
-			msg.Places[i].Machine = msg.Machine
-		}
+		msg.Places[i].Machine = machine
+		msg.Places[i].Group = machine
 	}
 	m.remotePlaces = append(updatedPlaces, msg.Places...)
 	updatedAgents := make([]agentRecord, 0, len(m.remoteAgents)+len(msg.Agents))
 	for _, record := range m.remoteAgents {
-		if record.machine != msg.Machine {
+		if normalizeRemoteMachine(record.machine) != machine {
 			updatedAgents = append(updatedAgents, record)
 		}
 	}
 	for _, agent := range msg.Agents {
-		updatedAgents = append(updatedAgents, agentRecord{agent: agent, machine: msg.Machine, backend: msg.Backend})
+		updatedAgents = append(updatedAgents, agentRecord{agent: agent, machine: machine, backend: msg.Backend})
 	}
 	m.remoteAgents = updatedAgents
 	m.rebuild(false)
@@ -2243,12 +2254,19 @@ func hint(keyValue, label string) string {
 
 func sanitize(value string) string { return shell.Plain(value) }
 
+func normalizeRemoteMachine(machine string) string {
+	return strings.ToLower(strings.TrimSpace(sanitize(machine)))
+}
+
 func normalizedMachine(machine string) string {
 	machine = strings.TrimSpace(sanitize(machine))
 	if machine == "" || strings.EqualFold(machine, "local") {
 		return picker.LocalMachine()
 	}
-	return machine
+	if strings.EqualFold(machine, picker.LocalMachine()) {
+		return picker.LocalMachine()
+	}
+	return strings.ToLower(machine)
 }
 
 func fit(value string, width int) string {

@@ -102,7 +102,7 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 		deps.GitLoader = picker.NewGitContextLoader(invocation.Runner)
 	}
 	deps.RemoteCommands = remotePlaceCommands(ctx, invocation)
-	deps.RemoteMachines = append([]string(nil), invocation.Config.Remote.Machines...)
+	deps.RemoteMachines = append([]string(nil), invocation.Config.Remote.ConfiguredMachines()...)
 	deps.OpenProject = func(openCtx context.Context, place picker.Place) error {
 		opener, ok := invocation.Adapter.(capabilities.ProjectOpener)
 		if !ok {

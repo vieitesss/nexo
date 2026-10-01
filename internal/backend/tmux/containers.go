@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/config"
 )
 
 var (
@@ -40,9 +41,16 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 		if len(fields) < 2 || fields[0] == "" || fields[1] == "" {
 			continue
 		}
-		proxy := len(fields) >= 4 && strings.TrimSpace(fields[3]) != ""
-		if proxy {
-			continue
+		proxyMachine, proxyContainer, proxy := "", "", false
+		if len(fields) >= 4 && strings.TrimSpace(fields[3]) != "" {
+			proxyMachine, proxyContainer, proxy = b.proxyTarget(fields[3])
+			// A session carrying nexo metadata is a proxy even if its identity
+			// is stale or malformed; do not leak it into the local list.
+			if !proxy {
+				continue
+			}
+		} else if machineName, containerName, ok := splitProxyIdentity(fields[1]); ok && b.isRemoteMachine(machineName) {
+			proxyMachine, proxyContainer, proxy = config.NormalizeMachineName(machineName), CanonicalContainerName(strings.TrimSpace(containerName)), true
 		}
 		var activity *time.Time
 		if len(fields) >= 3 {
@@ -55,16 +63,28 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 		if paneErr != nil {
 			return nil, paneErr
 		}
+		name, containerMachine := fields[1], machine
+		if proxy {
+			name, containerMachine = proxyContainer, proxyMachine
+		}
 		containers = append(containers, capabilities.Container{
 			ID:           fields[0],
-			Name:         fields[1],
-			Machine:      machine,
+			Name:         name,
+			Machine:      containerMachine,
 			ActivePaneID: paneID,
 			Activity:     activity,
 			Proxy:        proxy,
 		})
 	}
 	return containers, nil
+}
+
+func (b *Backend) proxyTarget(identity string) (string, string, bool) {
+	machine, container, ok := splitProxyIdentity(identity)
+	if !ok || !b.isRemoteMachine(machine) {
+		return "", "", false
+	}
+	return config.NormalizeMachineName(machine), CanonicalContainerName(container), true
 }
 
 func (b *Backend) activePane(ctx context.Context, sessionID string) (string, error) {

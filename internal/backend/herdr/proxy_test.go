@@ -46,6 +46,20 @@ func TestProxyAdoptsConfiguredWorkspaceByExactLabel(t *testing.T) {
 	}
 }
 
+func TestProxyAdoptsBackendOnlyConfiguredWorkspaceByExactLabel(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"machine/container"}]}}`),
+	}}
+	backend := New(runner)
+	backend.ConfigureRemoteConfig(config.RemoteConfig{Backends: map[string]string{" MACHINE ": "herdr"}}, "")
+	if err := backend.Proxy(context.Background(), "machine", "container"); err != nil {
+		t.Fatalf("Proxy() error = %v", err)
+	}
+	if len(runner.calls) != 4 || strings.Join(runner.calls[1].args, " ") != "workspace report-metadata w1 --source nexo --token nexo-proxy=machine/container" || strings.Join(runner.calls[3].args, " ") != "workspace focus w1" {
+		t.Fatalf("calls = %#v, want backend-only machine adoption", runner.calls)
+	}
+}
+
 func TestProxyStoresTokenAndStartsSharedAttachCommand(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[]}}`),

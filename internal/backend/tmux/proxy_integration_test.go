@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
 )
@@ -31,6 +32,56 @@ func (r isolatedTmuxRunner) Run(ctx context.Context, name string, args ...string
 
 func (r isolatedTmuxRunner) RunInteractive(context.Context, string, ...string) error {
 	return nil
+}
+
+func TestUnadoptedRemoteNamedSessionsAreProxiesOnThrowawayTmux(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is unavailable")
+	}
+	socket := "nexo-test-adopt-" + strings.ReplaceAll(t.Name(), "/", "-")
+	r := isolatedTmuxRunner{socket: socket}
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = r.Run(ctx, "tmux", "kill-server")
+	})
+	for _, name := range []string{"vieitesrpi/foo", "notamachine/foo"} {
+		if _, err := r.Run(ctx, "tmux", "new-session", "-d", "-s", name, "sleep 600"); err != nil {
+			t.Fatalf("create session %q: %v", name, err)
+		}
+	}
+	backend := New(r, false)
+	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{" VIEITESRPI "}}, "")
+	containers, err := backend.ListContainers(ctx)
+	if err != nil {
+		t.Fatalf("ListContainers(): %v", err)
+	}
+	if len(containers) != 2 {
+		t.Fatalf("containers = %#v, want proxy and local session", containers)
+	}
+	var proxy, local capabilities.Container
+	for _, container := range containers {
+		if container.Name == "foo" && container.Proxy {
+			proxy = container
+		} else if container.Name == "notamachine/foo" && !container.Proxy {
+			local = container
+		}
+	}
+	if proxy.ID == "" || proxy.Machine != "vieitesrpi" {
+		t.Fatalf("proxy = %#v, want vieitesrpi/foo proxy", proxy)
+	}
+	if local.ID == "" {
+		t.Fatalf("containers = %#v, want unknown-machine session to remain local", containers)
+	}
+	if err := backend.Proxy(ctx, "vieitesrpi", "foo"); err != nil {
+		t.Fatalf("adopt existing session: %v", err)
+	}
+	output, err := r.Run(ctx, "tmux", "display-message", "-p", "-t", proxy.ID, "#{@nexo-proxy}")
+	if err != nil {
+		t.Fatalf("read adopted option: %v", err)
+	}
+	if strings.TrimSpace(string(output)) != "vieitesrpi/foo" {
+		t.Fatalf("adopted option = %q, want vieitesrpi/foo", output)
+	}
 }
 
 func TestProxyUsesExactMetadataIdentityOnThrowawayTmux(t *testing.T) {
