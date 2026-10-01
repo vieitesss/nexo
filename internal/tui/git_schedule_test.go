@@ -19,8 +19,8 @@ func (configuredGitLoader) GitConcurrency() int { return 2 }
 
 func TestGitSchedulingUsesConfiguredBound(t *testing.T) {
 	model := NewModel(context.Background(), Deps{GitLoader: configuredGitLoader{}, Projects: []picker.Place{{Kind: picker.ProjectKind, Path: "/one", Git: true}}}, ProjectsTab)
-	if cap(model.gitSlots) != 2 {
-		t.Fatalf("git slots = %d, want configured bound", cap(model.gitSlots))
+	if cap(model.source.gitSlots) != 2 {
+		t.Fatalf("git slots = %d, want configured bound", cap(model.source.gitSlots))
 	}
 }
 
@@ -91,7 +91,7 @@ func TestGitSchedulingCancelsQueuedAndRunningLoads(t *testing.T) {
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	model = updated.(Model)
 	select {
-	case <-model.ctx.Done():
+	case <-model.source.ctx.Done():
 	default:
 		t.Fatal("Git context was not canceled on quit")
 	}

@@ -1,26 +1,163 @@
 package tui
 
-// Input transitions form a module behind Model.Update's seam. Keeping key,
-// mouse, folding, and acceptance policy together gives callers one transition
-// interface while preserving identity-stable selection for every tab.
+// Input is the transition module behind Model.Update. Its focused state owns
+// query editing, identity-stable selection, folding, modal actions, and the
+// selected result. It receives rows and a presentation hit-test rather than
+// the coordinator, so keyboard and mouse transitions can be tested directly.
 
 import (
+	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
-	"github.com/vieitesss/nexo/internal/shell"
 )
 
-func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	// Modal footer actions own input until they are confirmed or cancelled.
-	// Mouse clicks and wheel events are ignored rather than cancelling them.
-	if m.actionInFlight || m.confirmKill || m.renameMode {
-		return m, nil
+type inputState struct {
+	ctx  context.Context
+	deps Deps
+
+	tab        Tab
+	query      []rune
+	cursor     string
+	forceFirst bool
+	folded     map[string]bool
+	expanded   map[string]bool
+	marked     map[picker.ContainerRef]bool
+
+	confirmKill    bool
+	killTargets    []picker.ContainerRef
+	renameMode     bool
+	renameInput    []rune
+	renameTarget   picker.ContainerRef
+	actionInFlight bool
+
+	selectedPlace    *picker.Place
+	selectedAgent    *capabilities.Agent
+	selectedAgentRef AgentRef
+	cancelled        bool
+}
+
+type inputEffect struct {
+	rebuild bool
+	quit    bool
+	cmd     tea.Cmd
+}
+
+type inputFrame struct {
+	render renderFrame
+	rows   []row
+	marked []picker.ContainerRef
+}
+
+func newInputState(tab Tab, deps Deps, ctx context.Context) *inputState {
+	return &inputState{ctx: ctx, deps: deps, tab: tab,
+		folded: make(map[string]bool), expanded: make(map[string]bool), marked: make(map[picker.ContainerRef]bool)}
+}
+
+func (s *inputState) setQuery(query string) {
+	wasEmpty := len(s.query) == 0
+	s.query = []rune(query)
+	s.forceFirst = wasEmpty && len(s.query) > 0
+}
+
+// reconcileSelection applies identity-stable selection after a projection
+// replacement. Keeping this transition beside key and fold handling means the
+// coordinator only supplies new rows; selection policy has one interface.
+func (s *inputState) reconcileSelection(oldRows, rows []row) {
+	old := s.cursor
+	oldIndex := -1
+	for index, candidate := range oldRows {
+		if candidate.id == old {
+			oldIndex = index
+			break
+		}
+	}
+	if s.forceFirst {
+		for _, candidate := range rows {
+			if candidate.kind == itemRow && candidate.matched {
+				s.cursor, s.forceFirst = candidate.id, false
+				return
+			}
+		}
+		s.forceFirst = false
+	}
+	for _, candidate := range rows {
+		if candidate.cursorable && candidate.id == old {
+			s.cursor = old
+			return
+		}
+	}
+	if oldIndex >= 0 {
+		if nearest, ok := nearestCursorable(rows, oldIndex); ok {
+			s.cursor = nearest
+			return
+		}
+	}
+	for _, candidate := range rows {
+		if candidate.kind == itemRow && candidate.cursorable {
+			s.cursor = candidate.id
+			return
+		}
+	}
+	for _, candidate := range rows {
+		if candidate.cursorable {
+			s.cursor = candidate.id
+			return
+		}
+	}
+	s.cursor = ""
+}
+
+func nearestCursorable(rows []row, index int) (string, bool) {
+	if len(rows) == 0 {
+		return "", false
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(rows) {
+		index = len(rows) - 1
+	}
+	for distance := 0; distance < len(rows); distance++ {
+		for _, candidate := range []int{index + distance, index - distance} {
+			if candidate < 0 || candidate >= len(rows) || !rows[candidate].cursorable {
+				continue
+			}
+			return rows[candidate].id, true
+		}
+	}
+	return "", false
+}
+
+func (s *inputState) currentRow(rows []row) (row, bool) {
+	for _, candidate := range rows {
+		if candidate.id == s.cursor && candidate.cursorable {
+			return candidate, true
+		}
+	}
+	return row{}, false
+}
+
+func (s *inputState) currentItem(rows []row) (row, bool) {
+	value, ok := s.currentRow(rows)
+	return value, ok && value.kind == itemRow
+}
+
+func (s *inputState) markedTargetsCatalog(catalog *picker.Catalog) []picker.ContainerRef {
+	if catalog == nil {
+		return nil
+	}
+	return catalog.Marked(s.marked)
+}
+
+func (s *inputState) mouse(msg tea.MouseMsg, frame inputFrame) inputEffect {
+	if s.actionInFlight || s.confirmKill || s.renameMode {
+		return inputEffect{}
 	}
 	event := tea.MouseEvent(msg)
 	button := event.Button
@@ -33,75 +170,55 @@ func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			delta = 1
 		}
 		if delta != 0 {
-			m.moveCursor(delta)
+			s.moveCursor(delta, frame.rows)
 		}
-		return m, nil
+		return inputEffect{}
 	}
-	if button != tea.MouseButtonLeft || event.Action != tea.MouseActionPress || event.X < 0 || event.X >= m.width {
-		return m, nil
+	if button != tea.MouseButtonLeft || event.Action != tea.MouseActionPress || event.X < 0 || event.X >= frame.render.width {
+		return inputEffect{}
 	}
-	if event.Y == 0 {
-		if tab, ok := m.tabAt(event.X); ok {
-			m.switchTo(tab)
-		}
-		return m, nil
+	hit := frame.render.hitTest(event.X, event.Y)
+	if hit.tab != "" {
+		s.switchTo(hit.tab)
+		return inputEffect{rebuild: true}
 	}
-	if event.Y < 2 || event.Y >= m.height-1 {
-		return m, nil
+	if hit.rowID == "" {
+		return inputEffect{}
 	}
-	lines, start := m.bodyLayout(m.height - 3)
-	lineIndex := start + event.Y - 2
-	if lineIndex < 0 || lineIndex >= len(lines) || lines[lineIndex].rowID == "" {
-		return m, nil
-	}
-	id := lines[lineIndex].rowID
 	var clicked row
 	var ok bool
-	for _, candidate := range m.rows {
-		if candidate.id == id && candidate.cursorable {
+	for _, candidate := range frame.rows {
+		if candidate.id == hit.rowID && candidate.cursorable {
 			clicked, ok = candidate, true
 			break
 		}
 	}
 	if !ok {
-		return m, nil
+		return inputEffect{}
 	}
-	if clicked.kind == groupRow {
-		m.toggleClickedFold(clicked)
-		return m, nil
+	if clicked.kind == groupRow || hit.fold {
+		s.toggleClickedFold(clicked)
+		return inputEffect{rebuild: true}
 	}
-	if clicked.foldable && m.foldChevronAt(clicked, event.X) {
-		m.toggleClickedFold(clicked)
-		return m, nil
+	if s.cursor == clicked.id {
+		return s.accept(frame.rows)
 	}
-	if m.cursor == clicked.id {
-		return m.accept()
-	}
-	m.cursor = clicked.id
-	return m, nil
+	s.cursor = clicked.id
+	return inputEffect{}
 }
 
-func (m Model) foldChevronAt(row row, x int) bool {
-	if !row.foldable {
-		return false
-	}
-	start := 2 + shell.StringWidth(foldIndent(row))
-	return x >= start && x < start+shell.StringWidth(foldArrow(row))
-}
-
-func (m *Model) toggleClickedFold(clicked row) {
-	if m.tab != ProjectsTab || !clicked.foldable {
+func (s *inputState) toggleClickedFold(clicked row) {
+	if s.tab != ProjectsTab || !clicked.foldable {
 		return
 	}
 	if clicked.expanded {
-		m.folded[clicked.id] = true
-		delete(m.expanded, clicked.id)
+		s.folded[clicked.id] = true
+		delete(s.expanded, clicked.id)
 	} else {
-		delete(m.folded, clicked.id)
-		m.expanded[clicked.id] = true
+		delete(s.folded, clicked.id)
+		s.expanded[clicked.id] = true
 	}
-	m.rebuild(false)
-	m.cursor = clicked.id
+	s.cursor = clicked.id
 }
 
 func foldArrow(row row) string {
@@ -140,177 +257,160 @@ func foldPrefixStyled(row row) string {
 	return prefix + foldStyle().Render(foldArrow(row)) + "  "
 }
 
-func (m Model) tabAt(x int) (Tab, bool) {
-	offset := 0
-	for _, item := range []struct {
-		name string
-		tab  Tab
-	}{{"Agents", AgentsTab}, {"Containers", ContainersTab}, {"Projects", ProjectsTab}} {
-		width := shell.StringWidth(item.name) + shell.StringWidth(fmt.Sprintf(" %d", m.projection().MatchCount(item.tab)))
-		if x >= offset && x < offset+width {
-			return item.tab, true
-		}
-		offset += width + 3
-	}
-	return "", false
-}
-
-func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 	if msg.Type == tea.KeyCtrlC {
-		m.cancelled = true
-		m.confirmKill = false
-		m.renameMode = false
-		m.killTargets = nil
-		m.cancelBackgroundLoads()
-		return m, tea.Quit
+		s.cancelled = true
+		s.confirmKill = false
+		s.renameMode = false
+		s.killTargets = nil
+		return inputEffect{quit: true}
 	}
-	if m.actionInFlight {
-		return m, nil
+	if s.actionInFlight {
+		return inputEffect{}
 	}
-	if m.confirmKill {
+	if s.confirmKill {
 		switch strings.ToLower(msg.String()) {
 		case "y":
-			m.confirmKill = false
-			refs := append([]picker.ContainerRef(nil), m.killTargets...)
-			m.killTargets = nil
-			m.actionInFlight = true
-			return m, m.runKill(refs)
+			s.confirmKill = false
+			refs := append([]picker.ContainerRef(nil), s.killTargets...)
+			s.killTargets = nil
+			s.actionInFlight = true
+			return inputEffect{cmd: s.runKill(refs)}
 		case "n", "esc":
-			m.confirmKill = false
-			m.killTargets = nil
-			return m, nil
+			s.confirmKill = false
+			s.killTargets = nil
 		}
-		return m, nil
+		return inputEffect{}
 	}
-	if m.renameMode {
+	if s.renameMode {
 		switch msg.Type {
 		case tea.KeyEsc:
-			m.renameMode = false
-			m.renameInput = nil
+			s.renameMode = false
+			s.renameInput = nil
 		case tea.KeyEnter:
-			if strings.TrimSpace(string(m.renameInput)) != "" {
-				m.renameMode = false
-				name := string(m.renameInput)
-				m.renameInput = nil
-				m.actionInFlight = true
-				return m, m.runRename(m.renameTarget, name)
+			if strings.TrimSpace(string(s.renameInput)) != "" {
+				s.renameMode = false
+				name := string(s.renameInput)
+				s.renameInput = nil
+				s.actionInFlight = true
+				return inputEffect{cmd: s.runRename(s.renameTarget, name)}
 			}
 		case tea.KeyBackspace, tea.KeyDelete:
-			if len(m.renameInput) > 0 {
-				m.renameInput = m.renameInput[:len(m.renameInput)-1]
+			if len(s.renameInput) > 0 {
+				s.renameInput = s.renameInput[:len(s.renameInput)-1]
 			}
 		case tea.KeyRunes:
-			m.renameInput = append(m.renameInput, msg.Runes...)
+			s.renameInput = append(s.renameInput, msg.Runes...)
 		case tea.KeySpace:
-			m.renameInput = append(m.renameInput, ' ')
+			s.renameInput = append(s.renameInput, ' ')
 		}
-		return m, nil
+		return inputEffect{}
 	}
 	switch msg.Type {
-	case tea.KeyCtrlC:
-		m.cancelled = true
-		m.cancelBackgroundLoads()
-		return m, tea.Quit
 	case tea.KeyEsc:
-		if len(m.query) > 0 {
-			m.SetQuery("")
-			return m, nil
+		if len(s.query) > 0 {
+			s.setQuery("")
+			return inputEffect{rebuild: true}
 		}
-		m.cancelled = true
-		m.cancelBackgroundLoads()
-		return m, tea.Quit
+		s.cancelled = true
+		return inputEffect{quit: true}
 	case tea.KeyTab:
-		m.switchTab(1)
-		return m, nil
+		s.switchTab(1)
+		return inputEffect{rebuild: true}
 	case tea.KeyF1:
-		m.switchTo(AgentsTab)
-		return m, nil
+		s.switchTo(AgentsTab)
+		return inputEffect{rebuild: true}
 	case tea.KeyF2:
-		m.switchTo(ContainersTab)
-		return m, nil
+		s.switchTo(ContainersTab)
+		return inputEffect{rebuild: true}
 	case tea.KeyF3:
-		m.switchTo(ProjectsTab)
-		return m, nil
+		s.switchTo(ProjectsTab)
+		return inputEffect{rebuild: true}
 	case tea.KeyCtrlT:
-		m.toggleMark()
-		return m, nil
+		s.toggleMark(frame.rows)
+		return inputEffect{rebuild: true}
 	case tea.KeyCtrlX:
-		refs := m.markedTargets()
+		refs := append([]picker.ContainerRef(nil), frame.marked...)
 		if len(refs) == 0 {
-			if current, ok := m.currentItem(); ok && current.place.Kind == picker.ContainerKind && current.place.ContainerID != "" {
+			if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ContainerKind && current.place.ContainerID != "" {
 				refs = []picker.ContainerRef{{Machine: current.place.Machine, ID: current.place.ContainerID}}
 			}
 		}
 		if len(refs) > 0 {
-			m.killTargets = append([]picker.ContainerRef(nil), refs...)
-			m.confirmKill = true
+			s.killTargets = append([]picker.ContainerRef(nil), refs...)
+			s.confirmKill = true
 		}
-		return m, nil
+		return inputEffect{}
 	case tea.KeyCtrlR:
-		if current, ok := m.currentItem(); ok && current.place.Kind == picker.ContainerKind && current.place.ContainerID != "" {
-			m.renameMode = true
-			m.renameInput = nil
-			m.renameTarget = picker.ContainerRef{Machine: current.place.Machine, ID: current.place.ContainerID}
+		if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ContainerKind && current.place.ContainerID != "" {
+			s.renameMode = true
+			s.renameInput = nil
+			s.renameTarget = picker.ContainerRef{Machine: current.place.Machine, ID: current.place.ContainerID}
 		}
-		return m, nil
+		return inputEffect{}
 	case tea.KeyCtrlW:
-		m.SetQuery(string(deleteBackToWhitespace(m.query)))
-		return m, nil
+		s.setQuery(string(deleteBackToWhitespace(s.query)))
+		return inputEffect{rebuild: true}
 	case tea.KeyCtrlU:
-		m.SetQuery("")
-		return m, nil
+		s.setQuery("")
+		return inputEffect{rebuild: true}
 	case tea.KeyBackspace:
 		if msg.Alt {
-			m.SetQuery(string(deleteBackToBoundary(m.query)))
-		} else if len(m.query) > 0 {
-			m.SetQuery(string(m.query[:len(m.query)-1]))
+			s.setQuery(string(deleteBackToBoundary(s.query)))
+		} else if len(s.query) > 0 {
+			s.setQuery(string(s.query[:len(s.query)-1]))
 		}
-		return m, nil
+		return inputEffect{rebuild: true}
 	case tea.KeyDelete:
-		if len(m.query) > 0 {
-			m.SetQuery(string(m.query[:len(m.query)-1]))
+		if len(s.query) > 0 {
+			s.setQuery(string(s.query[:len(s.query)-1]))
 		}
-		return m, nil
+		return inputEffect{rebuild: true}
 	case tea.KeyUp:
-		m.moveCursor(-1)
-		return m, nil
+		s.moveCursor(-1, frame.rows)
+		return inputEffect{}
 	case tea.KeyDown:
-		m.moveCursor(1)
-		return m, nil
+		s.moveCursor(1, frame.rows)
+		return inputEffect{}
 	case tea.KeyCtrlN:
-		m.moveCursor(1)
-		return m, nil
+		s.moveCursor(1, frame.rows)
+		return inputEffect{}
 	case tea.KeyCtrlP:
-		m.moveCursor(-1)
-		return m, nil
+		s.moveCursor(-1, frame.rows)
+		return inputEffect{}
 	case tea.KeyPgUp:
-		m.moveCursor(-m.pageSize())
-		return m, nil
+		s.moveCursor(-s.pageSize(frame.render.height), frame.rows)
+		return inputEffect{}
 	case tea.KeyPgDown:
-		m.moveCursor(m.pageSize())
-		return m, nil
+		s.moveCursor(s.pageSize(frame.render.height), frame.rows)
+		return inputEffect{}
 	case tea.KeyLeft:
-		m.foldLeft()
-		return m, nil
+		if s.foldLeft(frame.rows) {
+			return inputEffect{rebuild: true}
+		}
+		return inputEffect{}
 	case tea.KeyRight:
-		m.foldRight()
-		return m, nil
+		if s.foldRight(frame.rows) {
+			return inputEffect{rebuild: true}
+		}
+		return inputEffect{}
 	case tea.KeyEnter:
-		return m.accept()
+		return s.accept(frame.rows)
 	case tea.KeyRunes:
 		if len(msg.Runes) > 0 {
-			query := append(append([]rune(nil), m.query...), msg.Runes...)
-			m.SetQuery(string(query))
+			query := append(append([]rune(nil), s.query...), msg.Runes...)
+			s.setQuery(string(query))
 		}
-		return m, nil
+		return inputEffect{rebuild: true}
 	case tea.KeySpace:
-		m.SetQuery(string(append(append([]rune(nil), m.query...), ' ')))
-		return m, nil
+		s.setQuery(string(append(append([]rune(nil), s.query...), ' ')))
+		return inputEffect{rebuild: true}
 	}
 	if msg.String() == "shift+tab" {
-		m.switchTab(-1)
+		s.switchTab(-1)
+		return inputEffect{rebuild: true}
 	}
-	return m, nil
+	return inputEffect{}
 }
 
 func deleteBackToWhitespace(query []rune) []rune {
@@ -335,36 +435,34 @@ func deleteBackToBoundary(query []rune) []rune {
 	return query[:end]
 }
 
-func (m *Model) switchTab(delta int) {
+func (s *inputState) switchTab(delta int) {
 	tabs := []Tab{AgentsTab, ContainersTab, ProjectsTab}
 	index := 0
 	for i, tab := range tabs {
-		if tab == m.tab {
+		if tab == s.tab {
 			index = i
 		}
 	}
-	m.switchTo(tabs[(index+delta+len(tabs))%len(tabs)])
+	s.switchTo(tabs[(index+delta+len(tabs))%len(tabs)])
 }
 
-func (m *Model) switchTo(tab Tab) {
-	if !validTab(tab) {
-		return
+func (s *inputState) switchTo(tab Tab) {
+	if validTab(tab) {
+		s.tab = tab
+		s.forceFirst = false
 	}
-	m.tab = tab
-	m.forceFirst = false
-	m.rebuild(false)
 }
 
-func (m *Model) moveCursor(delta int) {
-	if len(m.rows) == 0 {
+func (s *inputState) moveCursor(delta int, rows []row) {
+	if len(rows) == 0 {
 		return
 	}
 	indices := []int{}
 	current := 0
-	for i, row := range m.rows {
-		if row.cursorable {
+	for i, value := range rows {
+		if value.cursorable {
 			indices = append(indices, i)
-			if row.id == m.cursor {
+			if value.id == s.cursor {
 				current = len(indices) - 1
 			}
 		}
@@ -379,87 +477,82 @@ func (m *Model) moveCursor(delta int) {
 	if current >= len(indices) {
 		current = len(indices) - 1
 	}
-	m.cursor = m.rows[indices[current]].id
+	s.cursor = rows[indices[current]].id
 }
 
-func (m Model) pageSize() int {
-	if m.height <= 4 {
+func (s *inputState) pageSize(height int) int {
+	if height <= 4 {
 		return 1
 	}
-	return m.height - 4
+	return height - 4
 }
 
-func (m *Model) toggleMark() {
-	current, ok := m.currentItem()
+func (s *inputState) toggleMark(rows []row) {
+	current, ok := s.currentItem(rows)
 	if !ok || current.place.Kind != picker.ContainerKind || current.place.ContainerID == "" {
 		return
 	}
 	ref := picker.ContainerRef{Machine: current.place.Machine, ID: current.place.ContainerID}
-	if m.marked[ref] {
-		delete(m.marked, ref)
+	if s.marked[ref] {
+		delete(s.marked, ref)
 	} else {
-		m.marked[ref] = true
+		s.marked[ref] = true
 	}
-	m.rebuild(false)
 }
 
-func (m Model) currentContainer() bool {
-	current, ok := m.currentItem()
-	return ok && current.place.Kind == picker.ContainerKind && current.place.ContainerID != ""
+func (s *inputState) foldRight(rows []row) bool {
+	current, ok := s.currentRow(rows)
+	if !ok || s.tab != ProjectsTab || !current.foldable {
+		return false
+	}
+	delete(s.folded, current.id)
+	s.expanded[current.id] = true
+	s.cursor = current.id
+	return true
 }
 
-func (m Model) runKill(refs []picker.ContainerRef) tea.Cmd {
-	return func() tea.Msg {
-		if m.deps.KillContainers == nil {
-			return actionMsg{kind: "kill", err: errors.New("container killing is not supported")}
+func (s *inputState) revealProjectAncestors(projects []picker.Place, path string) {
+	for path != "" {
+		var found *picker.Place
+		for i := range projects {
+			if projects[i].Path == path {
+				found = &projects[i]
+				break
+			}
 		}
-		return actionMsg{kind: "kill", err: m.deps.KillContainers(m.ctx, refs)}
-	}
-}
-
-func (m Model) runRename(ref picker.ContainerRef, name string) tea.Cmd {
-	return func() tea.Msg {
-		if m.deps.RenameContainer == nil {
-			return actionMsg{kind: "rename", err: errors.New("container renaming is not supported")}
+		if found == nil || found.ParentPath == "" {
+			return
 		}
-		return actionMsg{kind: "rename", err: m.deps.RenameContainer(m.ctx, ref, name)}
+		for _, key := range []string{projectIdentity(*found), "project:" + found.ParentPath, "group:" + found.Group} {
+			s.expanded[key] = true
+			delete(s.folded, key)
+		}
+		path = found.ParentPath
 	}
 }
 
-func (m *Model) foldRight() {
-	current, ok := m.currentRow()
-	if !ok || m.tab != ProjectsTab || !current.foldable {
-		return
+func (s *inputState) foldLeft(rows []row) bool {
+	if s.tab != ProjectsTab || string(s.query) != "" {
+		return false
 	}
-	delete(m.folded, current.id)
-	m.expanded[current.id] = true
-	m.rebuild(false)
-	m.cursor = current.id
-}
-
-func (m *Model) foldLeft() {
-	if m.tab != ProjectsTab || string(m.query) != "" {
-		return
-	}
-	current, ok := m.currentRow()
+	current, ok := s.currentRow(rows)
 	if !ok {
-		return
+		return false
 	}
 	if current.foldable && current.expanded {
-		delete(m.expanded, current.id)
-		m.folded[current.id] = true
-		m.rebuild(false)
-		m.cursor = current.id
-		return
+		delete(s.expanded, current.id)
+		s.folded[current.id] = true
+		s.cursor = current.id
+		return true
 	}
 	parent := foldParent(current)
 	if parent == "" {
-		return
+		return false
 	}
-	delete(m.expanded, parent)
-	m.folded[parent] = true
-	m.rebuild(false)
-	m.cursor = parent
+	delete(s.expanded, parent)
+	s.folded[parent] = true
+	s.cursor = parent
+	return true
 }
 
 func foldParent(current row) string {
@@ -480,19 +573,37 @@ func foldParent(current row) string {
 	return ""
 }
 
-func (m Model) accept() (tea.Model, tea.Cmd) {
-	current, ok := m.currentItem()
+func (s *inputState) accept(rows []row) inputEffect {
+	current, ok := s.currentItem(rows)
 	if !ok {
-		return m, nil
+		return inputEffect{}
 	}
 	if current.itemKind == "agent" {
 		value := current.agent
-		m.selectedAgent = &value
-		m.selectedAgentRef = AgentRef{Agent: value, Machine: current.agentMachine, Backend: current.agentBackend}
+		s.selectedAgent = &value
+		s.selectedAgentRef = AgentRef{Agent: value, Machine: current.agentMachine, Backend: current.agentBackend}
 	} else {
 		value := current.place
-		m.selectedPlace = &value
+		s.selectedPlace = &value
 	}
-	m.cancelBackgroundLoads()
-	return m, tea.Quit
+	s.cancelled = false
+	return inputEffect{quit: true}
+}
+
+func (s *inputState) runKill(refs []picker.ContainerRef) tea.Cmd {
+	return func() tea.Msg {
+		if s.deps.KillContainers == nil {
+			return actionMsg{kind: "kill", err: errors.New("container killing is not supported")}
+		}
+		return actionMsg{kind: "kill", err: s.deps.KillContainers(s.ctx, refs)}
+	}
+}
+
+func (s *inputState) runRename(ref picker.ContainerRef, name string) tea.Cmd {
+	return func() tea.Msg {
+		if s.deps.RenameContainer == nil {
+			return actionMsg{kind: "rename", err: errors.New("container renaming is not supported")}
+		}
+		return actionMsg{kind: "rename", err: s.deps.RenameContainer(s.ctx, ref, name)}
+	}
 }

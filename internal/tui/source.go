@@ -1,32 +1,101 @@
 package tui
 
-// Source loading is the TUI's source/reload module. Its interface is the set
-// of Bubble Tea commands and source messages consumed by the coordinator; the
-// implementation keeps generation checks and replacement sequencing local.
+// Source loading is a deep module behind the coordinator's result seam. It
+// owns generations, in-flight state, loading presentation, and replacement
+// sequencing. The coordinator only asks it for commands and applies the
+// accepted change by rebuilding its rows.
 
 import (
+	"context"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
 )
 
-func (m Model) Init() tea.Cmd {
-	cmds := make([]tea.Cmd, 0, 3+len(m.deps.RemoteCommands))
-	if m.deps.AgentSource != nil {
-		if m.refreshInFlight == nil {
-			m.refreshInFlight = new(bool)
-		}
-		*m.refreshInFlight = true
-		cmds = append(cmds, m.refreshAgents(), m.tick())
+type sourceGenerations struct {
+	containers int
+	agents     int
+	remotes    int
+}
+
+type reloadState struct {
+	containers int
+	agents     int
+	remotes    int
+}
+
+func (state reloadState) done() bool {
+	return state.containers == 0 && state.agents == 0 && state.remotes == 0
+}
+
+type sourceUpdate struct {
+	changed    bool
+	reloadDone bool
+	toast      string
+}
+
+// sourceState owns all asynchronous source state. It deliberately keeps the
+// catalog as its replacement target: callers cannot accidentally apply a
+// result without the generation check that belongs to the source.
+type sourceState struct {
+	ctx          context.Context
+	catalog      *picker.Catalog
+	agents       []agentRecord
+	remoteAgents []agentRecord
+
+	agentSource          capabilities.AgentSource
+	containerSource      capabilities.ContainerLister
+	agentRefreshInterval time.Duration
+	gitLoader            picker.GitLoader
+	remoteCommands       []tea.Cmd
+
+	remoteMachines []string
+	remoteLoaded   map[string]bool
+	groupErrors    map[string]string
+	groupWarnings  map[string]string
+	refreshErr     error
+
+	generations   sourceGenerations
+	refreshing    bool
+	pendingReload reloadState
+	cancelLoads   context.CancelFunc
+	gitSlots      chan struct{}
+}
+
+func newSource(ctx context.Context, catalog *picker.Catalog, deps Deps, cancel context.CancelFunc, remoteMachines []string) *sourceState {
+	if deps.AgentRefreshInterval <= 0 {
+		deps.AgentRefreshInterval = 2 * time.Second
 	}
-	for _, command := range m.deps.RemoteCommands {
-		cmds = append(cmds, m.remoteCommand(command, m.remoteGeneration()))
+	return &sourceState{
+		ctx: ctx, catalog: catalog, agents: newAgentRecords(deps.Agents, ""),
+		agentSource: deps.AgentSource, containerSource: deps.ContainerSource,
+		agentRefreshInterval: deps.AgentRefreshInterval, gitLoader: deps.GitLoader,
+		remoteCommands: append([]tea.Cmd(nil), deps.RemoteCommands...),
+		remoteMachines: append([]string(nil), remoteMachines...),
+		remoteLoaded:   make(map[string]bool), groupErrors: make(map[string]string),
+		groupWarnings: make(map[string]string), refreshErr: deps.AgentError,
+		cancelLoads: cancel, gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
 	}
-	if m.deps.GitLoader != nil {
+}
+
+// Init creates the initial source commands. Git discovery receives the same
+// project snapshot as the projection, while source results still come through
+// Accept so stale generations have one home.
+func (s *sourceState) Init(projects []picker.Place) tea.Cmd {
+	cmds := make([]tea.Cmd, 0, 3+len(s.remoteCommands))
+	if s.agentSource != nil {
+		s.refreshing = true
+		cmds = append(cmds, s.refreshAgentsAt(s.generations.agents), s.tick())
+	}
+	for _, command := range s.remoteCommands {
+		cmds = append(cmds, s.remoteCommand(command, s.generations.remotes))
+	}
+	if s.gitLoader != nil {
 		seenGit := map[string]bool{}
-		for _, place := range m.projection().projectPlaces() {
+		for _, place := range projects {
 			if !place.Git || place.Path == "" || seenGit[place.Path] {
 				continue
 			}
@@ -34,16 +103,16 @@ func (m Model) Init() tea.Cmd {
 			place := place
 			cmds = append(cmds, func() tea.Msg {
 				select {
-				case m.gitSlots <- struct{}{}:
-					if m.ctx.Err() != nil {
-						<-m.gitSlots
+				case s.gitSlots <- struct{}{}:
+					if s.ctx.Err() != nil {
+						<-s.gitSlots
 						return nil
 					}
-				case <-m.ctx.Done():
+				case <-s.ctx.Done():
 					return nil
 				}
-				defer func() { <-m.gitSlots }()
-				value, err := m.deps.GitLoader.Load(m.ctx, place.Path)
+				defer func() { <-s.gitSlots }()
+				value, err := s.gitLoader.Load(s.ctx, place.Path)
 				return picker.GitContextMsg{Path: place.Path, Context: value, Err: err}
 			})
 		}
@@ -54,45 +123,28 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (m *Model) cancelBackgroundLoads() {
-	if m.cancelLoads != nil {
-		m.cancelLoads()
-		m.cancelLoads = nil
+func (s *sourceState) cancel() {
+	if s.cancelLoads != nil {
+		s.cancelLoads()
+		s.cancelLoads = nil
 	}
 }
 
-func (m Model) generationState() *sourceGenerations {
-	if m.generations == nil {
-		return &sourceGenerations{}
-	}
-	return m.generations
-}
-
-func (m Model) agentsGeneration() int { return m.generationState().agents }
-
-func (m Model) containersGeneration() int { return m.generationState().containers }
-
-func (m Model) remoteGeneration() int { return m.generationState().remotes }
-
-func (m Model) refreshAgents() tea.Cmd {
-	return m.refreshAgentsAt(m.agentsGeneration())
-}
-
-func (m Model) refreshAgentsAt(generation int) tea.Cmd {
+func (s *sourceState) refreshAgentsAt(generation int) tea.Cmd {
 	return func() tea.Msg {
-		agents, err := m.deps.AgentSource.ListAgents(m.ctx)
+		agents, err := s.agentSource.ListAgents(s.ctx)
 		return agentsMsg{generation: generation, agents: agents, err: err}
 	}
 }
 
-func (m Model) refreshContainersAt(generation int) tea.Cmd {
+func (s *sourceState) refreshContainersAt(generation int) tea.Cmd {
 	return func() tea.Msg {
-		containers, err := m.deps.ContainerSource.ListContainers(m.ctx)
+		containers, err := s.containerSource.ListContainers(s.ctx)
 		return containersMsg{generation: generation, containers: containers, err: err}
 	}
 }
 
-func (m Model) remoteCommand(command tea.Cmd, generation int) tea.Cmd {
+func (s *sourceState) remoteCommand(command tea.Cmd, generation int) tea.Cmd {
 	return func() tea.Msg {
 		msg := command()
 		batch, ok := msg.(picker.RemoteBatch)
@@ -103,177 +155,190 @@ func (m Model) remoteCommand(command tea.Cmd, generation int) tea.Cmd {
 	}
 }
 
-func (m *Model) reload() tea.Cmd {
-	state := sourceGenerations{}
-	if m.generations == nil {
-		m.generations = &state
-	}
-	pending := &reloadState{}
-	cmds := make([]tea.Cmd, 0, 2+len(m.deps.RemoteCommands))
-	if m.deps.ContainerSource != nil {
-		m.generations.containers++
+// Reload starts a coordinated replacement. Every command carries the
+// generation captured here; Accept is the only place that can consume it.
+func (s *sourceState) Reload() tea.Cmd {
+	pending := reloadState{}
+	cmds := make([]tea.Cmd, 0, 2+len(s.remoteCommands))
+	if s.containerSource != nil {
+		s.generations.containers++
 		pending.containers = 1
-		cmds = append(cmds, m.refreshContainersAt(m.generations.containers))
+		cmds = append(cmds, s.refreshContainersAt(s.generations.containers))
 	}
-	if m.deps.AgentSource != nil {
-		m.generations.agents++
+	if s.agentSource != nil {
+		s.generations.agents++
 		pending.agents = 1
-		if m.refreshInFlight == nil {
-			m.refreshInFlight = new(bool)
-		}
-		*m.refreshInFlight = true
-		cmds = append(cmds, m.refreshAgentsAt(m.generations.agents))
+		s.refreshing = true
+		cmds = append(cmds, s.refreshAgentsAt(s.generations.agents))
 	}
-	if len(m.deps.RemoteCommands) > 0 {
-		m.generations.remotes++
-		pending.remotes = len(m.deps.RemoteCommands)
-		for machine := range m.remoteLoaded {
-			m.remoteLoaded[machine] = false
-			delete(m.groupErrors, machine)
-			delete(m.groupWarnings, machine)
+	if len(s.remoteCommands) > 0 {
+		s.generations.remotes++
+		pending.remotes = len(s.remoteCommands)
+		for machine := range s.remoteLoaded {
+			s.remoteLoaded[machine] = false
+			delete(s.groupErrors, machine)
+			delete(s.groupWarnings, machine)
 		}
-		m.rebuild(false)
-		for _, command := range m.deps.RemoteCommands {
-			cmds = append(cmds, m.remoteCommand(command, m.generations.remotes))
+		for _, command := range s.remoteCommands {
+			cmds = append(cmds, s.remoteCommand(command, s.generations.remotes))
 		}
 	}
 	if pending.done() {
-		m.pendingReload = nil
-		m.actionInFlight = false
+		s.pendingReload = reloadState{}
 		return nil
 	}
-	m.pendingReload = pending
+	s.pendingReload = pending
 	return tea.Batch(cmds...)
 }
 
-func (m *Model) finishReload(source string) {
-	if m.pendingReload == nil {
-		return
-	}
+func (s *sourceState) finishReload(source string) {
 	switch source {
 	case "containers":
-		m.pendingReload.containers = 0
+		s.pendingReload.containers = 0
 	case "agents":
-		m.pendingReload.agents = 0
+		s.pendingReload.agents = 0
 	case "remotes":
-		if m.pendingReload.remotes > 0 {
-			m.pendingReload.remotes--
+		if s.pendingReload.remotes > 0 {
+			s.pendingReload.remotes--
 		}
 	}
-	if m.pendingReload.done() {
-		m.pendingReload = nil
-		m.actionInFlight = false
+	if s.pendingReload.done() {
+		s.pendingReload = reloadState{}
 	}
 }
 
-func (m Model) tick() tea.Cmd {
-	return tea.Tick(m.deps.AgentRefreshInterval, func(time.Time) tea.Msg { return refreshTickMsg{} })
+func (s *sourceState) pending() bool { return !s.pendingReload.done() }
+
+func (s *sourceState) tick() tea.Cmd {
+	return tea.Tick(s.agentRefreshInterval, func(time.Time) tea.Msg { return refreshTickMsg{} })
 }
 
-func (m *Model) applyGit(msg picker.GitContextMsg) {
-	if msg.Err != nil {
-		m.gitErrors[msg.Path] = msg.Err.Error()
-		m.rebuild(false)
+// Tick starts a refresh only when no coordinated reload or refresh is active.
+func (s *sourceState) Tick() tea.Cmd {
+	if s.agentSource == nil {
+		return nil
+	}
+	if s.pending() || s.refreshing {
+		return s.tick()
+	}
+	s.generations.agents++
+	s.refreshing = true
+	return tea.Batch(s.refreshAgentsAt(s.generations.agents), s.tick())
+}
+
+// Accept is the source result-acceptance interface. A false result means the
+// message was stale or unrelated; generation and in-flight handling never
+// leaks into Model.Update.
+func (s *sourceState) Accept(msg tea.Msg) (sourceUpdate, bool) {
+	switch msg := msg.(type) {
+	case agentsMsg:
+		pendingBefore := s.pending()
+		if msg.generation != s.generations.agents {
+			return sourceUpdate{}, false
+		}
+		s.refreshing = false
+		if msg.err != nil {
+			s.refreshErr = msg.err
+			s.finishReload("agents")
+			return sourceUpdate{reloadDone: pendingBefore && !s.pending()}, true
+		}
+		s.refreshErr = nil
+		s.agents = newAgentRecords(msg.agents, "")
+		if s.catalog != nil {
+			s.catalog.ReplaceLocalAgents(msg.agents)
+			s.syncCatalog()
+		}
+		s.finishReload("agents")
+		return sourceUpdate{changed: true, reloadDone: pendingBefore && !s.pending()}, true
+	case containersMsg:
+		pendingBefore := s.pending()
+		if msg.generation != s.generations.containers {
+			return sourceUpdate{}, false
+		}
+		if msg.err != nil {
+			s.finishReload("containers")
+			return sourceUpdate{reloadDone: pendingBefore && !s.pending(), toast: "container refresh: " + msg.err.Error()}, true
+		}
+		if s.catalog != nil {
+			s.catalog.ReplaceContainers(msg.containers)
+			s.syncCatalog()
+		}
+		s.finishReload("containers")
+		return sourceUpdate{changed: true, reloadDone: pendingBefore && !s.pending()}, true
+	case remoteMsg:
+		pendingBefore := s.pending()
+		if msg.generation != s.generations.remotes {
+			return sourceUpdate{}, false
+		}
+		s.applyRemote(msg.batch)
+		s.finishReload("remotes")
+		return sourceUpdate{changed: true, reloadDone: pendingBefore && !s.pending()}, true
+	case picker.AgentBatch:
+		if msg.Error != "" {
+			return sourceUpdate{}, true
+		}
+		s.agents = newAgentRecords(msg.Agents, "")
+		if s.catalog != nil {
+			s.catalog.ReplaceLocalAgents(msg.Agents)
+			s.syncCatalog()
+		}
+		return sourceUpdate{changed: true}, true
+	case picker.RemoteBatch:
+		pendingBefore := s.pending()
+		s.applyRemote(msg)
+		s.finishReload("remotes")
+		return sourceUpdate{changed: true, reloadDone: pendingBefore && !s.pending()}, true
+	default:
+		return sourceUpdate{}, false
+	}
+}
+
+func (s *sourceState) applyRemote(msg picker.RemoteBatch) {
+	if s.catalog == nil {
 		return
 	}
-	delete(m.gitErrors, msg.Path)
-	selectedPath := ""
-	if current, ok := m.currentItem(); ok && current.place.Kind == picker.ProjectKind {
-		selectedPath = current.place.Path
-	}
-	value := msg.Context
-	for i := range m.deps.Projects {
-		if m.deps.Projects[i].Path != msg.Path {
-			continue
-		}
-		m.deps.Projects[i].GitContext = &value
-		m.deps.Projects[i].ParentPath = value.PrimaryPath
-		if value.PrimaryPath != "" {
-			m.deps.Projects[i].LinkedWorktree = true
-		}
-	}
-	// A linked worktree belongs beside its primary checkout, even when
-	// discovery assigned the path to another configured parent.
-	for i := range m.deps.Projects {
-		if m.deps.Projects[i].ParentPath == "" {
-			continue
-		}
-		for _, primary := range m.deps.Projects {
-			if primary.Path == m.deps.Projects[i].ParentPath {
-				m.deps.Projects[i].Group = primary.Group
-				break
-			}
-		}
-	}
-	if selectedPath == msg.Path {
-		m.revealProjectAncestors(msg.Path)
-	}
-	if m.catalog != nil {
-		m.catalog.SetProjects(m.deps.Projects)
-	}
-	m.rebuild(false)
+	s.catalog.ApplyRemote(msg)
+	s.syncCatalog()
 }
 
-func (m *Model) revealProjectAncestors(path string) {
-	for path != "" {
-		var found *picker.Place
-		for i := range m.deps.Projects {
-			if m.deps.Projects[i].Path == path {
-				found = &m.deps.Projects[i]
-				break
-			}
-		}
-		if found == nil || found.ParentPath == "" {
-			return
-		}
-		for _, key := range []string{projectIdentity(*found), "project:" + found.ParentPath, "group:" + found.Group} {
-			m.expanded[key] = true
-			delete(m.folded, key)
-		}
-		path = found.ParentPath
-	}
-}
-
-func (m *Model) applyRemote(msg picker.RemoteBatch) {
-	if m.catalog == nil {
+// syncCatalog projects one catalog snapshot into source-owned records and
+// loading presentation. The catalog remains the policy module.
+func (s *sourceState) syncCatalog() {
+	if s.catalog == nil {
 		return
 	}
-	m.catalog.ApplyRemote(msg)
-	m.syncCatalog()
-	m.rebuild(false)
-}
-
-// syncCatalog projects one catalog snapshot into the source module's
-// row-oriented cache. The catalog remains the policy module; these records
-// keep source replacement and machine normalization local to this seam.
-func (m *Model) syncCatalog() {
-	if m.catalog == nil {
-		return
-	}
-	snapshot := m.catalog.Snapshot()
+	snapshot := s.catalog.Snapshot()
 	local := picker.LocalMachine()
-	m.agents = nil
-	m.remoteAgents = nil
+	s.agents = nil
+	s.remoteAgents = nil
 	for _, record := range snapshot.Agents {
 		value := agentRecord{agent: record.Agent, machine: record.Machine, backend: record.Backend}
 		if record.Machine == local {
-			m.agents = append(m.agents, value)
+			s.agents = append(s.agents, value)
 		} else {
-			m.remoteAgents = append(m.remoteAgents, value)
+			s.remoteAgents = append(s.remoteAgents, value)
 		}
 	}
-	m.remoteMachines = nil
-	m.remoteLoaded = make(map[string]bool)
-	m.groupErrors = make(map[string]string)
-	m.groupWarnings = make(map[string]string)
+	s.remoteMachines = nil
+	s.remoteLoaded = make(map[string]bool)
+	s.groupErrors = make(map[string]string)
+	s.groupWarnings = make(map[string]string)
 	for _, machine := range snapshot.Machines {
 		if machine == local {
 			continue
 		}
-		m.remoteMachines = append(m.remoteMachines, machine)
+		s.remoteMachines = append(s.remoteMachines, machine)
 		status := snapshot.Status[machine]
-		m.remoteLoaded[machine] = status.Loaded
-		m.groupErrors[machine] = sanitize(status.Error)
-		m.groupWarnings[machine] = sanitize(status.Warning)
+		s.remoteLoaded[machine] = status.Loaded
+		s.groupErrors[machine] = sanitize(status.Error)
+		s.groupWarnings[machine] = sanitize(status.Warning)
+	}
+}
+
+func (s *sourceState) setAgents(agents []capabilities.Agent) {
+	s.agents = newAgentRecords(agents, "")
+	if s.catalog != nil {
+		s.catalog.ReplaceLocalAgents(agents)
+		s.syncCatalog()
 	}
 }

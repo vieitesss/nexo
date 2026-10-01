@@ -45,16 +45,16 @@ type rowProjection struct {
 func (m Model) projection() rowProjection {
 	return rowProjection{
 		snapshot:       m.catalogSnapshot(),
-		query:          string(m.query),
+		query:          string(m.input.query),
 		width:          m.width,
-		folded:         m.folded,
-		expanded:       m.expanded,
-		agents:         append([]agentRecord(nil), m.agents...),
-		remoteAgents:   append([]agentRecord(nil), m.remoteAgents...),
-		remoteMachines: append([]string(nil), m.remoteMachines...),
-		remoteLoaded:   m.remoteLoaded,
-		groupErrors:    m.groupErrors,
-		groupWarnings:  m.groupWarnings,
+		folded:         m.input.folded,
+		expanded:       m.input.expanded,
+		agents:         append([]agentRecord(nil), m.source.agents...),
+		remoteAgents:   append([]agentRecord(nil), m.source.remoteAgents...),
+		remoteMachines: append([]string(nil), m.source.remoteMachines...),
+		remoteLoaded:   m.source.remoteLoaded,
+		groupErrors:    m.source.groupErrors,
+		groupWarnings:  m.source.groupWarnings,
 	}
 }
 
@@ -171,27 +171,6 @@ func newAgentRecords(agents []capabilities.Agent, machine string) []agentRecord 
 		result = append(result, agentRecord{agent: agent, machine: machine})
 	}
 	return result
-}
-
-func (m Model) currentRow() (row, bool) {
-	for _, row := range m.rows {
-		if row.id == m.cursor && row.cursorable {
-			return row, true
-		}
-	}
-	return row{}, false
-}
-
-func (m Model) currentItem() (row, bool) {
-	row, ok := m.currentRow()
-	return row, ok && row.kind == itemRow
-}
-
-func (m Model) markedTargets() []picker.ContainerRef {
-	if m.catalog == nil {
-		return nil
-	}
-	return m.catalog.Marked(m.marked)
 }
 
 func (p rowProjection) projectPlaces() []picker.Place {

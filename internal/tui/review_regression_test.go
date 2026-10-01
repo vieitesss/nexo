@@ -29,7 +29,7 @@ func TestStandaloneSpaceIsSearchAndRenameInput(t *testing.T) {
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlR})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	if got := string(model.renameInput); got != " x" {
+	if got := string(model.input.renameInput); got != " x" {
 		t.Fatalf("rename input = %q", got)
 	}
 }
@@ -114,25 +114,25 @@ func TestReloadDropsOlderSourceResults(t *testing.T) {
 		Agents:         []capabilities.Agent{{PaneID: "old", Target: "old", Harness: "pi", State: "working"}},
 		RemoteMachines: []string{"dev"},
 	}, ContainersTab)
-	model.generations.containers = 1
+	model.source.generations.containers = 1
 	model = updateModel(t, model, containersMsg{generation: 1, containers: []capabilities.Container{{ID: "new", Name: "new", Machine: local}}})
 	model = updateModel(t, model, containersMsg{generation: 0, containers: []capabilities.Container{{ID: "old", Name: "old", Machine: local}}})
 	if !strings.Contains(strings.Join(model.Rows(), "\x00"), "new") || strings.Contains(strings.Join(model.Rows(), "\x00"), "old") {
 		t.Fatalf("stale container result replaced newer snapshot: %v", model.Rows())
 	}
 
-	model.generations.agents = 1
+	model.source.generations.agents = 1
 	model = updateModel(t, model, agentsMsg{generation: 1, agents: []capabilities.Agent{{PaneID: "new", Target: "new", Harness: "pi", State: "working"}}})
 	model = updateModel(t, model, agentsMsg{generation: 0, agents: []capabilities.Agent{{PaneID: "old", Target: "old", Harness: "pi", State: "working"}}})
-	if len(model.agents) != 1 || model.agents[0].agent.Target != "new" {
-		t.Fatalf("stale agent result replaced newer snapshot: %#v", model.agents)
+	if len(model.source.agents) != 1 || model.source.agents[0].agent.Target != "new" {
+		t.Fatalf("stale agent result replaced newer snapshot: %#v", model.source.agents)
 	}
 
-	model.generations.remotes = 1
+	model.source.generations.remotes = 1
 	model = updateModel(t, model, remoteMsg{generation: 1, batch: picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "new", Target: "new", State: "working"}}}})
 	model = updateModel(t, model, remoteMsg{generation: 0, batch: picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "old", Target: "old", State: "working"}}}})
-	if len(model.remoteAgents) != 1 || model.remoteAgents[0].agent.Target != "new" {
-		t.Fatalf("stale remote result replaced newer snapshot: %#v", model.remoteAgents)
+	if len(model.source.remoteAgents) != 1 || model.source.remoteAgents[0].agent.Target != "new" {
+		t.Fatalf("stale remote result replaced newer snapshot: %#v", model.source.remoteAgents)
 	}
 }
 
@@ -164,18 +164,18 @@ func TestContainerRefreshErrorAfterKillIsRetryable(t *testing.T) {
 	}
 	updated, reload := model.Update(action())
 	model = updated.(Model)
-	if reload == nil || !model.actionInFlight {
-		t.Fatalf("post-kill reload not in flight: action=%t command=%v", model.actionInFlight, reload)
+	if reload == nil || !model.input.actionInFlight {
+		t.Fatalf("post-kill reload not in flight: action=%t command=%v", model.input.actionInFlight, reload)
 	}
-	model = updateModel(t, model, containersMsg{generation: model.containersGeneration(), err: errors.New("backend unavailable")})
-	if model.actionInFlight {
+	model = updateModel(t, model, containersMsg{generation: model.source.generations.containers, err: errors.New("backend unavailable")})
+	if model.input.actionInFlight {
 		t.Fatal("action stayed blocked after refresh error")
 	}
 	if !strings.Contains(model.toast, "container refresh: backend unavailable") {
 		t.Fatalf("refresh error toast = %q", model.toast)
 	}
 	model = updateModel(t, model, keyMsg(tea.KeyCtrlX))
-	if !model.confirmKill {
+	if !model.input.confirmKill {
 		t.Fatal("kill was not retryable after refresh error")
 	}
 }
@@ -192,14 +192,14 @@ func TestBulkKillAtBottomKeepsNearestRemainingCursor(t *testing.T) {
 		KillContainers:  func(context.Context, []picker.ContainerRef) error { return nil },
 	}
 	model := NewModel(context.Background(), deps, ContainersTab)
-	model.cursor = containerIdentity(picker.Place{Machine: local, ContainerID: "three"})
+	model.input.cursor = containerIdentity(picker.Place{Machine: local, ContainerID: "three"})
 	updated, _ := model.Update(keyMsg(tea.KeyCtrlX))
 	model = updated.(Model)
 	updated, action := model.Update(keyMsg(tea.KeyRunes, 'y'))
 	model = updated.(Model)
 	updated, _ = model.Update(action())
 	model = updated.(Model)
-	model = updateModel(t, model, containersMsg{generation: model.containersGeneration(), containers: deps.Containers[:2]})
+	model = updateModel(t, model, containersMsg{generation: model.source.generations.containers, containers: deps.Containers[:2]})
 	want := containerIdentity(picker.Place{Machine: local, ContainerID: "two"})
 	if model.Cursor() != want {
 		t.Fatalf("cursor after bottom bulk kill = %q, want %q; rows=%v", model.Cursor(), want, model.Rows())
@@ -223,8 +223,8 @@ func TestRemoteSnapshotsReplaceOpaqueAgentRecords(t *testing.T) {
 	model := NewModel(context.Background(), Deps{}, AgentsTab)
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%7", Target: "opaque-a", State: "working"}}})
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%7", Target: "opaque-b", State: "stopped"}}})
-	if len(model.remoteAgents) != 1 || model.remoteAgents[0].agent.Target != "opaque-b" || model.remoteAgents[0].agent.State != "stopped" {
-		t.Fatalf("remote snapshot retained stale record: %#v", model.remoteAgents)
+	if len(model.source.remoteAgents) != 1 || model.source.remoteAgents[0].agent.Target != "opaque-b" || model.source.remoteAgents[0].agent.State != "stopped" {
+		t.Fatalf("remote snapshot retained stale record: %#v", model.source.remoteAgents)
 	}
 }
 
@@ -247,8 +247,8 @@ func TestRemoteLoadCompletionAndMachineScopedAgents(t *testing.T) {
 	}, ContainersTab)
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%1", Target: "old-target", ContainerID: "1", Container: "remote", Harness: "claude", State: "working"}}})
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%1", ContainerID: "1", Container: "remote", Harness: "claude", State: "stopped"}}})
-	if len(model.remoteAgents) != 1 || model.remoteAgents[0].agent.State != "stopped" {
-		t.Fatalf("nonempty remote snapshot was not replaced: %#v", model.remoteAgents)
+	if len(model.source.remoteAgents) != 1 || model.source.remoteAgents[0].agent.State != "stopped" {
+		t.Fatalf("nonempty remote snapshot was not replaced: %#v", model.source.remoteAgents)
 	}
 	if got := len(snapshotAgents(model, "dev", "1")); got != 1 {
 		t.Fatalf("remote association count = %d", got)
@@ -266,8 +266,8 @@ func TestRemoteLoadCompletionAndMachineScopedAgents(t *testing.T) {
 		t.Fatal("loaded filtered remote machine showed loading")
 	}
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "%1", Target: "raw-target", Harness: "claude", State: "stopped"}}})
-	if len(model.remoteAgents) != 1 || model.remoteAgents[0].agent.State != "stopped" {
-		t.Fatalf("remote snapshot = %#v", model.remoteAgents)
+	if len(model.source.remoteAgents) != 1 || model.source.remoteAgents[0].agent.State != "stopped" {
+		t.Fatalf("remote snapshot = %#v", model.source.remoteAgents)
 	}
 }
 
@@ -309,16 +309,15 @@ func TestRemoteAgentFocusReferenceKeepsMachineAndBackend(t *testing.T) {
 	ids := model.Rows()
 	for _, id := range ids {
 		if strings.HasPrefix(id, "agent:dev:") {
-			model.cursor = id
+			model.input.cursor = id
 		}
 	}
-	if !strings.HasPrefix(model.cursor, "agent:dev:") {
+	if !strings.HasPrefix(model.input.cursor, "agent:dev:") {
 		t.Fatalf("remote agent rows = %v", ids)
 	}
-	accepted, _ := model.accept()
-	model = accepted.(Model)
-	if model.selectedAgentRef.Machine != "dev" || model.selectedAgentRef.Backend != "herdr" || model.selectedAgentRef.Agent.PaneID != "%7" {
-		t.Fatalf("agent ref = %#v", model.selectedAgentRef)
+	model.input.accept(model.rows)
+	if model.input.selectedAgentRef.Machine != "dev" || model.input.selectedAgentRef.Backend != "herdr" || model.input.selectedAgentRef.Agent.PaneID != "%7" {
+		t.Fatalf("agent ref = %#v", model.input.selectedAgentRef)
 	}
 }
 
@@ -342,7 +341,7 @@ func TestCtrlCClosesModals(t *testing.T) {
 		model := NewModel(context.Background(), richDeps(), ContainersTab)
 		model = updateModel(t, model, tea.KeyMsg{Type: start})
 		model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlC})
-		if !model.Cancelled() || model.renameMode || model.confirmKill {
+		if !model.Cancelled() || model.input.renameMode || model.input.confirmKill {
 			t.Fatalf("Ctrl-C left modal open: %#v", model)
 		}
 	}
@@ -405,10 +404,10 @@ func TestAgentRefreshProtectsInFlightAndDisplaysError(t *testing.T) {
 	source := &blockingAgentSource{started: make(chan struct{}, 1), release: make(chan struct{})}
 	model := NewModel(context.Background(), Deps{AgentSource: source, AgentRefreshInterval: time.Nanosecond}, AgentsTab)
 	model.Init()
-	if model.refreshInFlight == nil || !*model.refreshInFlight {
+	if !model.source.refreshing {
 		t.Fatal("initial refresh was not marked in flight")
 	}
-	first := model.refreshAgents()
+	first := model.source.refreshAgentsAt(model.source.generations.agents)
 	done := make(chan struct{})
 	go func() { first(); close(done) }()
 	<-source.started
@@ -424,7 +423,7 @@ func TestAgentRefreshProtectsInFlightAndDisplaysError(t *testing.T) {
 	<-done
 	model = updateModel(t, model, agentsMsg{err: errors.New("source failed")})
 	model.SetSize(100, 8)
-	if !strings.Contains(shell.Plain(model.footer()), "agent refresh: source failed") {
+	if !strings.Contains(shell.Plain(model.frame().footer()), "agent refresh: source failed") {
 		t.Fatal("refresh error was not rendered")
 	}
 }
@@ -493,7 +492,7 @@ func TestPlaceRankingAndVisibleAgentHighlights(t *testing.T) {
 	model.SetQuery("branch")
 	model.SetSize(100, 8)
 	// Inspect the row unselected so the accent match colour survives.
-	model.cursor = ""
+	model.input.cursor = ""
 	lipgloss.SetColorProfile(termenv.ANSI)
 	if !strings.Contains(model.View(), "branch") || !strings.Contains(model.View(), accent().Bold(true).Render("b")) {
 		t.Fatalf("branch match not highlighted: %q", model.View())
@@ -517,7 +516,7 @@ func TestModalTargetsAreFrozen(t *testing.T) {
 	}
 	model := NewModel(context.Background(), deps, ContainersTab)
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlX})
-	model.cursor = containerIdentity(picker.ContainerPlaces([]capabilities.Container{{ID: "remote-two", Name: "two", Machine: "remote"}})[0])
+	model.input.cursor = containerIdentity(picker.ContainerPlaces([]capabilities.Container{{ID: "remote-two", Name: "two", Machine: "remote"}})[0])
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	model = updated.(Model)
 	if cmd == nil {
@@ -536,7 +535,7 @@ func TestModalTargetsAreFrozen(t *testing.T) {
 	}
 	rename := NewModel(context.Background(), deps, ContainersTab)
 	rename = updateModel(t, rename, tea.KeyMsg{Type: tea.KeyCtrlR})
-	rename.cursor = containerIdentity(picker.ContainerPlaces([]capabilities.Container{{ID: "remote-two", Name: "two", Machine: "remote"}})[0])
+	rename.input.cursor = containerIdentity(picker.ContainerPlaces([]capabilities.Container{{ID: "remote-two", Name: "two", Machine: "remote"}})[0])
 	for _, value := range []rune{'n', 'e', 'w'} {
 		rename = updateModel(t, rename, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{value}})
 	}

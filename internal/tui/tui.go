@@ -179,22 +179,6 @@ type actionMsg struct {
 	err  error
 }
 
-type sourceGenerations struct {
-	containers int
-	agents     int
-	remotes    int
-}
-
-type reloadState struct {
-	containers int
-	agents     int
-	remotes    int
-}
-
-func (state reloadState) done() bool {
-	return state.containers == 0 && state.agents == 0 && state.remotes == 0
-}
-
 type agentRecord struct {
 	agent   capabilities.Agent
 	machine string
@@ -209,46 +193,17 @@ type ToastMsg struct{ Text string }
 // Model is the complete tabbed Bubble Tea model. Tests can drive it through
 // Update and inspect View without starting a terminal or a multiplexer.
 type Model struct {
-	ctx     context.Context
 	deps    Deps
 	catalog *picker.Catalog
-	tab     Tab
-	query   []rune
 	rows    []row
-	cursor  string
 
-	width, height   int
-	sized           bool
-	forceFirst      bool
-	folded          map[string]bool
-	expanded        map[string]bool
-	marked          map[picker.ContainerRef]bool
-	remoteMachines  []string
-	remoteLoaded    map[string]bool
-	groupErrors     map[string]string
-	groupWarnings   map[string]string
-	agents          []agentRecord
-	remoteAgents    []agentRecord
-	gitErrors       map[string]string
-	refreshInFlight *bool
-	refreshErr      error
-	generations     *sourceGenerations
-	pendingReload   *reloadState
-	gitSlots        chan struct{}
-	cancelLoads     context.CancelFunc
-
-	confirmKill      bool
-	killTargets      []picker.ContainerRef
-	renameMode       bool
-	renameInput      []rune
-	renameTarget     picker.ContainerRef
-	actionInFlight   bool
-	selectedPlace    *picker.Place
-	selectedAgent    *capabilities.Agent
-	selectedAgentRef AgentRef
-	cancelled        bool
-	toast            string
-	now              func() time.Time
+	width, height int
+	sized         bool
+	gitErrors     map[string]string
+	source        *sourceState
+	input         *inputState
+	now           func() time.Time
+	toast         string
 }
 
 // NewModel creates a model with the requested opening tab. It does not do I/O.
@@ -283,25 +238,22 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	if now == nil {
 		now = time.Now
 	}
+	source := newSource(loadCtx, catalog, deps, cancelLoads, remoteMachines)
+	source.syncCatalog()
 	m := Model{
-		ctx: loadCtx, cancelLoads: cancelLoads, deps: deps, catalog: catalog, tab: tab, agents: newAgentRecords(deps.Agents, ""),
-		folded: make(map[string]bool), expanded: make(map[string]bool), marked: make(map[picker.ContainerRef]bool),
-		groupErrors: make(map[string]string), groupWarnings: make(map[string]string), gitErrors: make(map[string]string), now: now, refreshErr: deps.AgentError,
-		remoteMachines: append([]string(nil), deps.RemoteMachines...), remoteLoaded: make(map[string]bool), refreshInFlight: new(bool), generations: &sourceGenerations{}, gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
+		deps: deps, catalog: catalog, source: source,
+		input:     newInputState(tab, deps, loadCtx),
+		gitErrors: make(map[string]string), now: now,
 	}
-	for _, machine := range remoteMachines {
-		m.remoteLoaded[machine] = false
-	}
-	m.syncCatalog()
 	m.rebuild(false)
 	return m
 }
 
 // Tab reports the currently visible tab.
-func (m Model) Tab() Tab { return m.tab }
+func (m Model) Tab() Tab { return m.input.tab }
 
 // Query reports the current search query.
-func (m Model) Query() string { return string(m.query) }
+func (m Model) Query() string { return string(m.input.query) }
 
 // Rows returns a compact copy of the visible row identities for model tests.
 func (m Model) Rows() []string {
@@ -313,11 +265,11 @@ func (m Model) Rows() []string {
 }
 
 // Cursor reports the stable identity under the cursor.
-func (m Model) Cursor() string { return m.cursor }
+func (m Model) Cursor() string { return m.input.cursor }
 
 // Marked returns marked container IDs in visible source order.
 func (m Model) Marked() []string {
-	refs := m.markedTargets()
+	refs := m.input.markedTargetsCatalog(m.catalog)
 	ids := make([]string, 0, len(refs))
 	for _, ref := range refs {
 		ids = append(ids, ref.ID)
@@ -326,26 +278,26 @@ func (m Model) Marked() []string {
 }
 
 // Cancelled reports whether the model closed without an action.
-func (m Model) Cancelled() bool { return m.cancelled }
+func (m Model) Cancelled() bool { return m.input.cancelled }
 
 // SelectedPlace reports an accepted project or container.
 func (m Model) SelectedPlace() (picker.Place, bool) {
-	if m.selectedPlace == nil {
+	if m.input.selectedPlace == nil {
 		return picker.Place{}, false
 	}
-	return *m.selectedPlace, true
+	return *m.input.selectedPlace, true
 }
 
 // SelectedAgent reports an accepted agent pane.
 func (m Model) SelectedAgent() (capabilities.Agent, bool) {
-	if m.selectedAgent == nil {
+	if m.input.selectedAgent == nil {
 		return capabilities.Agent{}, false
 	}
-	return *m.selectedAgent, true
+	return *m.input.selectedAgent, true
 }
 
 func (m Model) execute(ctx context.Context) error {
-	if m.cancelled {
+	if m.input.cancelled {
 		return nil
 	}
 	if place, ok := m.SelectedPlace(); ok {
@@ -369,7 +321,7 @@ func (m Model) execute(ctx context.Context) error {
 		if m.deps.FocusAgent == nil {
 			return errors.New("agent focusing is not supported")
 		}
-		return m.deps.FocusAgent(ctx, m.selectedAgentRef)
+		return m.deps.FocusAgent(ctx, m.input.selectedAgentRef)
 	}
 	return nil
 }
@@ -386,91 +338,43 @@ func (m *Model) SetToast(text string) { m.toast = text }
 // selects its best match; refining one keeps the current identity when it
 // still matches. Query changes do not alter the saved fold state.
 func (m *Model) SetQuery(query string) {
-	wasEmpty := len(m.query) == 0
-	m.query = []rune(query)
-	m.forceFirst = wasEmpty && len(m.query) > 0
+	m.input.setQuery(query)
 	m.rebuild(false)
 }
 
 func (m *Model) rebuild(force bool) {
 	if force {
-		m.forceFirst = true
+		m.input.forceFirst = true
 	}
-	old := m.cursor
-	oldIndex := -1
-	for index, candidate := range m.rows {
-		if candidate.id == old {
-			oldIndex = index
-			break
-		}
-	}
+	oldRows := m.rows
 	projection := m.projection()
-	m.rows = projection.Rows(m.tab)
-	if projection.query != "" && projection.MatchCount(m.tab) == 0 {
+	rows := projection.Rows(m.input.tab)
+	if projection.query != "" && projection.MatchCount(m.input.tab) == 0 {
 		for _, tab := range []Tab{AgentsTab, ContainersTab, ProjectsTab} {
-			if tab == m.tab || projection.MatchCount(tab) == 0 {
+			if tab == m.input.tab || projection.MatchCount(tab) == 0 {
 				continue
 			}
-			m.tab = tab
-			m.rows = projection.Rows(tab)
+			m.input.tab = tab
+			rows = projection.Rows(tab)
 			break
 		}
 	}
-	if m.forceFirst {
-		for _, row := range m.rows {
-			if row.kind == itemRow && row.matched {
-				m.cursor, m.forceFirst = row.id, false
-				return
-			}
-		}
-		m.forceFirst = false
-	}
-	for _, row := range m.rows {
-		if row.cursorable && row.id == old {
-			m.cursor = old
-			return
-		}
-	}
-	if oldIndex >= 0 {
-		if nearest, ok := nearestCursorable(m.rows, oldIndex); ok {
-			m.cursor = nearest
-			return
-		}
-	}
-	for _, row := range m.rows {
-		if row.kind == itemRow && row.cursorable {
-			m.cursor = row.id
-			return
-		}
-	}
-	for _, row := range m.rows {
-		if row.cursorable {
-			m.cursor = row.id
-			return
-		}
-	}
-	m.cursor = ""
+	m.rows = rows
+	m.input.reconcileSelection(oldRows, rows)
 }
 
-func nearestCursorable(rows []row, index int) (string, bool) {
-	if len(rows) == 0 {
-		return "", false
+// Init starts source commands; all later source results cross source.Accept.
+func (m Model) Init() tea.Cmd {
+	if m.source == nil {
+		return nil
 	}
-	if index < 0 {
-		index = 0
+	return m.source.Init(m.projection().projectPlaces())
+}
+
+func (m *Model) cancelBackgroundLoads() {
+	if m.source != nil {
+		m.source.cancel()
 	}
-	if index >= len(rows) {
-		index = len(rows) - 1
-	}
-	for distance := 0; distance < len(rows); distance++ {
-		for _, candidate := range []int{index + distance, index - distance} {
-			if candidate < 0 || candidate >= len(rows) || !rows[candidate].cursorable {
-				continue
-			}
-			return rows[candidate].id, true
-		}
-	}
-	return "", false
 }
 
 // Update implements tea.Model. Printable keys are intentionally handled last
@@ -480,112 +384,119 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.SetSize(msg.Width, msg.Height)
 		return m, nil
-	case agentsMsg:
-		if msg.generation != m.agentsGeneration() {
-			return m, nil
-		}
-		if m.refreshInFlight != nil {
-			*m.refreshInFlight = false
-		}
-		if msg.err != nil {
-			m.refreshErr = msg.err
-		} else {
-			m.refreshErr = nil
-			m.agents = newAgentRecords(msg.agents, "")
-			if m.catalog != nil {
-				m.catalog.ReplaceLocalAgents(msg.agents)
-				m.syncCatalog()
-			}
-			m.rebuild(false)
-		}
-		m.finishReload("agents")
-		return m, nil
-	case containersMsg:
-		if msg.generation != m.containersGeneration() {
-			return m, nil
-		}
-		if msg.err != nil {
-			m.toast = "container refresh: " + msg.err.Error()
-		} else {
-			m.deps.Containers = append([]capabilities.Container(nil), msg.containers...)
-			if m.catalog != nil {
-				m.catalog.ReplaceContainers(msg.containers)
-				m.syncCatalog()
-			}
-			m.rebuild(false)
-		}
-		m.finishReload("containers")
-		return m, nil
 	case actionMsg:
 		if msg.err != nil {
 			m.toast = msg.err.Error()
-			return m, m.reload()
+			m.source.remoteCommands = append([]tea.Cmd(nil), m.deps.RemoteCommands...)
+			cmd := m.source.Reload()
+			if !m.source.pending() {
+				m.input.actionInFlight = false
+			}
+			m.rebuild(false)
+			return m, cmd
 		}
 		if msg.kind == "kill" {
 			m.toast = "containers killed"
-			m.marked = make(map[picker.ContainerRef]bool)
+			m.input.marked = make(map[picker.ContainerRef]bool)
 		} else {
 			m.toast = "container renamed"
 		}
-		return m, m.reload()
-	case picker.AgentBatch:
-		// Keep the existing picker command seam compatible while callers move
-		// to AgentSource. A batch without machine provenance is local.
-		if msg.Error == "" {
-			m.agents = newAgentRecords(msg.Agents, "")
-			if m.catalog != nil {
-				m.catalog.ReplaceLocalAgents(msg.Agents)
-				m.syncCatalog()
-			}
-			m.rebuild(false)
+		m.source.remoteCommands = append([]tea.Cmd(nil), m.deps.RemoteCommands...)
+		cmd := m.source.Reload()
+		if !m.source.pending() {
+			m.input.actionInFlight = false
 		}
-		return m, nil
+		m.rebuild(false)
+		return m, cmd
 	case refreshTickMsg:
-		if m.deps.AgentSource == nil {
-			return m, nil
-		}
-		if m.pendingReload != nil || (m.refreshInFlight != nil && *m.refreshInFlight) {
-			return m, m.tick()
-		}
-		if m.refreshInFlight == nil {
-			m.refreshInFlight = new(bool)
-		}
-		if m.generations == nil {
-			m.generations = &sourceGenerations{}
-		}
-		m.generations.agents++
-		*m.refreshInFlight = true
-		return m, tea.Batch(m.refreshAgentsAt(m.generations.agents), m.tick())
+		return m, m.source.Tick()
 	case picker.GitContextMsg:
 		m.applyGit(msg)
 		return m, nil
-	case remoteMsg:
-		if msg.generation != m.remoteGeneration() {
-			return m, nil
-		}
-		m.applyRemote(msg.batch)
-		m.finishReload("remotes")
-		return m, nil
-	case picker.RemoteBatch:
-		m.applyRemote(msg)
-		m.finishReload("remotes")
-		return m, nil
 	case tea.KeyMsg:
-		return m.key(msg)
+		m.input.deps = m.deps
+		effect := m.input.key(msg, inputFrame{render: m.frame(), rows: m.rows, marked: m.input.markedTargetsCatalog(m.catalog)})
+		if effect.rebuild {
+			m.rebuild(false)
+		}
+		if effect.quit {
+			m.cancelBackgroundLoads()
+			return m, tea.Quit
+		}
+		return m, effect.cmd
 	case tea.MouseMsg:
-		return m.mouse(msg)
+		m.input.deps = m.deps
+		effect := m.input.mouse(msg, inputFrame{render: m.frame(), rows: m.rows, marked: m.input.markedTargetsCatalog(m.catalog)})
+		if effect.rebuild {
+			m.rebuild(false)
+		}
+		if effect.quit {
+			m.cancelBackgroundLoads()
+			return m, tea.Quit
+		}
+		return m, effect.cmd
 	case ToastMsg:
 		m.toast = msg.Text
+		return m, nil
+	}
+	if update, ok := m.source.Accept(msg); ok {
+		if update.toast != "" {
+			m.toast = update.toast
+		}
+		if update.reloadDone {
+			m.input.actionInFlight = false
+		}
+		if update.changed {
+			m.rebuild(false)
+		}
 		return m, nil
 	}
 	return m, nil
 }
 
-func (m *Model) SetAgents(agents []capabilities.Agent) {
-	m.agents = newAgentRecords(agents, "")
-	if m.catalog != nil {
-		m.catalog.ReplaceLocalAgents(agents)
-		m.syncCatalog()
+func (m *Model) applyGit(msg picker.GitContextMsg) {
+	if msg.Err != nil {
+		m.gitErrors[msg.Path] = msg.Err.Error()
+		m.rebuild(false)
+		return
 	}
+	delete(m.gitErrors, msg.Path)
+	selectedPath := ""
+	if current, ok := m.input.currentItem(m.rows); ok && current.place.Kind == picker.ProjectKind {
+		selectedPath = current.place.Path
+	}
+	value := msg.Context
+	for i := range m.deps.Projects {
+		if m.deps.Projects[i].Path != msg.Path {
+			continue
+		}
+		m.deps.Projects[i].GitContext = &value
+		m.deps.Projects[i].ParentPath = value.PrimaryPath
+		if value.PrimaryPath != "" {
+			m.deps.Projects[i].LinkedWorktree = true
+		}
+	}
+	for i := range m.deps.Projects {
+		if m.deps.Projects[i].ParentPath == "" {
+			continue
+		}
+		for _, primary := range m.deps.Projects {
+			if primary.Path == m.deps.Projects[i].ParentPath {
+				m.deps.Projects[i].Group = primary.Group
+				break
+			}
+		}
+	}
+	if selectedPath == msg.Path {
+		m.input.revealProjectAncestors(m.deps.Projects, msg.Path)
+	}
+	if m.catalog != nil {
+		m.catalog.SetProjects(m.deps.Projects)
+	}
+	m.rebuild(false)
+}
+
+func (m *Model) SetAgents(agents []capabilities.Agent) {
+	m.source.setAgents(agents)
 	m.rebuild(false)
 }

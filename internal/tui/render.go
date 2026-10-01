@@ -17,6 +17,105 @@ import (
 	"github.com/vieitesss/nexo/internal/shell"
 )
 
+type renderFrame struct {
+	width, height     int
+	sized             bool
+	tab               Tab
+	query             []rune
+	rows              []row
+	cursor            string
+	marked            map[picker.ContainerRef]bool
+	markedTargetsList []picker.ContainerRef
+	now               func() time.Time
+	toast             string
+	refreshErr        error
+	gitErrors         map[string]string
+	projection        rowProjection
+	confirmKill       bool
+	renameMode        bool
+	renameInput       []rune
+}
+
+func (m Model) frame() renderFrame {
+	projection := m.projection()
+	return renderFrame{
+		width: m.width, height: m.height, sized: m.sized, tab: m.input.tab,
+		query: append([]rune(nil), m.input.query...), rows: m.rows,
+		cursor: m.input.cursor, marked: m.input.marked,
+		markedTargetsList: m.input.markedTargetsCatalog(m.catalog), now: m.now,
+		toast: m.toast, refreshErr: m.source.refreshErr, gitErrors: m.gitErrors,
+		projection: projection, confirmKill: m.input.confirmKill,
+		renameMode: m.input.renameMode, renameInput: append([]rune(nil), m.input.renameInput...),
+	}
+}
+
+func (m Model) View() string { return m.frame().view() }
+
+func (m renderFrame) currentRow() (row, bool) {
+	for _, candidate := range m.rows {
+		if candidate.id == m.cursor && candidate.cursorable {
+			return candidate, true
+		}
+	}
+	return row{}, false
+}
+
+func (m renderFrame) currentItem() (row, bool) {
+	value, ok := m.currentRow()
+	return value, ok && value.kind == itemRow
+}
+
+func (m renderFrame) currentContainer() bool {
+	current, ok := m.currentItem()
+	return ok && current.place.Kind == picker.ContainerKind && current.place.ContainerID != ""
+}
+
+func (m renderFrame) markedTargets() []picker.ContainerRef {
+	return append([]picker.ContainerRef(nil), m.markedTargetsList...)
+}
+
+type hitTarget struct {
+	tab   Tab
+	rowID string
+	fold  bool
+}
+
+// hitTest is the rendering seam consumed by input. It uses the same frame,
+// rows, layout, and tab counts that View renders, so mouse coordinates cannot
+// drift from the visible presentation.
+func (m renderFrame) hitTest(x, y int) hitTarget {
+	if y == 0 {
+		offset := 0
+		for _, item := range []struct {
+			name string
+			tab  Tab
+		}{{"Agents", AgentsTab}, {"Containers", ContainersTab}, {"Projects", ProjectsTab}} {
+			width := shell.StringWidth(item.name) + shell.StringWidth(fmt.Sprintf(" %d", m.projection.MatchCount(item.tab)))
+			if x >= offset && x < offset+width {
+				return hitTarget{tab: item.tab}
+			}
+			offset += width + 3
+		}
+		return hitTarget{}
+	}
+	if y < 2 || y >= m.height-1 {
+		return hitTarget{}
+	}
+	lines, start := m.bodyLayout(m.height - 3)
+	lineIndex := start + y - 2
+	if lineIndex < 0 || lineIndex >= len(lines) || lines[lineIndex].rowID == "" {
+		return hitTarget{}
+	}
+	for _, candidate := range m.rows {
+		if candidate.id != lines[lineIndex].rowID || !candidate.cursorable {
+			continue
+		}
+		fold := candidate.foldable && x >= 2+shell.StringWidth(foldIndent(candidate)) && x < 2+shell.StringWidth(foldIndent(candidate))+shell.StringWidth(foldArrow(candidate))
+		return hitTarget{rowID: candidate.id, fold: fold}
+	}
+	return hitTarget{}
+}
+
 type bodyLine struct {
 	text  string
 	rowID string
@@ -68,7 +167,7 @@ var palette = struct {
 	Accent:     lipgloss.AdaptiveColor{Light: "#4E7A00", Dark: "#B8F15A"},
 }
 
-func (m Model) View() string {
+func (m renderFrame) view() string {
 	if !m.sized || m.width <= 0 || m.height <= 0 {
 		return ""
 	}
@@ -89,13 +188,13 @@ func (m Model) View() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m Model) tabLine() string {
+func (m renderFrame) tabLine() string {
 	parts := make([]string, 0, 3)
 	for _, item := range []struct {
 		name string
 		tab  Tab
 	}{{"Agents", AgentsTab}, {"Containers", ContainersTab}, {"Projects", ProjectsTab}} {
-		count := m.projection().MatchCount(item.tab)
+		count := m.projection.MatchCount(item.tab)
 		label := item.name
 		countText := fmt.Sprintf(" %d", count)
 		if item.tab == m.tab {
@@ -108,10 +207,10 @@ func (m Model) tabLine() string {
 	return fit(strings.Join(parts, "   "), m.width)
 }
 
-func (m Model) searchLine() string {
+func (m renderFrame) searchLine() string {
 	count := ""
 	if len(m.query) > 0 {
-		matches := m.projection().MatchCount(m.tab)
+		matches := m.projection.MatchCount(m.tab)
 		label := "matches"
 		if matches == 1 {
 			label = "match"
@@ -133,7 +232,7 @@ func (m Model) searchLine() string {
 	return fit(prompt+strings.Repeat(" ", max(0, gap))+count, m.width)
 }
 
-func (m Model) bodyLayout(height int) ([]bodyLine, int) {
+func (m renderFrame) bodyLayout(height int) ([]bodyLine, int) {
 	lines := []bodyLine{}
 	selectedLine := -1
 	for _, row := range m.rows {
@@ -169,7 +268,7 @@ func (m Model) bodyLayout(height int) ([]bodyLine, int) {
 	return lines, start
 }
 
-func (m Model) renderBody(height int) []string {
+func (m renderFrame) renderBody(height int) []string {
 	lines, start := m.bodyLayout(height)
 	if height <= 0 {
 		return nil
@@ -188,7 +287,7 @@ func (m Model) renderBody(height int) []string {
 	return out
 }
 
-func (m Model) rowText(row row) (string, string) {
+func (m renderFrame) rowText(row row) (string, string) {
 	selected := row.cursorable && row.id == m.cursor
 	marker := "  "
 	// Secondary agent details may occupy a second line, but the selection
@@ -232,7 +331,7 @@ func (m Model) rowText(row row) (string, string) {
 	}
 }
 
-func (m Model) agentText(row row, marker string, selected bool) (string, string) {
+func (m renderFrame) agentText(row row, marker string, selected bool) (string, string) {
 	a := row.agent
 	container := a.Container
 	nameStyle := bold()
@@ -274,7 +373,7 @@ func stateText(agent capabilities.Agent, text string, selected bool) string {
 	return selectedStateMarkerStart + selectedStateColor(agent).Render(text) + selectedStateMarkerEnd
 }
 
-func (m Model) containerText(row row, marker string, selected bool) (string, string) {
+func (m renderFrame) containerText(row row, marker string, selected bool) (string, string) {
 	name := sanitize(row.place.ContainerName)
 	if row.nameWidth > 0 {
 		name = shell.Truncate(name, row.nameWidth, "…")
@@ -311,7 +410,7 @@ func (m Model) containerText(row row, marker string, selected bool) (string, str
 // folder on the left takes only what is left over. The folder is left-
 // truncated and dropped before the name gives up cells; the branch truncates
 // before its Git summary, which stays visible.
-func (m Model) projectLayout() projectColumns {
+func (m renderFrame) projectLayout() projectColumns {
 	layout := projectColumns{search: string(m.query) != ""}
 	maxName, maxGit, maxSummary, maxPath := 0, 0, 0, 0
 	for _, candidate := range m.rows {
@@ -412,7 +511,7 @@ func min(a, b int) int {
 	return b
 }
 
-func (m Model) placeText(row row, marker string, selected bool) (string, string) {
+func (m renderFrame) placeText(row row, marker string, selected bool) (string, string) {
 	if row.place.Kind != picker.ProjectKind {
 		return marker + highlightText(projectLabel(row.place), string(m.query), selected), ""
 	}
@@ -441,7 +540,7 @@ func (m Model) placeText(row row, marker string, selected bool) (string, string)
 	return marker + line, ""
 }
 
-func (m Model) projectGitStyled(place picker.Place, width int, selected bool) string {
+func (m renderFrame) projectGitStyled(place picker.Place, width int, selected bool) string {
 	if width <= 0 {
 		return ""
 	}
@@ -467,7 +566,7 @@ func (m Model) projectGitStyled(place picker.Place, width int, selected bool) st
 	return shell.Truncate(branch, branchWidth, "") + "  " + summary
 }
 
-func (m Model) projectPathCell(group string, width int, selected bool) string {
+func (m renderFrame) projectPathCell(group string, width int, selected bool) string {
 	path := shell.TruncateLeft(abbreviateHome(group)+"/", width, "…")
 	pathText := highlightText(path, string(m.query), selected)
 	if !strings.Contains(pathText, "\x1b[") {
@@ -489,7 +588,7 @@ func projectBranch(place picker.Place) string {
 	return ""
 }
 
-func (m Model) projectSummary(place picker.Place) string {
+func (m renderFrame) projectSummary(place picker.Place) string {
 	if errText := sanitize(m.gitErrors[place.Path]); errText != "" {
 		return "git: error " + errText
 	}
@@ -516,7 +615,7 @@ func (m Model) projectSummary(place picker.Place) string {
 	return strings.Join(parts, " ")
 }
 
-func (m Model) projectSummaryStyled(place picker.Place) string {
+func (m renderFrame) projectSummaryStyled(place picker.Place) string {
 	if errText := sanitize(m.gitErrors[place.Path]); errText != "" {
 		return muted().Render("git: error " + errText)
 	}
@@ -543,7 +642,7 @@ func (m Model) projectSummaryStyled(place picker.Place) string {
 	return strings.Join(parts, " ")
 }
 
-func (m Model) footer() string {
+func (m renderFrame) footer() string {
 	if m.toast != "" {
 		return fit(accent().Render(sanitize(m.toast)), m.width)
 	}

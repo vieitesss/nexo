@@ -106,7 +106,7 @@ func noBackgroundSGR(t *testing.T, frame string) {
 
 func frameFor(t *testing.T, model Model, tab Tab) string {
 	t.Helper()
-	model.switchTo(tab)
+	model.input.switchTo(tab)
 	model.SetSize(100, 30)
 	frame := model.View()
 	noBackgroundSGR(t, frame)
@@ -124,9 +124,9 @@ func TestNoBackgroundSGRForEveryTabAndState(t *testing.T) {
 
 		func(*Model) {},
 		func(m *Model) { m.SetQuery("o") },
-		func(m *Model) { m.toggleMark() },
-		func(m *Model) { m.confirmKill = true },
-		func(m *Model) { m.renameMode = true },
+		func(m *Model) { m.input.toggleMark(m.rows) },
+		func(m *Model) { m.input.confirmKill = true },
+		func(m *Model) { m.input.renameMode = true },
 		func(m *Model) { m.SetToast("updated") },
 	}
 	for _, profile := range []termenv.Profile{termenv.ANSI, termenv.ANSI256, termenv.TrueColor} {
@@ -251,16 +251,16 @@ func TestActionKeysAndEsc(t *testing.T) {
 		t.Fatalf("Ctrl-T marks = %v", model.Marked())
 	}
 	model = updateModel(t, model, keyMsg(tea.KeyCtrlX))
-	if !model.confirmKill {
+	if !model.input.confirmKill {
 		t.Fatal("Ctrl-X did not enter confirmation")
 	}
 	model = updateModel(t, model, keyMsg(tea.KeyRunes, 'n'))
-	if model.confirmKill {
+	if model.input.confirmKill {
 		t.Fatal("n did not cancel kill")
 	}
 	model.deps.RenameContainer = func(context.Context, picker.ContainerRef, string) error { return nil }
 	model = updateModel(t, model, keyMsg(tea.KeyCtrlR))
-	if !model.renameMode {
+	if !model.input.renameMode {
 		t.Fatal("Ctrl-R did not enter rename")
 	}
 	for _, value := range []rune{'n', 'e', 'w'} {
@@ -268,7 +268,7 @@ func TestActionKeysAndEsc(t *testing.T) {
 	}
 	updated, cmd := model.Update(keyMsg(tea.KeyEnter))
 	model = updated.(Model)
-	if cmd == nil || !model.actionInFlight {
+	if cmd == nil || !model.input.actionInFlight {
 		t.Fatal("Enter did not accept rename")
 	}
 	model = updateModel(t, model, cmd())
@@ -343,19 +343,19 @@ func TestFooterOnlyAdvertisesCurrentActions(t *testing.T) {
 	model := NewModel(context.Background(), richDeps(), ProjectsTab)
 	model.SetSize(100, 10)
 	model = updateModel(t, model, keyMsg(tea.KeyUp))
-	groupFooter := shell.Plain(model.footer())
+	groupFooter := shell.Plain(model.frame().footer())
 	if strings.Contains(groupFooter, "Enter") || strings.Contains(groupFooter, "Ctrl-R") {
 		t.Fatalf("group footer advertises unavailable action: %q", groupFooter)
 	}
 	model = updateModel(t, model, keyMsg(tea.KeyRight))
 	model = updateModel(t, model, keyMsg(tea.KeyDown))
-	projectFooter := shell.Plain(model.footer())
+	projectFooter := shell.Plain(model.frame().footer())
 	if !strings.Contains(projectFooter, "Enter") || !strings.Contains(projectFooter, "fold") {
 		t.Fatalf("project footer has wrong actions: %q", projectFooter)
 	}
 	model = NewModel(context.Background(), richDeps(), ContainersTab)
 	model.SetSize(100, 10)
-	containerFooter := shell.Plain(model.footer())
+	containerFooter := shell.Plain(model.frame().footer())
 	for _, action := range []string{"Enter", "Ctrl-X", "Ctrl-R", "Ctrl-T"} {
 		if !strings.Contains(containerFooter, action) {
 			t.Fatalf("container footer missing %q: %q", action, containerFooter)
@@ -436,7 +436,7 @@ func TestSelectedRowUsesLightForegroundAcrossTheFullWidth(t *testing.T) {
 				t.Fatalf("tab %q has no cursorable rows", tab)
 			}
 			for _, id := range cursorable {
-				model.cursor = id
+				model.input.cursor = id
 				lines := strings.Split(model.View(), "\n")
 				painted := 0
 				for _, line := range lines[2 : len(lines)-1] {
@@ -653,14 +653,14 @@ func TestSelectedRowHasOnlySelectionForeground(t *testing.T) {
 			model.SetSize(120, 30)
 			model.SetQuery("con")
 			if tab == ContainersTab {
-				model.toggleMark()
+				model.input.toggleMark(model.rows)
 			}
 			cues := map[string]bool{}
 			for _, row := range model.rows {
 				if !row.cursorable {
 					continue
 				}
-				model.cursor = row.id
+				model.input.cursor = row.id
 				lines := strings.Split(model.View(), "\n")
 				painted := 0
 				for _, line := range lines[2 : len(lines)-1] {

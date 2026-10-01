@@ -21,12 +21,12 @@ func TestKillConfirmationRunsInTUI(t *testing.T) {
 	model := NewModel(context.Background(), deps, ContainersTab)
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlT})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlX})
-	if !model.confirmKill {
+	if !model.input.confirmKill {
 		t.Fatal("kill did not enter confirmation")
 	}
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	model = updated.(Model)
-	if cmd == nil || !model.actionInFlight {
+	if cmd == nil || !model.input.actionInFlight {
 		t.Fatalf("kill did not start in TUI: cmd=%v model=%+v", cmd != nil, model)
 	}
 	model = updateModel(t, model, cmd())
@@ -65,7 +65,7 @@ func TestRenamePromptRunsInTUI(t *testing.T) {
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n', 'e', 'w'}})
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if cmd == nil || !model.actionInFlight {
+	if cmd == nil || !model.input.actionInFlight {
 		t.Fatal("rename did not start in TUI")
 	}
 	model = updateModel(t, model, cmd())

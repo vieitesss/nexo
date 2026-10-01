@@ -57,7 +57,7 @@ func TestMouseIgnoresActionInFlight(t *testing.T) {
 	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
 	model.SetSize(80, 8)
 	before := model.Cursor()
-	model.actionInFlight = true
+	model.input.actionInFlight = true
 	model = updateModel(t, model, tea.MouseMsg{X: 8, Y: 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	if model.Cursor() != before {
 		t.Fatalf("cursor changed during action: %q -> %q", before, model.Cursor())
@@ -78,9 +78,9 @@ func TestMouseIgnoresModalClicksAndWheel(t *testing.T) {
 			model.SetSize(80, 8)
 			beforeCursor, beforeRows := model.Cursor(), append([]string(nil), model.Rows()...)
 			if mode == "kill" {
-				model.confirmKill = true
+				model.input.confirmKill = true
 			} else {
-				model.renameMode = true
+				model.input.renameMode = true
 			}
 			model = updateModel(t, model, tea.MouseMsg{X: 8, Y: 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 			model = updateModel(t, model, tea.MouseMsg{X: 8, Y: 3, Button: tea.MouseButtonWheelDown})
@@ -90,10 +90,10 @@ func TestMouseIgnoresModalClicksAndWheel(t *testing.T) {
 			if got := model.Rows(); strings.Join(got, "\x00") != strings.Join(beforeRows, "\x00") {
 				t.Fatalf("rows changed during %s modal: %v -> %v", mode, beforeRows, got)
 			}
-			if mode == "kill" && !model.confirmKill {
+			if mode == "kill" && !model.input.confirmKill {
 				t.Fatal("kill confirmation ended from a mouse event")
 			}
-			if mode == "rename" && !model.renameMode {
+			if mode == "rename" && !model.input.renameMode {
 				t.Fatal("rename mode ended from a mouse event")
 			}
 		})
@@ -187,11 +187,11 @@ func TestMouseUsesRenderedBodyLayout(t *testing.T) {
 	for range 3 {
 		model = updateModel(t, model, tea.MouseMsg{X: 1, Y: 3, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
 	}
-	_, start := model.bodyLayout(model.height - 3)
+	_, start := model.frame().bodyLayout(model.height - 3)
 	if start == 0 {
 		t.Fatal("wheel did not scroll the rendered body")
 	}
-	lines, _ := model.bodyLayout(model.height - 3)
+	lines, _ := model.frame().bodyLayout(model.height - 3)
 	visibleIndex := start
 	for index := start; index < len(lines); index++ {
 		if lines[index].rowID == "" {
@@ -224,7 +224,7 @@ func TestMouseSelectsFlatSearchRow(t *testing.T) {
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
 	model.SetQuery("gitops")
 	model.SetSize(120, 12)
-	lines, start := model.bodyLayout(model.height - 3)
+	lines, start := model.frame().bodyLayout(model.height - 3)
 	visibleIndex := -1
 	for index := start; index < len(lines); index++ {
 		if lines[index].rowID != "" && lines[index].rowID != model.Cursor() {
