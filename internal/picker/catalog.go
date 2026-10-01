@@ -139,12 +139,14 @@ func (c *Catalog) Snapshot() CatalogSnapshot {
 	local := append([]Place(nil), c.localContainers...)
 	c.normalizePlaces(local)
 	places = append(places, local...)
+	// Keep the full local snapshot as the merge base. Distinct local rows may
+	// share a machine and label, so they must never travel through the merge's
+	// extra argument; each remote snapshot then merges into that base in turn.
 	for _, machine := range c.remoteOrderForSnapshot() {
 		if source, ok := c.remote[machine]; ok {
-			places = append(places, source.places...)
+			places = MergeContainerPlaces(places, source.places)
 		}
 	}
-	places = MergeContainerPlaces(places[:len(c.projects)], places[len(c.projects):])
 	c.normalizePlaces(places)
 
 	agents := make([]CatalogAgent, 0, len(c.localAgents))
@@ -163,8 +165,9 @@ func (c *Catalog) Snapshot() CatalogSnapshot {
 	}
 
 	// Association is performed once over the complete place snapshot. This is
-	// the seam that keeps ID matching and unique-label fallback scoped to each
-	// machine, instead of making every row ask the helper independently.
+	// the seam that keeps authoritative-ID matching and the unique-label
+	// fallback scoped to each machine, instead of making every row ask the
+	// helper independently.
 	for _, machine := range c.snapshotMachines(places, agents) {
 		var source []capabilities.Agent
 		if machine == localMachine {

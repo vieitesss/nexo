@@ -54,6 +54,38 @@ func TestListPlacesJSONIncludesContainersAndPreview(t *testing.T) {
 	}
 }
 
+func TestListPlacesKeepsSameLabelContainers(t *testing.T) {
+	var output, stderr strings.Builder
+	err := listCommand{}.Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Config:    config.Config{ProjectsConfig: config.ProjectsConfig{Paths: []string{t.TempDir()}}},
+		Adapter: fakeContainerAdapter{containers: []capabilities.Container{
+			{ID: "$1", Name: "api", Machine: "host"},
+			{ID: "$2", Name: "api", Machine: "host"},
+		}},
+		Stdout: &output,
+		Stderr: &stderr,
+		JSON:   true,
+		Args:   []string{"--places"},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	var places []picker.Place
+	if err := json.Unmarshal([]byte(output.String()), &places); err != nil {
+		t.Fatalf("JSON = %q: %v", output.String(), err)
+	}
+	ids := make([]string, 0, len(places))
+	for _, place := range places {
+		if place.Kind == picker.ContainerKind {
+			ids = append(ids, place.ContainerID)
+		}
+	}
+	if len(ids) != 2 || ids[0] != "$1" || ids[1] != "$2" {
+		t.Fatalf("ids = %v, want both same-label local containers in %#v", ids, places)
+	}
+}
+
 func TestListPlacesMergesLocalProxyWithRemoteContainer(t *testing.T) {
 	var output, stderr strings.Builder
 	runner := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {

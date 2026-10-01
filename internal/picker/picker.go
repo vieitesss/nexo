@@ -73,21 +73,26 @@ type AgentBatch struct {
 // DisplayRemainder keep ranking and rendering independent of filesystem paths;
 // Path and Group remain populated for project places.
 type Place struct {
-	Kind             PlaceKind  `json:"kind"`
-	Path             string     `json:"path,omitempty"`
-	Group            string     `json:"group,omitempty"`
-	Machine          string     `json:"machine,omitempty"`
-	SearchText       string     `json:"search_text,omitempty"`
-	DisplayRemainder string     `json:"display_remainder,omitempty"`
-	ContainerID      string     `json:"container_id,omitempty"`
-	ContainerName    string     `json:"container_name,omitempty"`
-	Preview          string     `json:"preview,omitempty"`
-	Activity         *time.Time `json:"activity,omitempty"`
-	Proxy            bool       `json:"proxy,omitempty"`
-	Payload          any        `json:"-"`
-	OpenAction       OpenAction `json:"-"`
-	Git              bool       `json:"git,omitempty"`
-	LinkedWorktree   bool       `json:"linked_worktree,omitempty"`
+	Kind             PlaceKind `json:"kind"`
+	Path             string    `json:"path,omitempty"`
+	Group            string    `json:"group,omitempty"`
+	Machine          string    `json:"machine,omitempty"`
+	SearchText       string    `json:"search_text,omitempty"`
+	DisplayRemainder string    `json:"display_remainder,omitempty"`
+	ContainerID      string    `json:"container_id,omitempty"`
+	ContainerName    string    `json:"container_name,omitempty"`
+	// RemoteContainerID is the stable ID of the container a proxy row
+	// attaches to. Merging fills it from the remote row so agent association
+	// can match the remote identity without falling back to a label for every
+	// ID-bearing agent.
+	RemoteContainerID string     `json:"-"`
+	Preview           string     `json:"preview,omitempty"`
+	Activity          *time.Time `json:"activity,omitempty"`
+	Proxy             bool       `json:"proxy,omitempty"`
+	Payload           any        `json:"-"`
+	OpenAction        OpenAction `json:"-"`
+	Git               bool       `json:"git,omitempty"`
+	LinkedWorktree    bool       `json:"linked_worktree,omitempty"`
 	// GitContext is populated asynchronously for Git project candidates.
 	GitContext *GitContext `json:"-"`
 	// Agents is the latest asynchronous agent snapshot for a container.
@@ -159,8 +164,15 @@ func MergeContainerPlaces(base, extra []Place) []Place {
 	merged := append([]Place(nil), base...)
 	indexes := make(map[string]int)
 	for index, place := range merged {
-		if place.Kind == ContainerKind {
-			indexes[containerPlaceKey(place)] = index
+		if place.Kind != ContainerKind {
+			continue
+		}
+		key := containerPlaceKey(place)
+		// Distinct rows may share a machine and label. Prefer the proxy row
+		// for a key so the remote snapshot still merges into it; the other
+		// rows stay in the snapshot untouched.
+		if existing, ok := indexes[key]; !ok || (!merged[existing].Proxy && place.Proxy) {
+			indexes[key] = index
 		}
 	}
 	for _, place := range extra {
@@ -200,6 +212,7 @@ func mergeContainerPlace(left, right Place) Place {
 	proxy.Preview = remote.Preview
 	proxy.Activity = remote.Activity
 	proxy.Agents = remote.Agents
+	proxy.RemoteContainerID = strings.TrimSpace(remote.ContainerID)
 	if remote.OpenAction != nil {
 		proxy.OpenAction = remote.OpenAction
 	}

@@ -53,6 +53,9 @@ func applyAgentDots(places []Place, agents []capabilities.Agent, machine string)
 	for _, agent := range agents {
 		if id := strings.TrimSpace(agent.ContainerID); id != "" {
 			byID[id] = append(byID[id], agent)
+			// An agent that names a container is authoritative for that ID;
+			// label fallback must not reassign it to another container.
+			continue
 		}
 		if label := strings.TrimSpace(agent.Container); label != "" {
 			byLabel[label] = append(byLabel[label], agent)
@@ -83,6 +86,9 @@ func applyAgentDots(places []Place, agents []capabilities.Agent, machine string)
 			decorations = append(decorations, decoration)
 		}
 		matches := byID[strings.TrimSpace(place.ContainerID)]
+		if len(matches) == 0 && strings.TrimSpace(place.RemoteContainerID) != "" {
+			matches = byID[strings.TrimSpace(place.RemoteContainerID)]
+		}
 		if len(matches) == 0 && labelCounts[strings.TrimSpace(place.ContainerName)] == 1 {
 			matches = byLabel[strings.TrimSpace(place.ContainerName)]
 		}
