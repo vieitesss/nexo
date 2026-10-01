@@ -317,7 +317,7 @@ func (p rowProjection) agentRows() []row {
 		if len(children) == 0 && !machineMatch && remoteErr == "" && remoteWarn == "" && !isRemote && string(p.query) != "" {
 			continue
 		}
-		rows = append(rows, row{id: "machine:" + machine, kind: machineRow, label: shortenMachine(machine), group: machine, machine: machine, count: len(children), cursorable: true, remoteErr: remoteErr, remoteWarn: remoteWarn, loading: isRemote && !p.remoteLoaded[machine]})
+		rows = append(rows, row{id: "machine:" + machine, kind: machineRow, label: shortenMachine(machine), group: machine, machine: machine, count: len(children), remoteErr: remoteErr, remoteWarn: remoteWarn, loading: isRemote && !p.remoteLoaded[machine]})
 		rows = append(rows, children...)
 		if machine != machines[len(machines)-1] {
 			rows = append(rows, row{kind: separatorRow})
@@ -389,7 +389,7 @@ func (p rowProjection) containerRows() []row {
 		if len(children) == 0 && !machineMatch && remoteErr == "" && !isRemote && string(p.query) != "" {
 			continue
 		}
-		rows = append(rows, row{id: "machine:" + machine, kind: machineRow, label: shortenMachine(machine), group: machine, machine: machine, count: len(children), cursorable: true, remoteErr: remoteErr, remoteWarn: remoteWarn, loading: isRemote && !p.remoteLoaded[machine]})
+		rows = append(rows, row{id: "machine:" + machine, kind: machineRow, label: shortenMachine(machine), group: machine, machine: machine, count: len(children), remoteErr: remoteErr, remoteWarn: remoteWarn, loading: isRemote && !p.remoteLoaded[machine]})
 		rows = append(rows, children...)
 		if machineIndex < len(machines)-1 {
 			rows = append(rows, row{kind: separatorRow})

@@ -96,9 +96,9 @@ func TestMarkedNameKeepsAccentForegroundWhenUnselected(t *testing.T) {
 	model = updateModel(t, model, keyMsg(tea.KeyCtrlT))
 	model.SetQuery("one")
 	model.SetSize(80, 24)
-	// Move the cursor off the marked container: a selected row drops every
-	// per-segment colour and keeps the mark as bold weight instead.
-	model.input.cursor = "machine:" + picker.LocalMachine()
+	// Clear the selection: a selected row drops every per-segment colour and
+	// keeps the mark as bold weight instead.
+	model.input.cursor = ""
 	var line string
 	for _, candidate := range strings.Split(model.View(), "\n") {
 		if strings.Contains(shell.Plain(candidate), "◆ one") {

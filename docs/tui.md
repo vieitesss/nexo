@@ -8,8 +8,11 @@ refreshed.
 
 Agents and containers are grouped by machine. The local machine appears first,
 followed by remote machines; each machine header is bold with a muted agent or
-container count. Agents stay attention-ordered within their machine, and a
-remote header shows loading, warning, or error status while discovery runs.
+container count. A machine header has no action, so it is not selectable:
+keyboard navigation and clicks skip it, and an empty, loading, or failed
+section simply leaves nothing selected. Agents stay attention-ordered within
+their machine, and a remote header shows loading, warning, or error status
+while discovery runs.
 Container rows show the container name followed by one coloured state dot per
 agent. They do not repeat harness names, state words, ages, activity ages, or
 proxy labels. Agent rows show the container name without a machine prefix.
@@ -17,7 +20,8 @@ proxy labels. Agent rows show the container name without a machine prefix.
 ## Projects
 
 Projects are grouped by their containing folder. On an empty query every folder
-and every checkout with linked worktrees starts folded. Right unfolds the
+and every checkout with linked worktrees starts folded. A folder header is
+selectable because it folds; Left and Right act on it. Right unfolds the
 selected folder or checkout. Left folds the selected row when it is expanded —
 a folder header or a checkout with worktrees — and keeps the selection there;
 otherwise it folds the parent and moves the selection there, so a worktree
