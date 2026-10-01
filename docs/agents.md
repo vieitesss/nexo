@@ -62,12 +62,16 @@ focusing it. Focusing one of several panes that share a window marks only that
 pane seen; the window stays highlighted until the last unseen pane in it
 receives focus. Marking a pane in another window never clears this one. When a
 window clears, nexo unsets the two style options so the window returns to your
-global window list style; a per-window style you set yourself on a window nexo
-highlighted is replaced for the duration of the highlight. Changing the
-configured colour re-renders highlighted windows on the next poll. A window
-with a working agent is never highlighted. The highlight clears through the
-same focus hooks as seen-marking, so it needs `focus-events on` as described
-above. Herdr owns this natively, so nexo never highlights Herdr windows.
+global window list style; a per-window `window-status-style` or
+`window-status-current-style` you set yourself on that window is discarded, not
+restored. The colour is read once when the watcher starts, so restart
+`nexo agents watch` after changing `highlight-color`. A working agent does not
+contribute to the highlight, but another unseen stopped agent in the same
+window does. The highlight clears through the same focus hooks as seen-marking,
+so it needs `focus-events on` as described above. An orderly watcher exit clears
+the highlights it owns; after a crash the marker survives, and the next watcher
+start reconciles it. Herdr owns this natively, so nexo never highlights Herdr
+windows.
 
 ## Notifications
 
