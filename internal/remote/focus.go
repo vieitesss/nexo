@@ -29,8 +29,8 @@ func FocusRemotePane(ctx context.Context, commandRunner runner.CommandRunner, ss
 	switch kind {
 	case KindTmux:
 		commands = [][]string{
-			{"tmux", "select-window", "-t", paneID},
-			{"tmux", "select-pane", "-t", paneID},
+			{"tmux", "-u", "select-window", "-t", paneID},
+			{"tmux", "-u", "select-pane", "-t", paneID},
 		}
 	case KindHerdr:
 		// Herdr's agent focus command runs against the server on the remote

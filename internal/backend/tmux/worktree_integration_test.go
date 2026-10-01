@@ -22,7 +22,11 @@ func (r *realGitTmuxRunner) Run(ctx context.Context, name string, args ...string
 	if name == "git" {
 		return exec.CommandContext(ctx, name, args...).CombinedOutput()
 	}
-	switch args[0] {
+	operation := args[0]
+	if operation == "-u" && len(args) > 1 {
+		operation = args[1]
+	}
+	switch operation {
 	case "has-session":
 		return []byte("can't find session"), errors.New("can't find session")
 	case "switch-client":
@@ -108,7 +112,7 @@ func TestCreateWorktreeRollbackRemovesRealGitStateAndSession(t *testing.T) {
 	}
 	foundKill := false
 	for _, command := range runner.calls {
-		if command.name == "tmux" && len(command.args) > 0 && command.args[0] == "kill-session" {
+		if command.name == "tmux" && len(command.args) > 1 && command.args[1] == "kill-session" {
 			foundKill = true
 		}
 	}

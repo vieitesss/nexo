@@ -12,7 +12,7 @@ func TestInitInstallsHooksAndWatcherWithoutBindings(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 	for _, current := range runner.calls {
-		if len(current.args) > 0 && current.args[0] == "bind-key" {
+		if len(current.args) > 1 && current.args[1] == "bind-key" {
 			t.Fatalf("calls = %#v, want no key bindings", runner.calls)
 		}
 	}
@@ -23,10 +23,10 @@ func TestInitInstallsHooksAndWatcherWithoutBindings(t *testing.T) {
 
 func hasCall(calls []call, name string, args ...string) bool {
 	for _, current := range calls {
-		if current.name != "tmux" || len(current.args) < 1+len(args) || current.args[0] != name {
+		if current.name != "tmux" || len(current.args) < 2+len(args) || current.args[0] != "-u" || current.args[1] != name {
 			continue
 		}
-		if reflect.DeepEqual(current.args[1:1+len(args)], args) {
+		if reflect.DeepEqual(current.args[2:2+len(args)], args) {
 			return true
 		}
 	}

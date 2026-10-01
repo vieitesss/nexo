@@ -27,7 +27,7 @@ type fakeRunner struct {
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, call{name: name, args: append([]string(nil), args...)})
-	key := strings.Join(args, " ")
+	key := commandKey(args)
 	if err, ok := f.fail[key]; ok {
 		return []byte(err.Error()), err
 	}
@@ -44,13 +44,20 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	return f.outputs[key], nil
 }
 
+// commandKey builds the fake's lookup key. The global -u flag that nexo always
+// passes to tmux is ignored for lookups so table tests stay focused on the
+// operation; raw arguments are still recorded in calls for exact assertions.
+func commandKey(args []string) string {
+	return strings.TrimPrefix(strings.Join(args, " "), "-u ")
+}
+
 func (f *fakeRunner) RunInteractive(_ context.Context, name string, args ...string) error {
 	f.interactiveCalls++
 	f.calls = append(f.calls, call{name: name, args: append([]string(nil), args...)})
 	if f.interactiveCheck != nil {
 		f.interactiveCheck()
 	}
-	key := strings.Join(args, " ")
+	key := commandKey(args)
 	return f.fail[key]
 }
 
@@ -84,10 +91,10 @@ func TestContainerActionsUseBackendNativeCommands(t *testing.T) {
 		t.Fatalf("KillContainers() error = %v", err)
 	}
 	want := []call{
-		{name: "tmux", args: []string{"switch-client", "-t", "$1"}},
-		{name: "tmux", args: []string{"rename-session", "-t", "$1", "renamed"}},
-		{name: "tmux", args: []string{"kill-session", "-t", "$1"}},
-		{name: "tmux", args: []string{"kill-session", "-t", "$2"}},
+		{name: "tmux", args: []string{"-u", "switch-client", "-t", "$1"}},
+		{name: "tmux", args: []string{"-u", "rename-session", "-t", "$1", "renamed"}},
+		{name: "tmux", args: []string{"-u", "kill-session", "-t", "$1"}},
+		{name: "tmux", args: []string{"-u", "kill-session", "-t", "$2"}},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
@@ -103,9 +110,9 @@ func TestKillContainersKillsCurrentSessionLast(t *testing.T) {
 		t.Fatalf("KillContainers() error = %v", err)
 	}
 	want := []call{
-		{name: "tmux", args: []string{"display-message", "-p", "-t", "%current", "#{session_id}"}},
-		{name: "tmux", args: []string{"kill-session", "-t", "$2"}},
-		{name: "tmux", args: []string{"kill-session", "-t", "$1"}},
+		{name: "tmux", args: []string{"-u", "display-message", "-p", "-t", "%current", "#{session_id}"}},
+		{name: "tmux", args: []string{"-u", "kill-session", "-t", "$2"}},
+		{name: "tmux", args: []string{"-u", "kill-session", "-t", "$1"}},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want current session last: %#v", runner.calls, want)
@@ -133,7 +140,7 @@ func TestOpenProjectSwitchesToExistingExactSessionInsideTmux(t *testing.T) {
 	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
-	want := []call{{name: "tmux", args: []string{"has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"switch-client", "-t", "=acme_app"}}}
+	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "switch-client", "-t", "=acme_app"}}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
@@ -147,7 +154,7 @@ func TestOpenProjectCreatesAndAttachesMissingSessionOutsideTmux(t *testing.T) {
 	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
-	want := []call{{name: "tmux", args: []string{"has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"new-session", "-d", "-s", "acme_app", "-c", "/work/acme/app"}}, {name: "tmux", args: []string{"attach-session", "-t", "=acme_app"}}}
+	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "new-session", "-d", "-s", "acme_app", "-c", "/work/acme/app"}}, {name: "tmux", args: []string{"-u", "attach-session", "-t", "=acme_app"}}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
@@ -205,9 +212,9 @@ func TestFocusPaneSwitchesContainerWindowAndPaneByExactID(t *testing.T) {
 		t.Fatalf("FocusPane() error = %v", err)
 	}
 	want := []call{
-		{name: "tmux", args: []string{"switch-client", "-t", "%7"}},
-		{name: "tmux", args: []string{"select-window", "-t", "%7"}},
-		{name: "tmux", args: []string{"select-pane", "-t", "%7"}},
+		{name: "tmux", args: []string{"-u", "switch-client", "-t", "%7"}},
+		{name: "tmux", args: []string{"-u", "select-window", "-t", "%7"}},
+		{name: "tmux", args: []string{"-u", "select-pane", "-t", "%7"}},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
@@ -233,9 +240,9 @@ func TestFocusPaneSelectsAndAttachesOutsideTmux(t *testing.T) {
 		t.Fatalf("FocusPane() error = %v", err)
 	}
 	want := []call{
-		{name: "tmux", args: []string{"select-window", "-t", "%7"}},
-		{name: "tmux", args: []string{"select-pane", "-t", "%7"}},
-		{name: "tmux", args: []string{"attach-session", "-t", "%7"}},
+		{name: "tmux", args: []string{"-u", "select-window", "-t", "%7"}},
+		{name: "tmux", args: []string{"-u", "select-pane", "-t", "%7"}},
+		{name: "tmux", args: []string{"-u", "attach-session", "-t", "%7"}},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)

@@ -145,7 +145,7 @@ func (s *Source) listAgents(ctx context.Context) ([]capabilities.Agent, error) {
 	}
 	observed := make([]observedPane, 0, len(panes))
 	for _, p := range panes {
-		screen, err := s.runner.Run(ctx, "tmux", "capture-pane", "-p", "-J", "-t", p.id)
+		screen, err := s.runTmux(ctx, "capture-pane", "-p", "-J", "-t", p.id)
 		if err != nil {
 			// A pane can disappear between list-panes and capture-pane. It is
 			// not an error for the navigator to omit that pane.
@@ -240,9 +240,13 @@ func (s *Source) listAgents(ctx context.Context) ([]capabilities.Agent, error) {
 	return agents, nil
 }
 
+func (s *Source) runTmux(ctx context.Context, args ...string) ([]byte, error) {
+	return s.runner.Run(ctx, "tmux", UTF8Args(args...)...)
+}
+
 func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pane, error) {
 	format := "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{session_id}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_index}\t#{pane_current_path}"
-	output, err := s.runner.Run(ctx, "tmux", "list-panes", "-a", "-F", format)
+	output, err := s.runTmux(ctx, "list-panes", "-a", "-F", format)
 	if err != nil {
 		return nil, fmt.Errorf("list tmux panes: %w", err)
 	}
@@ -256,32 +260,14 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 			continue
 		}
 		fields := strings.Split(line, "\t")
-		if len(fields) < 7 {
+		if len(fields) != 9 {
 			continue
 		}
-		containerIDField := 3
 		containerField := 4
 		windowField := 5
 		windowIndexField := 6
 		paneIndexField := 7
 		pathField := 8
-		if len(fields) == 8 {
-			// Accept the pre-session-id format from older tmux adapters.
-			containerIDField = -1
-			containerField = 3
-			windowField = 4
-			windowIndexField = 5
-			paneIndexField = 6
-			pathField = 7
-		} else if len(fields) < 8 {
-			// Accept the older format without a window name.
-			containerIDField = -1
-			containerField = 3
-			windowField = 4
-			windowIndexField = 4
-			paneIndexField = 5
-			pathField = 6
-		}
 		current := strings.TrimSpace(fields[2])
 		args := current
 		if !isHarness(current, allow) {
@@ -298,10 +284,7 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		if harness == "" {
 			continue
 		}
-		containerID := ""
-		if containerIDField >= 0 {
-			containerID = strings.TrimSpace(fields[containerIDField])
-		}
+		containerID := strings.TrimSpace(fields[3])
 		p := pane{
 			id:          strings.TrimSpace(fields[0]),
 			pid:         strings.TrimSpace(fields[1]),
@@ -347,7 +330,7 @@ func (s *Source) branch(ctx context.Context, path string) string {
 }
 
 func (s *Source) serverName(ctx context.Context) string {
-	output, err := s.runner.Run(ctx, "tmux", "display-message", "-p", "#{socket_path}")
+	output, err := s.runTmux(ctx, "display-message", "-p", "#{socket_path}")
 	if err != nil {
 		return "default"
 	}
@@ -572,7 +555,7 @@ func (s *Source) installHooksQuiet(ctx context.Context) error {
 }
 
 func (s *Source) installHooksWithWarning(ctx context.Context, warnFocusEvents bool) error {
-	focusEvents, err := s.runner.Run(ctx, "tmux", "show-option", "-gqv", "focus-events")
+	focusEvents, err := s.runTmux(ctx, "show-option", "-gqv", "focus-events")
 	if err != nil {
 		return fmt.Errorf("read tmux focus events: %w", err)
 	}
@@ -585,24 +568,24 @@ func (s *Source) installHooksWithWarning(ctx context.Context, warnFocusEvents bo
 	}
 	command := focusHookCommand(binary, configPath)
 	for _, hook := range []string{"pane-focus-in", "client-session-changed"} {
-		output, err := s.runner.Run(ctx, "tmux", "show-hooks", "-g", hook)
+		output, err := s.runTmux(ctx, "show-hooks", "-g", hook)
 		if err != nil {
 			return fmt.Errorf("read tmux %s hooks: %w", hook, err)
 		}
 		index := nexoHookIndex(string(output), hook)
 		if index >= 0 {
-			if _, err := s.runner.Run(ctx, "tmux", "set-hook", "-g", fmt.Sprintf("%s[%d]", hook, index), command); err != nil {
+			if _, err := s.runTmux(ctx, "set-hook", "-g", fmt.Sprintf("%s[%d]", hook, index), command); err != nil {
 				return err
 			}
 			continue
 		}
-		if _, err := s.runner.Run(ctx, "tmux", "set-hook", "-ag", hook, command); err != nil {
+		if _, err := s.runTmux(ctx, "set-hook", "-ag", hook, command); err != nil {
 			return err
 		}
 	}
 	if !focusEventsEnabled && warnFocusEvents {
 		const warning = "nexo: agent seen-marking needs 'set -g focus-events on'"
-		if _, err := s.runner.Run(ctx, "tmux", "display-message", warning); err != nil {
+		if _, err := s.runTmux(ctx, "display-message", warning); err != nil {
 			return fmt.Errorf("report tmux focus events requirement: %w", err)
 		}
 	}

@@ -40,7 +40,7 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 	r := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "tmux":
-			joined := strings.Join(args, " ")
+			joined := commandKey(args)
 			switch {
 			case strings.HasPrefix(joined, "list-panes"):
 				return []byte("%1\t99\tpi\t$1\twork\teditor\t1\t2\t/tmp\n"), nil

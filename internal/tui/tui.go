@@ -152,6 +152,7 @@ type row struct {
 	expanded     bool
 	foldable     bool
 	remoteErr    string
+	remoteWarn   string
 	loading      bool
 	activity     *time.Time
 	nameWidth    int
@@ -194,6 +195,7 @@ type Model struct {
 	remoteMachines  []string
 	remoteLoaded    map[string]bool
 	groupErrors     map[string]string
+	groupWarnings   map[string]string
 	agents          []agentRecord
 	remoteAgents    []agentRecord
 	gitErrors       map[string]string
@@ -251,7 +253,7 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	m := Model{
 		ctx: loadCtx, cancelLoads: cancelLoads, deps: deps, tab: tab, agents: newAgentRecords(deps.Agents, ""),
 		folded: make(map[string]bool), expanded: make(map[string]bool), marked: make(map[picker.ContainerRef]bool),
-		groupErrors: make(map[string]string), gitErrors: make(map[string]string), now: now, refreshErr: deps.AgentError,
+		groupErrors: make(map[string]string), groupWarnings: make(map[string]string), gitErrors: make(map[string]string), now: now, refreshErr: deps.AgentError,
 		remoteMachines: append([]string(nil), deps.RemoteMachines...), remoteLoaded: make(map[string]bool), refreshInFlight: new(bool), gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
 	}
 	for _, machine := range remoteMachines {
@@ -760,11 +762,12 @@ func (m Model) containerRows() []row {
 		}
 		_, machineMatch := picker.Rank(string(m.query), sanitize(machine))
 		remoteErr := m.groupErrors[machine]
+		remoteWarn := m.groupWarnings[machine]
 		isRemote := contains(m.remoteMachines, machine)
 		if len(children) == 0 && !machineMatch && remoteErr == "" && !isRemote && string(m.query) != "" {
 			continue
 		}
-		rows = append(rows, row{id: "machine:" + machine, kind: machineRow, label: shortenMachine(machine), group: machine, machine: machine, count: len(children), cursorable: true, remoteErr: remoteErr, loading: isRemote && !m.remoteLoaded[machine]})
+		rows = append(rows, row{id: "machine:" + machine, kind: machineRow, label: shortenMachine(machine), group: machine, machine: machine, count: len(children), cursorable: true, remoteErr: remoteErr, remoteWarn: remoteWarn, loading: isRemote && !m.remoteLoaded[machine]})
 		rows = append(rows, children...)
 		if machineIndex < len(machines)-1 {
 			rows = append(rows, row{kind: separatorRow})
@@ -1146,6 +1149,7 @@ func (m *Model) applyRemote(msg picker.RemoteBatch) {
 		return
 	}
 	m.groupErrors[machine] = sanitize(msg.Error)
+	m.groupWarnings[machine] = sanitize(msg.Warning)
 	m.remoteLoaded[machine] = true
 	seen := false
 	for _, configured := range m.remoteMachines {
@@ -1781,6 +1785,8 @@ func (m Model) rowText(row row) (string, string) {
 		value := strings.Repeat("  ", row.depth) + labelStyle.Render(highlightText(sanitize(row.label), string(m.query), selected)) + muted().Render(fmt.Sprintf("  %d", row.count))
 		if row.remoteErr != "" {
 			value += muted().Render("  " + sanitize(row.remoteErr))
+		} else if row.remoteWarn != "" {
+			value += muted().Faint(true).Render("  " + sanitize(row.remoteWarn))
 		} else if row.loading {
 			value += muted().Render("  loading…")
 		}

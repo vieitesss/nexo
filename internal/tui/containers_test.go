@@ -83,6 +83,20 @@ func TestRemoteProxyMergesWithRemoteContainerAndRemainsVisibleWhenStale(t *testi
 	}
 }
 
+func TestRemoteAgentWarningAppearsOnMachineRow(t *testing.T) {
+	model := NewModel(context.Background(), Deps{RemoteMachines: []string{"dev"}}, ContainersTab)
+	model = updateModel(t, model, picker.RemoteBatch{
+		Machine: "dev",
+		Places:  picker.ContainerPlaces([]capabilities.Container{{ID: "$1", Name: "api", Machine: "dev"}}),
+		Warning: "agents unavailable: nexo: command not found",
+	})
+	model.SetSize(120, 12)
+	plain := shell.Plain(model.View())
+	if !strings.Contains(plain, "agents unavailable: nexo: command not found") {
+		t.Fatalf("view = %q, want agent warning on the machine row", plain)
+	}
+}
+
 func TestContainerOrderingHeadersAndProxyFreeData(t *testing.T) {
 	old := time.Now().Add(-12 * time.Minute)
 	recent := time.Now().Add(-time.Minute)

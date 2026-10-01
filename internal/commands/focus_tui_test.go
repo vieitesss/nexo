@@ -62,8 +62,8 @@ func TestTUIFocusRoutesLocalAndRemoteAgentProvenance(t *testing.T) {
 		t.Fatalf("remote focus proxy=%q local pane=%q", adapter.proxied, adapter.focused)
 	}
 	if got, want := runner.calls, []string{
-		"ssh -o BatchMode=yes -o ConnectTimeout=5 -F /tmp/ssh-config dev 'tmux' 'select-window' '-t' '%7'",
-		"ssh -o BatchMode=yes -o ConnectTimeout=5 -F /tmp/ssh-config dev 'tmux' 'select-pane' '-t' '%7'",
+		"ssh -o BatchMode=yes -o ConnectTimeout=5 -F /tmp/ssh-config dev 'tmux' '-u' 'select-window' '-t' '%7'",
+		"ssh -o BatchMode=yes -o ConnectTimeout=5 -F /tmp/ssh-config dev 'tmux' '-u' 'select-pane' '-t' '%7'",
 	}; !sameStrings(got, want) {
 		t.Fatalf("remote calls = %#v, want %#v", got, want)
 	}
@@ -90,10 +90,10 @@ func TestTUIFocusRoutesTwoRemoteTmuxPanesInOneContainer(t *testing.T) {
 		t.Fatalf("remote focus used local pane=%q proxy=%q", adapter.focused, adapter.proxied)
 	}
 	if got, want := runner.calls, []string{
-		"ssh -o BatchMode=yes -o ConnectTimeout=5 dev 'tmux' 'select-window' '-t' '%7'",
-		"ssh -o BatchMode=yes -o ConnectTimeout=5 dev 'tmux' 'select-pane' '-t' '%7'",
-		"ssh -o BatchMode=yes -o ConnectTimeout=5 dev 'tmux' 'select-window' '-t' '%8'",
-		"ssh -o BatchMode=yes -o ConnectTimeout=5 dev 'tmux' 'select-pane' '-t' '%8'",
+		"ssh -o BatchMode=yes -o ConnectTimeout=5 dev 'tmux' '-u' 'select-window' '-t' '%7'",
+		"ssh -o BatchMode=yes -o ConnectTimeout=5 dev 'tmux' '-u' 'select-pane' '-t' '%7'",
+		"ssh -o BatchMode=yes -o ConnectTimeout=5 dev 'tmux' '-u' 'select-window' '-t' '%8'",
+		"ssh -o BatchMode=yes -o ConnectTimeout=5 dev 'tmux' '-u' 'select-pane' '-t' '%8'",
 	}; !sameStrings(got, want) {
 		t.Fatalf("remote calls = %#v, want %#v", got, want)
 	}

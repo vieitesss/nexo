@@ -45,6 +45,15 @@ func New(r runner.CommandRunner, inside ...bool) *Backend {
 // Name identifies this backend.
 func (Backend) Name() string { return "tmux" }
 
+// UTF8Args returns tmux arguments prefixed with the global -u flag. Without
+// it, tmux replaces control characters such as the tab used in format
+// separators when the process has no UTF-8 locale, which is the norm for
+// non-interactive SSH shells. Every tmux output nexo parses must go through
+// this helper.
+func UTF8Args(args ...string) []string {
+	return append([]string{"-u"}, args...)
+}
+
 // Error reports a failed tmux operation and preserves tmux's stderr.
 type Error struct {
 	Operation string
@@ -229,7 +238,7 @@ func (b *Backend) runInteractive(ctx context.Context, operation string, args ...
 			Err:       errors.New("runner does not support interactive commands"),
 		}
 	}
-	if err := interactive.RunInteractive(ctx, "tmux", append([]string{operation}, args...)...); err != nil {
+	if err := interactive.RunInteractive(ctx, "tmux", UTF8Args(append([]string{operation}, args...)...)...); err != nil {
 		stderr := interactiveStderr(err)
 		if stderr == "" {
 			stderr = err.Error()
@@ -245,7 +254,7 @@ func (b *Backend) runInteractive(ctx context.Context, operation string, args ...
 }
 
 func (b *Backend) run(ctx context.Context, operation string, args ...string) ([]byte, error) {
-	output, err := b.Runner.Run(ctx, "tmux", append([]string{operation}, args...)...)
+	output, err := b.Runner.Run(ctx, "tmux", UTF8Args(append([]string{operation}, args...)...)...)
 	if err == nil {
 		return output, nil
 	}

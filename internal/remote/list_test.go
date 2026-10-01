@@ -3,7 +3,9 @@ package remote
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +36,7 @@ func TestListMachineUsesSSHBatchModeAndOptionalConfig(t *testing.T) {
 	if gotName != "ssh" {
 		t.Fatalf("runner name = %q, want ssh", gotName)
 	}
-	want := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-F", "/tmp/ssh config", "devbox", "'tmux' 'list-sessions' '-F' '#{session_id}\t#{session_name}'"}
+	want := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-F", "/tmp/ssh config", "devbox", "'tmux' '-u' 'list-sessions' '-F' '#{session_id}\t#{session_name}'"}
 	if strings.Join(gotArgs, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("ssh args = %#v, want %#v", gotArgs, want)
 	}
@@ -122,6 +124,63 @@ func TestListMachineWithAgentsIgnoresInvalidRemoteAgentJSON(t *testing.T) {
 	result := lister.ListMachineWithAgents(context.Background(), "devbox")
 	if result.Error != "" || len(result.Containers) != 1 || len(result.Agents) != 0 {
 		t.Fatalf("result = %#v, want containers without invalid agent data", result)
+	}
+}
+
+func TestListMachineWithAgentsReportsMissingRemoteNexoAsWarning(t *testing.T) {
+	lister := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("$1\tapi\n" + agentFrameStart + "\n" + agentFrameEnd + "\n" + agentWarningFrameStart + "nexo: command not found\n"), nil
+	}), backend.Tmux, "")
+	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	if result.Error != "" || len(result.Containers) != 1 || len(result.Agents) != 0 {
+		t.Fatalf("result = %#v, want containers without agents", result)
+	}
+	if result.Warning != "agents unavailable: nexo: command not found" {
+		t.Fatalf("warning = %q, want a single agent warning line", result.Warning)
+	}
+}
+
+func TestRemoteListingCommandsPassTmuxUTF8Flag(t *testing.T) {
+	configured := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) { return nil, nil }), backend.Tmux, "").WithBackends(map[string]string{"devbox": "tmux"}).WithKindDetection()
+	if command := configured.remoteListingCommand("devbox", true); !strings.Contains(command, "'tmux' '-u' 'list-sessions'") {
+		t.Fatalf("configured command = %q, want tmux -u listing", command)
+	}
+	auto := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) { return nil, nil }), backend.Tmux, "").WithKindDetection()
+	if command := auto.remoteListingCommand("devbox", true); !strings.Contains(command, "'tmux' '-u' 'list-sessions'") {
+		t.Fatalf("auto command = %q, want tmux -u listing", command)
+	}
+}
+
+// TestRemoteAgentShellKeepsListingAndReportsWarning runs the generated remote
+// shell for an explicit tmux backend with a stub nexo that fails, then decodes
+// the result through the real parser. Containers survive and the failure
+// becomes one warning instead of an empty agent list.
+func TestRemoteAgentShellKeepsListingAndReportsWarning(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	bin := t.TempDir()
+	for name, body := range map[string]string{
+		"tmux": "#!/bin/sh\nprintf '$1\\tapi\\n'\n",
+		"nexo": "#!/bin/sh\nprintf 'nexo: command not found\\n' >&2\nexit 1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "TMPDIR=" + t.TempDir()}
+	runner := fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		command := exec.Command("sh", "-c", args[len(args)-1])
+		command.Env = env
+		return command.Output()
+	})
+	lister := NewLister(runner, backend.Tmux, "").WithBackends(map[string]string{"devbox": "tmux"}).WithKindDetection()
+	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	if result.Error != "" || result.Kind != KindTmux || len(result.Containers) != 1 || result.Containers[0].Name != "api" {
+		t.Fatalf("result = %#v, want tmux container from the shell listing", result)
+	}
+	if result.Warning != "agents unavailable: nexo: command not found" {
+		t.Fatalf("warning = %q, want the first stderr line", result.Warning)
 	}
 }
 

@@ -36,9 +36,9 @@ func transportArgs(remote config.RemoteConfig, machine, container string) []stri
 	target := "=" + container
 	switch transport {
 	case "mosh":
-		return []string{"mosh", machine, "--", "tmux", "attach-session", "-t", target}
+		return []string{"mosh", machine, "--", "tmux", "-u", "attach-session", "-t", target}
 	case "et":
-		command := "tmux attach-session -t " + shellQuote(target)
+		command := "tmux -u attach-session -t " + shellQuote(target)
 		return []string{"et", machine, "-c", command}
 	default:
 		// ServerAliveInterval/CountMax let ssh notice a dropped link instead of
@@ -48,7 +48,7 @@ func transportArgs(remote config.RemoteConfig, machine, container string) []stri
 		if strings.TrimSpace(remote.SSHConfig) != "" {
 			args = append(args, "-F", remote.SSHConfig)
 		}
-		args = append(args, machine, "tmux attach-session -t "+shellQuote(target))
+		args = append(args, machine, "tmux -u attach-session -t "+shellQuote(target))
 		return args
 	}
 }

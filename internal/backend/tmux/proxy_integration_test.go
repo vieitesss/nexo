@@ -22,7 +22,11 @@ func (r isolatedTmuxRunner) Run(ctx context.Context, name string, args ...string
 		return runner.ExecRunner{}.Run(ctx, name, args...)
 	}
 	args = append([]string(nil), args...)
-	if len(args) > 0 && args[0] == "new-session" {
+	operation := args[0]
+	if operation == "-u" && len(args) > 1 {
+		operation = args[1]
+	}
+	if operation == "new-session" {
 		// Keep this integration test from launching the generated hidden attach
 		// command; the session-name parser is the behavior under test.
 		args[len(args)-1] = "sleep 600"

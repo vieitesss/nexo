@@ -196,7 +196,7 @@ func tmuxOwnsTTY(ctx context.Context, tty string, commandRunner runner.CommandRu
 	}
 	var failures []error
 	for _, args := range commands {
-		output, err := commandRunner.Run(ctx, "tmux", args...)
+		output, err := commandRunner.Run(ctx, "tmux", tmux.UTF8Args(args...)...)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("tmux %s: %w", args[0], err))
 			continue
