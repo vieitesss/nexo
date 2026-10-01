@@ -29,8 +29,9 @@ type WorktreeAdapter struct {
 }
 
 // OpenProject applies the shared result contract to a backend's native open
-// operation. The adapter remains responsible for stable identity lookup and
-// whether focus is requested.
+// operation. The adapter remains responsible for stable identity lookup,
+// creation defaults, and whether focus is requested. An existing container's
+// native label is returned unchanged, including when it is empty.
 func OpenProject(ctx context.Context, path string, options capabilities.OpenOptions, adapter ProjectAdapter) (capabilities.OpenedContainer, error) {
 	if adapter == nil {
 		return capabilities.OpenedContainer{}, errors.New("project lifecycle requires an adapter")
@@ -111,7 +112,11 @@ func normalizeContainer(path string, container capabilities.OpenedContainer) cap
 	if container.Path == "" {
 		container.Path = path
 	}
-	if container.Name == "" && path != "" {
+	// A name on a reused container is the backend's native label and stays
+	// authoritative, even when it is empty. Only a container this open created
+	// may take the shared default; adapters already apply the same default on
+	// their native create paths.
+	if container.Created && container.Name == "" && path != "" {
 		container.Name = projects.TargetName(path)
 	}
 	return container

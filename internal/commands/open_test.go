@@ -10,8 +10,10 @@ import (
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/backend"
+	"github.com/vieitesss/nexo/internal/backend/herdr"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/runner"
 )
 
 type fakeProjectOpener struct {
@@ -170,6 +172,40 @@ func TestOpenCommandJSONReportsContainer(t *testing.T) {
 		if got.Backend != "tmux" || got.ID != "$12" || got.Name != "root_app" || got.Path != candidate || got.Created != created {
 			t.Fatalf("output = %#v, want container with created=%v", got, created)
 		}
+	}
+}
+
+func TestOpenCommandJSONPreservesUnlabeledExplicitWorkspace(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "app")
+	if err := osMkdir(candidate); err != nil {
+		t.Fatal(err)
+	}
+	fake := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "herdr" && strings.Join(args, " ") == "workspace list" {
+			return []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-1","label":""}]}}`), nil
+		}
+		return nil, nil
+	})
+	command, ok := NewRegistry().Lookup("open")
+	if !ok {
+		t.Fatal("open command is not registered")
+	}
+	var output strings.Builder
+	err := command.Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Herdr},
+		Config:    config.Config{ProjectsConfig: config.ProjectsConfig{Paths: []string{root}}},
+		Adapter:   herdr.New(fake),
+		Args:      []string{candidate, "--workspace-id", "workspace-1", "--no-focus"},
+		Stdout:    &output,
+		JSON:      true,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	want := `{"backend":"herdr","id":"workspace-1","name":"","path":"` + candidate + `","created":false}` + "\n"
+	if output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
 	}
 }
 

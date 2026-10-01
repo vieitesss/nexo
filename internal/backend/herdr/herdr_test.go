@@ -282,6 +282,27 @@ func TestOpenProjectWorkspaceIDFocusReportsWorkspaceLabel(t *testing.T) {
 	}
 }
 
+func TestOpenProjectWorkspaceIDPreservesEmptyNativeLabel(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-unlabeled","label":""}]}}`),
+	}}
+	backend := New(runner)
+
+	container, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{ContainerID: "workspace-unlabeled", NoFocus: true})
+	if err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+
+	wantCalls := []call{{name: "herdr", args: []string{"workspace", "list"}}}
+	if !reflect.DeepEqual(runner.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, wantCalls)
+	}
+	want := capabilities.OpenedContainer{ID: "workspace-unlabeled", Name: "", Path: "/work/acme/app", Created: false}
+	if container != want {
+		t.Fatalf("container = %#v, want native unlabeled workspace %#v", container, want)
+	}
+}
+
 func TestOpenProjectNoFocusReusesWorkspaceWithoutFocus(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"workspace-exact","label":"acme_app"}]}}`),

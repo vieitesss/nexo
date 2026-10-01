@@ -42,7 +42,7 @@ func TestCreateWorktreePreflightsAndNormalizesThroughAdapter(t *testing.T) {
 	if got.Path != destination || got.Branch != "feature" || got.Repo != "/repo" || !got.NewBranch {
 		t.Fatalf("worktree = %#v, want normalized result", got)
 	}
-	wantContainer := capabilities.OpenedContainer{ID: "$7", Name: projects.TargetName(destination), Path: destination}
+	wantContainer := capabilities.OpenedContainer{ID: "$7", Path: destination}
 	if !reflect.DeepEqual(got.Container, wantContainer) {
 		t.Fatalf("container = %#v, want %#v", got.Container, wantContainer)
 	}
@@ -121,7 +121,7 @@ func TestCreateWorktreeRejectsExistingDestinationBeforeAdapter(t *testing.T) {
 	}
 }
 
-func TestOpenProjectNormalizesAdapterResult(t *testing.T) {
+func TestOpenProjectPreservesExistingContainerNativeLabel(t *testing.T) {
 	path := "/work/acme/app"
 	got, err := OpenProject(context.Background(), path, capabilities.OpenOptions{NoFocus: true}, func(_ context.Context, gotPath string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
 		if gotPath != path || !options.NoFocus {
@@ -132,7 +132,22 @@ func TestOpenProjectNormalizesAdapterResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
-	if got.ID != "workspace-1" || got.Name != projects.TargetName(path) || got.Path != path {
-		t.Fatalf("container = %#v, want normalized result", got)
+	want := capabilities.OpenedContainer{ID: "workspace-1", Path: path}
+	if got != want {
+		t.Fatalf("container = %#v, want native empty label preserved as %#v", got, want)
+	}
+}
+
+func TestOpenProjectDefaultsCreatedContainerName(t *testing.T) {
+	path := "/work/acme/app"
+	got, err := OpenProject(context.Background(), path, capabilities.OpenOptions{}, func(context.Context, string, capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
+		return capabilities.OpenedContainer{ID: "workspace-2", Created: true}, nil
+	})
+	if err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+	want := capabilities.OpenedContainer{ID: "workspace-2", Name: projects.TargetName(path), Path: path, Created: true}
+	if got != want {
+		t.Fatalf("container = %#v, want created default %#v", got, want)
 	}
 }
