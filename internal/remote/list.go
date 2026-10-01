@@ -46,74 +46,59 @@ type MachineResult struct {
 	Error      string                   `json:"error,omitempty"`
 }
 
-// Lister runs the selected backend locally and decodes the detected remote
-// kind for each machine's listing.
-type Lister struct {
-	Runner     runner.CommandRunner
-	Backend    backend.Kind
-	SSHConfig  string
-	Timeout    time.Duration
-	DetectKind bool
-	Backends   map[string]string
+// machineListing is the private implementation behind Orchestrator's
+// listing interface. It owns SSH framing, timeout policy, kind detection, and
+// decoders for every listing mode.
+type machineListing struct {
+	runner runner.CommandRunner
+	config ListingConfig
 }
 
-// NewLister creates an SSH lister. Backend selection controls local decoding;
-// per-machine settings control remote commands, with auto detection by default.
-func NewLister(commandRunner runner.CommandRunner, selected backend.Kind, sshConfig string) Lister {
-	return Lister{
-		Runner:    commandRunner,
-		Backend:   selected,
-		SSHConfig: strings.TrimSpace(sshConfig),
-		Timeout:   DefaultMachineTimeout,
+func newMachineListing(commandRunner runner.CommandRunner, config ListingConfig) machineListing {
+	config.SSHConfig = strings.TrimSpace(config.SSHConfig)
+	if config.Timeout <= 0 {
+		config.Timeout = DefaultMachineTimeout
 	}
+	config.Backends = normalizedBackends(config.Backends)
+	if len(config.Backends) > 0 {
+		config.DetectKind = true
+	}
+	return machineListing{runner: commandRunner, config: config}
 }
 
-// WithKindDetection enables remote kind framing in the listing round trip.
-// Auto machines use a read-only multiplexer probe; explicit machines skip it.
-func (l Lister) WithKindDetection() Lister {
-	l.DetectKind = true
-	return l
-}
-
-// WithBackends supplies explicit per-machine remote backend selections.
-func (l Lister) WithBackends(backends map[string]string) Lister {
-	l.Backends = make(map[string]string, len(backends))
+func normalizedBackends(backends map[string]string) map[string]string {
+	normalized := make(map[string]string, len(backends))
 	for machine, selected := range backends {
-		l.Backends[proxyidentity.NormalizeMachineName(machine)] = strings.ToLower(strings.TrimSpace(selected))
+		normalized[proxyidentity.NormalizeMachineName(machine)] = strings.ToLower(strings.TrimSpace(selected))
 	}
-	if len(l.Backends) > 0 {
-		l.DetectKind = true
-	}
-	return l
+	return normalized
 }
 
-// ListMachine queries one machine. The timeout bounds both SSH connection and
+// listMachine queries one machine. The timeout bounds both SSH connection and
 // the remote multiplexer command so a stalled machine cannot hang a picker.
-func (l Lister) ListMachine(ctx context.Context, machine string) MachineResult {
+// The same pipeline handles optional agent data so validation, deadlines,
+// command selection, and kind decoding cannot drift between listing modes.
+func (l machineListing) listMachine(ctx context.Context, machine string, withAgents bool) MachineResult {
 	machine = strings.TrimSpace(machine)
 	result := MachineResult{Machine: machine}
 	if machine == "" {
 		result.Error = "machine name is empty"
 		return result
 	}
-	if l.Runner == nil {
+	if l.runner == nil {
 		result.Error = "remote listing requires a command runner"
 		return result
 	}
-	if l.Backend != backend.Tmux && l.Backend != backend.Herdr {
-		result.Error = fmt.Sprintf("backend %q does not support remote listing", l.Backend)
+	if l.config.Backend != backend.Tmux && l.config.Backend != backend.Herdr {
+		result.Error = fmt.Sprintf("backend %q does not support remote listing", l.config.Backend)
 		return result
 	}
-	timeout := l.Timeout
-	if timeout <= 0 {
-		timeout = DefaultMachineTimeout
-	}
-	machineCtx, cancel := context.WithTimeout(ctx, timeout)
+	machineCtx, cancel := context.WithTimeout(ctx, l.config.Timeout)
 	defer cancel()
-	output, err := l.run(machineCtx, machine)
+	output, err := l.run(machineCtx, machine, withAgents)
 	if err != nil {
 		if errors.Is(machineCtx.Err(), context.DeadlineExceeded) {
-			result.Error = fmt.Sprintf("timed out after %s", timeout)
+			result.Error = fmt.Sprintf("timed out after %s", l.config.Timeout)
 		} else {
 			result.Error = err.Error()
 		}
@@ -123,8 +108,17 @@ func (l Lister) ListMachine(ctx context.Context, machine string) MachineResult {
 		}
 		return result
 	}
-	kind, listing := splitRemoteKind(output, l.Backend)
+	if withAgents {
+		var warning string
+		warning, output = splitAgentWarning(output)
+		result.Warning = formatAgentWarning(warning)
+	}
+	kind, listing := splitRemoteKind(output, l.config.Backend)
 	result.Kind = kind
+	var agentOutput []byte
+	if withAgents {
+		listing, agentOutput = splitAgentFrame(listing)
+	}
 	var containers []capabilities.Container
 	switch kind {
 	case KindTmux:
@@ -137,63 +131,7 @@ func (l Lister) ListMachine(ctx context.Context, machine string) MachineResult {
 		return result
 	}
 	result.Containers = containers
-	return result
-}
-
-// ListMachineWithAgents lists containers and, when available, the agent
-// statuses from the same machine. An unavailable remote nexo binary leaves
-// containers usable and reports a short per-machine warning.
-func (l Lister) ListMachineWithAgents(ctx context.Context, machine string) MachineResult {
-	machine = strings.TrimSpace(machine)
-	result := MachineResult{Machine: machine}
-	if machine == "" {
-		result.Error = "machine name is empty"
-		return result
-	}
-	if l.Runner == nil {
-		result.Error = "remote listing requires a command runner"
-		return result
-	}
-	if l.Backend != backend.Tmux && l.Backend != backend.Herdr {
-		result.Error = fmt.Sprintf("backend %q does not support remote listing", l.Backend)
-		return result
-	}
-	timeout := l.Timeout
-	if timeout <= 0 {
-		timeout = DefaultMachineTimeout
-	}
-	machineCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	output, err := l.runWithAgents(machineCtx, machine)
-	if err != nil {
-		if errors.Is(machineCtx.Err(), context.DeadlineExceeded) {
-			result.Error = fmt.Sprintf("timed out after %s", timeout)
-		} else {
-			result.Error = normalizeError(err.Error())
-		}
-		if result.Error == "" {
-			result.Error = "remote listing failed"
-		}
-		return result
-	}
-	agentWarning, output := splitAgentWarning(output)
-	result.Warning = formatAgentWarning(agentWarning)
-	kind, listing := splitRemoteKind(output, l.Backend)
-	result.Kind = kind
-	containerOutput, agentOutput := splitAgentFrame(listing)
-	var containers []capabilities.Container
-	switch kind {
-	case KindTmux:
-		containers, err = decodeTmux(containerOutput, machine)
-	case KindHerdr:
-		containers, err = decodeHerdr(containerOutput, machine)
-	}
-	if err != nil {
-		result.Error = normalizeError(err.Error())
-		return result
-	}
-	result.Containers = containers
-	if len(strings.TrimSpace(string(agentOutput))) > 0 {
+	if withAgents && len(strings.TrimSpace(string(agentOutput))) > 0 {
 		// Agent discovery is optional. Invalid output, an old remote binary, or
 		// a backend mismatch must not hide otherwise valid containers.
 		if agents, agentErr := decodeAgents(agentOutput); agentErr == nil {
@@ -210,20 +148,10 @@ func (l Lister) ListMachineWithAgents(ctx context.Context, machine string) Machi
 	return result
 }
 
-// List queries all configured machines in parallel. Results retain the input
+// list queries all configured machines in parallel. Results retain the input
 // order while each machine's own timeout controls completion.
-func (l Lister) List(ctx context.Context, machines []string) []MachineResult {
-	return l.list(ctx, machines, false)
-}
-
-// ListWithAgents is List plus the optional per-machine agent status and warning
-// frame. It backs the user-facing `nexo remote list` output.
-func (l Lister) ListWithAgents(ctx context.Context, machines []string) []MachineResult {
-	return l.list(ctx, machines, true)
-}
-
-func (l Lister) list(ctx context.Context, machines []string, withAgents bool) []MachineResult {
-	l.DetectKind = true
+func (l machineListing) list(ctx context.Context, machines []string, withAgents bool) []MachineResult {
+	l.config.DetectKind = true
 	machines = uniqueMachines(machines)
 	results := make([]MachineResult, len(machines))
 	var wg sync.WaitGroup
@@ -231,11 +159,7 @@ func (l Lister) list(ctx context.Context, machines []string, withAgents bool) []
 	for index, machine := range machines {
 		go func(index int, machine string) {
 			defer wg.Done()
-			if withAgents {
-				results[index] = l.ListMachineWithAgents(ctx, machine)
-				return
-			}
-			results[index] = l.ListMachine(ctx, machine)
+			results[index] = l.listMachine(ctx, machine, withAgents)
 		}(index, machine)
 	}
 	wg.Wait()
@@ -257,24 +181,20 @@ func uniqueMachines(machines []string) []string {
 	return unique
 }
 
-func (l Lister) run(ctx context.Context, machine string) ([]byte, error) {
-	if !l.DetectKind {
+func (l machineListing) run(ctx context.Context, machine string, withAgents bool) ([]byte, error) {
+	if !l.config.DetectKind {
+		if withAgents {
+			return l.runCommand(ctx, machine, l.backendAgentsCommand())
+		}
 		return l.runCommand(ctx, machine, l.backendCommand())
 	}
-	return l.runCommand(ctx, machine, l.remoteListingCommand(machine, false))
-}
-
-func (l Lister) runWithAgents(ctx context.Context, machine string) ([]byte, error) {
-	if !l.DetectKind {
-		return l.runCommand(ctx, machine, l.backendAgentsCommand())
-	}
-	return l.runCommand(ctx, machine, l.remoteListingCommand(machine, true))
+	return l.runCommand(ctx, machine, l.remoteListingCommand(machine, withAgents))
 }
 
 // remoteListingCommand emits one authoritative listing and its backend kind.
 // An explicit per-machine backend never probes the other multiplexer.
-func (l Lister) remoteListingCommand(machine string, withAgents bool) string {
-	configured := strings.ToLower(strings.TrimSpace(l.Backends[proxyidentity.NormalizeMachineName(machine)]))
+func (l machineListing) remoteListingCommand(machine string, withAgents bool) string {
+	configured := strings.ToLower(strings.TrimSpace(l.config.Backends[proxyidentity.NormalizeMachineName(machine)]))
 	if configured == string(backend.Tmux) || configured == string(backend.Herdr) {
 		kind := Kind(configured)
 		listing := l.backendCommandFor(backend.Kind(configured))
@@ -332,19 +252,19 @@ func agentCapture(agents string) string {
 	}, "; ")
 }
 
-func (l Lister) backendTmuxCommand() string {
+func (l machineListing) backendTmuxCommand() string {
 	return ShellCommand("tmux", "-u", "list-sessions", "-F", "#{session_id}\t#{session_name}")
 }
 
-func (l Lister) runCommand(ctx context.Context, machine, command string) ([]byte, error) {
+func (l machineListing) runCommand(ctx context.Context, machine, command string) ([]byte, error) {
 	args := l.sshArgs(machine, command)
-	output, err := l.Runner.Run(ctx, "ssh", args...)
+	output, err := l.runner.Run(ctx, "ssh", args...)
 	if err != nil {
 		if isNoServer(err, output) {
 			// Detection emits the kind before tmux reports its no-server status.
 			// Preserve that frame so a stopped tmux machine is a successful empty
 			// listing rather than an incorrectly decoded Herdr result.
-			if l.DetectKind && bytesHasRemoteKind(output) {
+			if l.config.DetectKind && bytesHasRemoteKind(output) {
 				return output, nil
 			}
 			return []byte{}, nil
@@ -361,20 +281,20 @@ func (l Lister) runCommand(ctx context.Context, machine, command string) ([]byte
 	return output, nil
 }
 
-func (l Lister) backendCommand() string {
-	return l.backendCommandFor(l.Backend)
+func (l machineListing) backendCommand() string {
+	return l.backendCommandFor(l.config.Backend)
 }
 
-func (l Lister) backendCommandFor(selected backend.Kind) string {
+func (l machineListing) backendCommandFor(selected backend.Kind) string {
 	if selected == backend.Tmux {
 		return l.backendTmuxCommand()
 	}
 	return ShellCommand("herdr", "workspace", "list")
 }
 
-func (l Lister) backendAgentsCommand() string {
+func (l machineListing) backendAgentsCommand() string {
 	listing := l.backendCommand()
-	agents := ShellCommand("nexo", "--backend", string(l.Backend), "agents", "--json")
+	agents := ShellCommand("nexo", "--backend", string(l.config.Backend), "agents", "--json")
 	return strings.Join([]string{
 		"listing_status=0",
 		listing + " || listing_status=$?",
@@ -478,8 +398,8 @@ func SSHCommandArgs(sshConfig, machine, command string) []string {
 	return append(args, machine, command)
 }
 
-func (l Lister) sshArgs(machine, command string) []string {
-	return SSHCommandArgs(l.SSHConfig, machine, command)
+func (l machineListing) sshArgs(machine, command string) []string {
+	return SSHCommandArgs(l.config.SSHConfig, machine, command)
 }
 
 func decodeAgents(output []byte) ([]capabilities.Agent, error) {

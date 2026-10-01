@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/backend/tmux"
@@ -12,15 +13,22 @@ import (
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
+// ListingConfig controls the remote machines' listing protocol.
+type ListingConfig struct {
+	Backend    backend.Kind
+	SSHConfig  string
+	Timeout    time.Duration
+	DetectKind bool
+	Backends   map[string]string
+}
+
 // OperationPolicy is the adapter seam for remote-machine operations. The
 // policy owns kind-aware selection; callbacks retain only backend-specific
 // work that cannot be expressed by a capability interface.
 type OperationPolicy struct {
-	Backend   backend.Kind
-	Runner    runner.CommandRunner
-	SSHConfig string
-	Proxy     capabilities.RemoteProxy
-	Resolver  capabilities.ContainerActionResolver
+	Backend  backend.Kind
+	Proxy    capabilities.RemoteProxy
+	Resolver capabilities.ContainerActionResolver
 
 	OpenHerdr   func(context.Context, string, string) error
 	CreateTmux  func(context.Context, string, string) (string, error)
@@ -29,36 +37,39 @@ type OperationPolicy struct {
 
 // Orchestrator is the remote-machine module. Listing, normalization, and
 // operation selection cross this small interface; SSH framing and decoders
-// remain inside Lister and operation adapters remain behind OperationPolicy.
+// remain inside machineListing and operation adapters remain behind
+// OperationPolicy.
 type Orchestrator struct {
-	lister Lister
-	policy OperationPolicy
+	listing machineListing
+	policy  OperationPolicy
 }
 
-// NewOrchestrator creates the remote-machine module at the listing seam.
-func NewOrchestrator(lister Lister, policy OperationPolicy) Orchestrator {
-	return Orchestrator{lister: lister, policy: policy}
+// NewOrchestrator creates the remote-machine module at the listing seam. The
+// runner and listing configuration stay behind this interface; callers do not
+// construct or configure the listing implementation themselves.
+func NewOrchestrator(commandRunner runner.CommandRunner, config ListingConfig, policy OperationPolicy) Orchestrator {
+	return Orchestrator{listing: newMachineListing(commandRunner, config), policy: policy}
 }
 
 // ListMachine returns one normalized result for a machine.
 func (o Orchestrator) ListMachine(ctx context.Context, machine string) MachineResult {
-	return o.lister.ListMachine(ctx, machine)
+	return o.listing.listMachine(ctx, machine, false)
 }
 
 // ListMachineWithAgents returns one normalized result with optional agent data.
 func (o Orchestrator) ListMachineWithAgents(ctx context.Context, machine string) MachineResult {
-	return o.lister.ListMachineWithAgents(ctx, machine)
+	return o.listing.listMachine(ctx, machine, true)
 }
 
 // List returns one normalized result per configured machine.
 func (o Orchestrator) List(ctx context.Context, machines []string) []MachineResult {
-	return o.lister.List(ctx, machines)
+	return o.listing.list(ctx, machines, false)
 }
 
 // ListWithAgents returns one normalized result per configured machine with
 // optional agent data from the same framed SSH round trip.
 func (o Orchestrator) ListWithAgents(ctx context.Context, machines []string) []MachineResult {
-	return o.lister.ListWithAgents(ctx, machines)
+	return o.listing.list(ctx, machines, true)
 }
 
 // Machine probes one machine when a runner is available. A missing runner is
@@ -66,14 +77,14 @@ func (o Orchestrator) ListWithAgents(ctx context.Context, machines []string) []M
 // explicit kind is still resolved without inventing a second remote probe.
 func (o Orchestrator) Machine(ctx context.Context, machine string) (MachineResult, error) {
 	machine = strings.TrimSpace(machine)
-	if o.lister.Runner == nil {
-		kind := Kind(o.lister.Backends[normalizeMachine(machine)])
+	if o.listing.runner == nil {
+		kind := Kind(o.listing.config.Backends[normalizeMachine(machine)])
 		if kind != KindTmux && kind != KindHerdr {
 			kind = KindTmux
 		}
 		return MachineResult{Machine: machine, Kind: kind}, nil
 	}
-	result := o.lister.ListMachine(ctx, machine)
+	result := o.listing.listMachine(ctx, machine, false)
 	if result.Error != "" {
 		return result, fmt.Errorf("list remote machine %q: %s", machine, result.Error)
 	}
@@ -107,7 +118,7 @@ func (o Orchestrator) FocusAgent(ctx context.Context, result MachineResult, agen
 	if err := o.policy.validateKind(result.Machine, result.Kind, "focus"); err != nil {
 		return err
 	}
-	if err := FocusRemotePane(ctx, o.policy.Runner, o.policy.SSHConfig, result.Machine, result.Kind, agent.PaneID); err != nil {
+	if err := FocusRemotePane(ctx, o.listing.runner, o.listing.config.SSHConfig, result.Machine, result.Kind, agent.PaneID); err != nil {
 		return err
 	}
 	return o.Open(ctx, result, container)

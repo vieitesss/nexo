@@ -27,14 +27,15 @@ func newRemoteOrchestrator(invocation Invocation, resolver capabilities.Containe
 	if candidate, ok := invocation.Adapter.(capabilities.RemoteProxy); ok {
 		proxy = candidate
 	}
-	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).
-		WithBackends(invocation.Config.Remote.Backends).WithKindDetection()
-	return remote.NewOrchestrator(lister, remote.OperationPolicy{
-		Backend:   invocation.Selection.Kind,
-		Runner:    invocation.Runner,
-		SSHConfig: invocation.Config.Remote.SSHConfig,
-		Proxy:     proxy,
-		Resolver:  resolver,
+	return remote.NewOrchestrator(invocation.Runner, remote.ListingConfig{
+		Backend:    invocation.Selection.Kind,
+		SSHConfig:  invocation.Config.Remote.SSHConfig,
+		DetectKind: true,
+		Backends:   invocation.Config.Remote.Backends,
+	}, remote.OperationPolicy{
+		Backend:  invocation.Selection.Kind,
+		Proxy:    proxy,
+		Resolver: resolver,
 		OpenHerdr: func(ctx context.Context, machine, container string) error {
 			return openNativeHerdrContainer(ctx, invocation, machine, container)
 		},

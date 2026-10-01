@@ -11,7 +11,7 @@ import (
 
 func TestOrchestratorOpenUsesDetectedKindAndCanonicalTmuxName(t *testing.T) {
 	proxy := &recordingMachineProxy{}
-	orchestrator := NewOrchestrator(Lister{}, OperationPolicy{
+	orchestrator := NewOrchestrator(nil, ListingConfig{Backend: backend.Herdr}, OperationPolicy{
 		Backend: backend.Herdr,
 		Proxy:   proxy,
 	})
@@ -27,7 +27,7 @@ func TestOrchestratorOpenUsesDetectedKindAndCanonicalTmuxName(t *testing.T) {
 func TestOrchestratorNewChoosesNativeCreationFromMachineKind(t *testing.T) {
 	created := ""
 	opened := ""
-	orchestrator := NewOrchestrator(Lister{}, OperationPolicy{
+	orchestrator := NewOrchestrator(nil, ListingConfig{Backend: backend.Herdr}, OperationPolicy{
 		Backend: backend.Herdr,
 		CreateHerdr: func(_ context.Context, machine, name string) error {
 			created = machine + "/" + name
@@ -50,11 +50,9 @@ func TestOrchestratorNewChoosesNativeCreationFromMachineKind(t *testing.T) {
 func TestOrchestratorFocusAgentUsesRemotePaneAndThenOpenPolicy(t *testing.T) {
 	runner := &machineRunner{}
 	proxy := &recordingMachineProxy{}
-	orchestrator := NewOrchestrator(Lister{}, OperationPolicy{
-		Backend:   backend.Tmux,
-		Runner:    runner,
-		Proxy:     proxy,
-		SSHConfig: "/tmp/config",
+	orchestrator := NewOrchestrator(runner, ListingConfig{Backend: backend.Tmux, SSHConfig: "/tmp/config"}, OperationPolicy{
+		Backend: backend.Tmux,
+		Proxy:   proxy,
 	})
 	result := MachineResult{Machine: "dev", Kind: KindTmux}
 	agent := capabilities.Agent{PaneID: "%7", Container: "api"}

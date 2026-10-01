@@ -11,7 +11,24 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/backend"
+	"github.com/vieitesss/nexo/internal/runner"
 )
+
+func newTestOrchestratorWithConfig(commandRunner runner.CommandRunner, config ListingConfig) Orchestrator {
+	return NewOrchestrator(commandRunner, config, OperationPolicy{Backend: config.Backend})
+}
+
+func newTestOrchestrator(commandRunner runner.CommandRunner, selected backend.Kind, sshConfig string) Orchestrator {
+	return newTestOrchestratorWithConfig(commandRunner, ListingConfig{
+		Backend:    selected,
+		SSHConfig:  sshConfig,
+		DetectKind: true,
+	})
+}
+
+func newTestOrchestratorNoDetection(commandRunner runner.CommandRunner, selected backend.Kind, sshConfig string) Orchestrator {
+	return newTestOrchestratorWithConfig(commandRunner, ListingConfig{Backend: selected, SSHConfig: sshConfig})
+}
 
 func TestShellCommandQuotesEachArgument(t *testing.T) {
 	got := ShellCommand("tmux", "list-sessions", "a'b")
@@ -24,12 +41,12 @@ func TestShellCommandQuotesEachArgument(t *testing.T) {
 func TestListMachineUsesSSHBatchModeAndOptionalConfig(t *testing.T) {
 	var gotName string
 	var gotArgs []string
-	lister := NewLister(fakeRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
+	orchestrator := newTestOrchestratorNoDetection(fakeRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		gotName, gotArgs = name, append([]string(nil), args...)
 		return []byte("$1\tdev\n"), nil
 	}), backend.Tmux, "/tmp/ssh config")
 
-	result := lister.ListMachine(context.Background(), "devbox")
+	result := orchestrator.ListMachine(context.Background(), "devbox")
 	if result.Error != "" || len(result.Containers) != 1 || result.Containers[0].Machine != "devbox" {
 		t.Fatalf("result = %#v, want one remote container", result)
 	}
@@ -43,42 +60,42 @@ func TestListMachineUsesSSHBatchModeAndOptionalConfig(t *testing.T) {
 }
 
 func TestListMachineUsesExplicitTmuxBackendWithoutProbe(t *testing.T) {
-	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+	orchestrator := newTestOrchestratorWithConfig(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		command := args[len(args)-1]
 		if strings.Contains(command, "herdr' 'status") || strings.Contains(command, "herdr' 'workspace") {
 			t.Fatalf("remote command = %q, want no Herdr probe", command)
 		}
 		return []byte(remoteKindFrameStart + "tmux\n$1\tapi\n"), nil
-	}), backend.Herdr, "").WithBackends(map[string]string{"devbox": "tmux"}).WithKindDetection()
-	result := lister.ListMachine(context.Background(), "devbox")
+	}), ListingConfig{Backend: backend.Herdr, DetectKind: true, Backends: map[string]string{"devbox": "tmux"}})
+	result := orchestrator.ListMachine(context.Background(), "devbox")
 	if result.Error != "" || result.Kind != KindTmux || len(result.Containers) != 1 || result.Containers[0].Name != "api" {
 		t.Fatalf("result = %#v, want explicit tmux listing", result)
 	}
 }
 
 func TestListMachineUsesExplicitHerdrBackendWithoutProbe(t *testing.T) {
-	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+	orchestrator := newTestOrchestratorWithConfig(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		command := args[len(args)-1]
 		if strings.Contains(command, "herdr' 'status") || strings.Contains(command, "tmux' 'list-sessions") {
 			t.Fatalf("remote command = %q, want only Herdr listing", command)
 		}
 		return []byte(remoteKindFrameStart + "herdr\n{\"result\":{\"type\":\"workspace_list\",\"workspaces\":[]}}\n"), nil
-	}), backend.Tmux, "").WithBackends(map[string]string{"gpu1": "herdr"}).WithKindDetection()
-	result := lister.ListMachine(context.Background(), "gpu1")
+	}), ListingConfig{Backend: backend.Tmux, DetectKind: true, Backends: map[string]string{"gpu1": "herdr"}})
+	result := orchestrator.ListMachine(context.Background(), "gpu1")
 	if result.Error != "" || result.Kind != KindHerdr || len(result.Containers) != 0 {
 		t.Fatalf("result = %#v, want explicit Herdr listing", result)
 	}
 }
 
 func TestListMachineWithAgentsUsesConfiguredBackendForAgents(t *testing.T) {
-	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+	orchestrator := newTestOrchestratorWithConfig(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		command := args[len(args)-1]
 		if strings.Contains(command, "herdr' 'status") || !strings.Contains(command, "'nexo' '--backend' 'tmux' 'agents' '--json'") {
 			t.Fatalf("remote command = %q, want configured tmux agent command without probe", command)
 		}
 		return []byte(remoteKindFrameStart + "tmux\n$1\tapi\n" + agentFrameStart + "\n[]\n" + agentFrameEnd + "\n"), nil
-	}), backend.Herdr, "").WithBackends(map[string]string{"devbox": "tmux"}).WithKindDetection()
-	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	}), ListingConfig{Backend: backend.Herdr, DetectKind: true, Backends: map[string]string{"devbox": "tmux"}})
+	result := orchestrator.ListMachineWithAgents(context.Background(), "devbox")
 	if result.Error != "" || result.Kind != KindTmux || len(result.Containers) != 1 {
 		t.Fatalf("result = %#v, want configured tmux listing and agents", result)
 	}
@@ -86,7 +103,7 @@ func TestListMachineWithAgentsUsesConfiguredBackendForAgents(t *testing.T) {
 
 func TestListMachineWithAgentsReadsRemoteNexoJSONInOnePinnedSSHCommand(t *testing.T) {
 	calls := 0
-	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+	orchestrator := newTestOrchestrator(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		calls++
 		command := args[len(args)-1]
 		if !strings.Contains(command, "--backend") || !strings.Contains(command, "'tmux'") {
@@ -94,7 +111,7 @@ func TestListMachineWithAgentsReadsRemoteNexoJSONInOnePinnedSSHCommand(t *testin
 		}
 		return []byte("$1\tapi\n" + agentFrameStart + "\n[{\"container\":\"api\",\"state\":\"stopped\",\"seen\":false}]\n" + agentFrameEnd + "\n"), nil
 	}), backend.Tmux, "")
-	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	result := orchestrator.ListMachineWithAgents(context.Background(), "devbox")
 	if result.Error != "" || len(result.Containers) != 1 || len(result.Agents) != 1 || result.Agents[0].Container != "api" {
 		t.Fatalf("result = %#v, want containers and remote agents", result)
 	}
@@ -104,24 +121,24 @@ func TestListMachineWithAgentsReadsRemoteNexoJSONInOnePinnedSSHCommand(t *testin
 }
 
 func TestListMachineWithAgentsIgnoresMissingRemoteNexo(t *testing.T) {
-	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+	orchestrator := newTestOrchestrator(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		command := args[len(args)-1]
 		if !strings.Contains(command, agentFrameStart) {
 			return nil, errors.New("unexpected unframed command")
 		}
 		return []byte("$1\tapi\n" + agentFrameStart + "\n" + agentFrameEnd + "\n"), nil
 	}), backend.Tmux, "")
-	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	result := orchestrator.ListMachineWithAgents(context.Background(), "devbox")
 	if result.Error != "" || len(result.Containers) != 1 || len(result.Agents) != 0 {
 		t.Fatalf("result = %#v, want containers without dots", result)
 	}
 }
 
 func TestListMachineWithAgentsReportsInvalidRemoteAgentJSONAsWarning(t *testing.T) {
-	lister := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
+	orchestrator := newTestOrchestrator(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("$1\tapi\n" + agentFrameStart + "\nnot-json\n" + agentFrameEnd + "\n"), nil
 	}), backend.Tmux, "")
-	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	result := orchestrator.ListMachineWithAgents(context.Background(), "devbox")
 	if result.Error != "" || len(result.Containers) != 1 || len(result.Agents) != 0 {
 		t.Fatalf("result = %#v, want containers without invalid agent data", result)
 	}
@@ -131,10 +148,10 @@ func TestListMachineWithAgentsReportsInvalidRemoteAgentJSONAsWarning(t *testing.
 }
 
 func TestListMachineWithAgentsReportsMissingRemoteNexoAsWarning(t *testing.T) {
-	lister := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
+	orchestrator := newTestOrchestrator(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("$1\tapi\n" + agentFrameStart + "\n" + agentFrameEnd + "\n" + agentWarningFrameStart + "nexo: command not found\n"), nil
 	}), backend.Tmux, "")
-	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	result := orchestrator.ListMachineWithAgents(context.Background(), "devbox")
 	if result.Error != "" || len(result.Containers) != 1 || len(result.Agents) != 0 {
 		t.Fatalf("result = %#v, want containers without agents", result)
 	}
@@ -144,11 +161,11 @@ func TestListMachineWithAgentsReportsMissingRemoteNexoAsWarning(t *testing.T) {
 }
 
 func TestRemoteListingCommandsPassTmuxUTF8Flag(t *testing.T) {
-	configured := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) { return nil, nil }), backend.Tmux, "").WithBackends(map[string]string{"devbox": "tmux"}).WithKindDetection()
+	configured := newMachineListing(fakeRunner(func(context.Context, string, ...string) ([]byte, error) { return nil, nil }), ListingConfig{Backend: backend.Tmux, DetectKind: true, Backends: map[string]string{"devbox": "tmux"}})
 	if command := configured.remoteListingCommand("devbox", true); !strings.Contains(command, "'tmux' '-u' 'list-sessions'") {
 		t.Fatalf("configured command = %q, want tmux -u listing", command)
 	}
-	auto := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) { return nil, nil }), backend.Tmux, "").WithKindDetection()
+	auto := newMachineListing(fakeRunner(func(context.Context, string, ...string) ([]byte, error) { return nil, nil }), ListingConfig{Backend: backend.Tmux, DetectKind: true})
 	if command := auto.remoteListingCommand("devbox", true); !strings.Contains(command, "'tmux' '-u' 'list-sessions'") {
 		t.Fatalf("auto command = %q, want tmux -u listing", command)
 	}
@@ -177,8 +194,8 @@ func TestRemoteAgentShellKeepsListingAndReportsWarning(t *testing.T) {
 		command.Env = env
 		return command.Output()
 	})
-	lister := NewLister(runner, backend.Tmux, "").WithBackends(map[string]string{"devbox": "tmux"}).WithKindDetection()
-	result := lister.ListMachineWithAgents(context.Background(), "devbox")
+	orchestrator := NewOrchestrator(runner, ListingConfig{Backend: backend.Tmux, DetectKind: true, Backends: map[string]string{"devbox": "tmux"}}, OperationPolicy{Backend: backend.Tmux})
+	result := orchestrator.ListMachineWithAgents(context.Background(), "devbox")
 	if result.Error != "" || result.Kind != KindTmux || len(result.Containers) != 1 || result.Containers[0].Name != "api" {
 		t.Fatalf("result = %#v, want tmux container from the shell listing", result)
 	}
@@ -233,49 +250,49 @@ func runNonDetectionAgentShell(t *testing.T, tmuxBody, nexoBody string) (Machine
 		command.Env = env
 		return command.Output()
 	})
-	result := NewLister(runner, backend.Tmux, "").ListMachineWithAgents(context.Background(), "devbox")
+	result := newTestOrchestratorNoDetection(runner, backend.Tmux, "").ListMachineWithAgents(context.Background(), "devbox")
 	return result, tempDir
 }
 
 func TestListMachineWithAgentsPinsHerdrBackend(t *testing.T) {
-	lister := NewLister(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+	orchestrator := newTestOrchestrator(fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		command := args[len(args)-1]
 		if !strings.Contains(command, "'nexo' '--backend' 'herdr' 'agents' '--json'") || !strings.Contains(command, "printf '\\n%s\\n'") {
 			t.Fatalf("remote command = %q, want explicit backend and framed output", command)
 		}
 		return []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"api"}]}}` + "\n" + agentFrameStart + "\n[]\n" + agentFrameEnd + "\n"), nil
 	}), backend.Herdr, "")
-	result := lister.ListMachineWithAgents(context.Background(), "gpu1")
+	result := orchestrator.ListMachineWithAgents(context.Background(), "gpu1")
 	if result.Error != "" || len(result.Containers) != 1 || result.Containers[0].ID != "w1" {
 		t.Fatalf("result = %#v, want one Herdr container", result)
 	}
 }
 
 func TestListMachineTreatsTmuxNoServerStderrAsEmpty(t *testing.T) {
-	lister := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
+	orchestrator := newTestOrchestrator(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return nil, &exec.ExitError{Stderr: []byte("no server running on /tmp/tmux-1000/default\n")}
 	}), backend.Tmux, "")
-	result := lister.ListMachine(context.Background(), "devbox")
+	result := orchestrator.ListMachine(context.Background(), "devbox")
 	if result.Error != "" || len(result.Containers) != 0 {
 		t.Fatalf("result = %#v, want empty successful result", result)
 	}
 }
 
 func TestListMachineNormalizesMultilineErrors(t *testing.T) {
-	lister := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
+	orchestrator := newTestOrchestrator(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("first reason\nsecond reason\n"), errors.New("command failed")
 	}), backend.Tmux, "")
-	result := lister.ListMachine(context.Background(), "devbox")
+	result := orchestrator.ListMachine(context.Background(), "devbox")
 	if result.Error != "ssh devbox: first reason" {
 		t.Fatalf("error = %q, want first normalized line", result.Error)
 	}
 }
 
 func TestListMachineDecodesHerdrWorkspaces(t *testing.T) {
-	lister := NewLister(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
+	orchestrator := newTestOrchestrator(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"api"}]}}`), nil
 	}), backend.Herdr, "")
-	result := lister.ListMachine(context.Background(), "gpu1")
+	result := orchestrator.ListMachine(context.Background(), "gpu1")
 	if result.Error != "" || len(result.Containers) != 1 || result.Containers[0].ID != "w1" || result.Containers[0].Machine != "gpu1" {
 		t.Fatalf("result = %#v, want one Herdr container", result)
 	}
@@ -284,7 +301,7 @@ func TestListMachineDecodesHerdrWorkspaces(t *testing.T) {
 func TestListRunsMachinesInParallelAndKeepsFastResultIndependent(t *testing.T) {
 	started := make(chan string, 2)
 	slowRelease := make(chan struct{})
-	lister := NewLister(fakeRunner(func(ctx context.Context, _ string, args ...string) ([]byte, error) {
+	orchestrator := NewOrchestrator(fakeRunner(func(ctx context.Context, _ string, args ...string) ([]byte, error) {
 		machine := args[4]
 		started <- machine
 		if machine == "slow" {
@@ -295,11 +312,10 @@ func TestListRunsMachinesInParallelAndKeepsFastResultIndependent(t *testing.T) {
 			}
 		}
 		return []byte("$1\t" + machine + "\n"), nil
-	}), backend.Tmux, "")
-	lister.Timeout = 50 * time.Millisecond
+	}), ListingConfig{Backend: backend.Tmux, DetectKind: true, Timeout: 50 * time.Millisecond}, OperationPolicy{Backend: backend.Tmux})
 
 	done := make(chan []MachineResult, 1)
-	go func() { done <- lister.List(context.Background(), []string{"slow", "fast"}) }()
+	go func() { done <- orchestrator.List(context.Background(), []string{"slow", "fast"}) }()
 	select {
 	case <-started:
 	case <-time.After(time.Second):
@@ -322,12 +338,11 @@ func TestListRunsMachinesInParallelAndKeepsFastResultIndependent(t *testing.T) {
 }
 
 func TestListMachineReportsTimeoutAsMachineError(t *testing.T) {
-	lister := NewLister(fakeRunner(func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+	orchestrator := NewOrchestrator(fakeRunner(func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
-	}), backend.Tmux, "")
-	lister.Timeout = 5 * time.Millisecond
-	result := lister.ListMachine(context.Background(), "offline")
+	}), ListingConfig{Backend: backend.Tmux, DetectKind: true, Timeout: 5 * time.Millisecond}, OperationPolicy{Backend: backend.Tmux})
+	result := orchestrator.ListMachine(context.Background(), "offline")
 	if !strings.Contains(result.Error, "timed out") {
 		t.Fatalf("error = %q, want timeout reason", result.Error)
 	}
