@@ -303,13 +303,54 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 	return result, nil
 }
 
+// interpreters are runtimes whose own name never identifies an agent; the
+// harness is the script they execute instead.
+var interpreters = map[string]struct{}{
+	"node":    {},
+	"bun":     {},
+	"deno":    {},
+	"python":  {},
+	"python3": {},
+}
+
+// findHarness returns the allowed harness named by a process's command line.
+// Only the process identity counts: the basename of argv[0], or, when argv[0]
+// is an interpreter, the basename of the script it runs.
 func findHarness(args string, allow map[string]struct{}) string {
-	for _, field := range strings.Fields(args) {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		return ""
+	}
+	name := commandBase(fields[0])
+	if _, ok := interpreters[name]; ok {
+		name = scriptBase(fields[1:])
+	}
+	if name == "" {
+		return ""
+	}
+	if _, ok := allow[name]; ok {
+		return name
+	}
+	return ""
+}
+
+func commandBase(field string) string {
+	field = strings.Trim(field, "\"'(),[]{}")
+	if field == "" {
+		return ""
+	}
+	return strings.ToLower(filepath.Base(field))
+}
+
+// scriptBase returns the basename of the first non-flag argument, the script
+// passed to an interpreter.
+func scriptBase(args []string) string {
+	for _, field := range args {
 		field = strings.Trim(field, "\"'(),[]{}")
-		base := strings.ToLower(filepath.Base(field))
-		if _, ok := allow[base]; ok {
-			return base
+		if field == "" || strings.HasPrefix(field, "-") {
+			continue
 		}
+		return strings.ToLower(filepath.Base(field))
 	}
 	return ""
 }
@@ -361,29 +402,44 @@ func parseProcessTree(output []byte) processTree {
 }
 
 // findPaneHarness walks a pane's process tree breadth-first and returns the
-// first harness named by a process command line. The pane process itself is
-// included because a pane can run the agent as its main process while tmux
-// still reports a non-harness current command.
+// shallowest harness named by a process command line. Ties at the same depth
+// resolve to the lowest pid so discovery is deterministic. The pane process
+// itself is included because a pane can run the agent as its main process
+// while tmux still reports a non-harness current command.
 func findPaneHarness(panePID string, tree processTree, allow map[string]struct{}) string {
 	start, err := strconv.Atoi(strings.TrimSpace(panePID))
 	if err != nil {
 		return ""
 	}
-	queue := []int{start}
+	frontier := []int{start}
 	visited := map[int]struct{}{start: {}}
-	for len(queue) > 0 {
-		pid := queue[0]
-		queue = queue[1:]
-		if harness := findHarness(tree.args[pid], allow); harness != "" {
-			return harness
-		}
-		for _, child := range tree.children[pid] {
-			if _, ok := visited[child]; ok {
+	for len(frontier) > 0 {
+		bestPID := -1
+		bestHarness := ""
+		for _, pid := range frontier {
+			harness := findHarness(tree.args[pid], allow)
+			if harness == "" {
 				continue
 			}
-			visited[child] = struct{}{}
-			queue = append(queue, child)
+			if bestPID == -1 || pid < bestPID {
+				bestPID = pid
+				bestHarness = harness
+			}
 		}
+		if bestHarness != "" {
+			return bestHarness
+		}
+		var next []int
+		for _, pid := range frontier {
+			for _, child := range tree.children[pid] {
+				if _, ok := visited[child]; ok {
+					continue
+				}
+				visited[child] = struct{}{}
+				next = append(next, child)
+			}
+		}
+		frontier = next
 	}
 	return ""
 }

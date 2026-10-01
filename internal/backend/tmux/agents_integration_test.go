@@ -14,6 +14,22 @@ import (
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
+// fakeHarness creates an executable named pi whose argv[0] basename is the
+// harness name, the way a real agent starts. A symlink avoids a shell script,
+// whose argv[0] would be the interpreter rather than the harness.
+func fakeHarness(t *testing.T) string {
+	t.Helper()
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("sleep is not installed")
+	}
+	pi := filepath.Join(t.TempDir(), "pi")
+	if err := os.Symlink(sleep, pi); err != nil {
+		t.Fatal(err)
+	}
+	return pi
+}
+
 func TestTmuxAgentPathWithTab(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")
@@ -33,11 +49,8 @@ func TestTmuxAgentPathWithTab(t *testing.T) {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	pi := filepath.Join(t.TempDir(), "pi")
-	if err := os.WriteFile(pi, []byte("#!/bin/sh\nprintf '⠋ working\\n'\nsleep 30\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if output, err := runTmux("new-session", "-d", "-s", "work", "-c", path, pi); err != nil {
+	pi := fakeHarness(t)
+	if output, err := runTmux("new-session", "-d", "-s", "work", "-c", path, pi+" 600"); err != nil {
 		t.Fatalf("create session: %v: %s", err, output)
 	}
 
@@ -75,10 +88,7 @@ func TestTmuxAgentIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pi := filepath.Join(t.TempDir(), "pi")
-	if err := os.WriteFile(pi, []byte("#!/bin/sh\nprintf '⠋ working\\n'\nsleep 1\nprintf '\\033[2J\\033[Hprompt> \\n'\nsleep 30\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	pi := fakeHarness(t)
 	binary := filepath.Join(t.TempDir(), "nexo")
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
@@ -95,7 +105,7 @@ func TestTmuxAgentIntegration(t *testing.T) {
 		commandArgs := append([]string{"-L", server, "-f", "/dev/null"}, args...)
 		return exec.CommandContext(ctx, "tmux", commandArgs...).CombinedOutput()
 	}
-	if _, err := runTmux("new-session", "-d", "-s", "work", pi); err != nil {
+	if _, err := runTmux("new-session", "-d", "-s", "work", pi+" 600"); err != nil {
 		t.Fatal(err)
 	}
 	control := exec.Command("tmux", "-C", "-L", server, "-f", "/dev/null", "attach-session", "-t", "work")

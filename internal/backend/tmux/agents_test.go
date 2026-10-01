@@ -25,8 +25,12 @@ func TestFindHarnessMatchesProcessArgs(t *testing.T) {
 		want string
 	}{
 		{name: "node script", args: "node /opt/homebrew/bin/pi", want: "pi"},
+		{name: "node flags", args: "node --no-warnings /x/pi", want: "pi"},
 		{name: "claude resume", args: "/Users/x/.local/bin/claude --resume", want: "claude"},
+		{name: "vim pi", args: "vim pi", want: ""},
+		{name: "bash command string", args: `bash -c "claude --resume"`, want: ""},
 		{name: "markdown file", args: "vim notes/claude.md", want: ""},
+		{name: "bare interpreter", args: "node", want: ""},
 		{name: "login shell", args: "-zsh", want: ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -35,6 +39,28 @@ func TestFindHarnessMatchesProcessArgs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFindPaneHarnessIsDepthFirstAndLowestPID(t *testing.T) {
+	allow := map[string]struct{}{"pi": {}, "claude": {}}
+	t.Run("bash child matches", func(t *testing.T) {
+		tree := parseProcessTree([]byte(
+			"  100     1 -zsh\n" +
+				"  101   100 bash -c \"claude --resume\"\n" +
+				"  102   101 claude --resume\n"))
+		if got := findPaneHarness("100", tree, allow); got != "claude" {
+			t.Fatalf("findPaneHarness() = %q, want claude", got)
+		}
+	})
+	t.Run("lowest pid wins at same depth", func(t *testing.T) {
+		tree := parseProcessTree([]byte(
+			"  100     1 -zsh\n" +
+				"  102   100 /x/claude\n" +
+				"  101   100 /x/pi\n"))
+		if got := findPaneHarness("100", tree, allow); got != "pi" {
+			t.Fatalf("findPaneHarness() = %q, want lowest-pid pi", got)
+		}
+	})
 }
 
 func TestAgentPanesFindsHarnessInPaneDescendants(t *testing.T) {

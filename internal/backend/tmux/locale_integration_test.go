@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -68,11 +67,8 @@ func TestListingSurvivesLocaleLessTmux(t *testing.T) {
 		_, _ = commandRunner.Run(ctx, "tmux", "kill-server")
 	})
 
-	pi := filepath.Join(t.TempDir(), "pi")
-	if err := os.WriteFile(pi, []byte("#!/bin/sh\nprintf '⠋ working\\n'\nsleep 600\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := commandRunner.Run(ctx, "tmux", "new-session", "-d", "-s", "work", pi); err != nil {
+	pi := fakeHarness(t)
+	if _, err := commandRunner.Run(ctx, "tmux", "new-session", "-d", "-s", "work", pi+" 600"); err != nil {
 		t.Fatalf("start agent session: %v", err)
 	}
 	if _, err := commandRunner.Run(ctx, "tmux", "new-session", "-d", "-s", "plain", "sleep 600"); err != nil {
