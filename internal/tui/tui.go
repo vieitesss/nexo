@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -1766,7 +1767,7 @@ func (m Model) rowText(row row) (string, string) {
 		if selected {
 			labelStyle = normal()
 		}
-		value := strings.Repeat("  ", row.depth) + labelStyle.Render(highlightText(sanitize(row.label), string(m.query))) + muted().Render(fmt.Sprintf("  %d", row.count))
+		value := strings.Repeat("  ", row.depth) + labelStyle.Render(highlightText(sanitize(row.label), string(m.query), selected)) + muted().Render(fmt.Sprintf("  %d", row.count))
 		if row.remoteErr != "" {
 			value += muted().Render("  " + sanitize(row.remoteErr))
 		} else if row.loading {
@@ -1785,26 +1786,25 @@ func (m Model) rowText(row row) (string, string) {
 		return "", ""
 	case itemRow:
 		if row.itemKind == "agent" {
-			return m.agentText(row, marker)
+			return m.agentText(row, marker, selected)
 		}
 		if row.itemKind == "container" {
-			return m.containerText(row, marker)
+			return m.containerText(row, marker, selected)
 		}
-		return m.placeText(row, marker)
+		return m.placeText(row, marker, selected)
 	default:
 		return "", ""
 	}
 }
 
-func (m Model) agentText(row row, marker string) (string, string) {
+func (m Model) agentText(row row, marker string, selected bool) (string, string) {
 	a := row.agent
 	container := displayContainer(a, row.agentMachine)
-	selected := row.id == m.cursor
 	nameStyle := bold()
 	if selected {
 		nameStyle = normal()
 	}
-	primary := nameStyle.Render(highlightText(sanitize(a.Harness), string(m.query))) + muted().Render("  "+highlightText(sanitize(container), string(m.query)))
+	primary := nameStyle.Render(highlightText(sanitize(a.Harness), string(m.query), selected)) + muted().Render("  "+highlightText(sanitize(container), string(m.query), selected))
 	state := strings.ToLower(strings.TrimSpace(sanitize(a.State)))
 	stateText := "● " + state
 	if state == "stopped" && a.StoppedSince != nil {
@@ -1813,13 +1813,13 @@ func (m Model) agentText(row row, marker string) (string, string) {
 	stateStyle := stateColorFor(a, selected)
 	left := stateStyle.Render(stateText)
 	if a.Branch != "" {
-		branch := highlightText("⎇ "+sanitize(a.Branch), string(m.query))
+		branch := highlightText("⎇ "+sanitize(a.Branch), string(m.query), selected)
 		if !strings.Contains(branch, "\x1b[") {
 			branch = muted().Render(branch)
 		}
 		left += "   " + branch
 	}
-	targetText := highlightText(sanitize(a.Target), string(m.query))
+	targetText := highlightText(sanitize(a.Target), string(m.query), selected)
 	target := targetText
 	if !strings.Contains(targetText, "\x1b[") {
 		target = muted().Render(targetText)
@@ -1837,20 +1837,19 @@ func displayContainer(a capabilities.Agent, machine string) string {
 	}
 	return a.Container
 }
-func (m Model) containerText(row row, marker string) (string, string) {
+func (m Model) containerText(row row, marker string, selected bool) (string, string) {
 	name := sanitize(row.place.ContainerName)
 	if row.nameWidth > 0 {
 		name = shell.Truncate(name, row.nameWidth, "…")
 		name += strings.Repeat(" ", max(0, row.nameWidth-shell.StringWidth(name)))
 	}
 	nameGutter := "  "
-	selected := row.id == m.cursor
 	marked := m.marked[picker.ContainerRef{Machine: row.place.Machine, ID: row.place.ContainerID}]
 	if marked {
 		nameGutter = magenta().Render("◆ ")
-		name = highlightMarkedText(name, string(m.query))
+		name = highlightMarkedText(name, string(m.query), selected)
 	} else {
-		name = highlightText(name, string(m.query))
+		name = highlightText(name, string(m.query), selected)
 	}
 	name = nameGutter + name
 	agents := m.containerAgents(row.place)
@@ -2031,9 +2030,9 @@ func min(a, b int) int {
 	return b
 }
 
-func (m Model) placeText(row row, marker string) (string, string) {
+func (m Model) placeText(row row, marker string, selected bool) (string, string) {
 	if row.place.Kind != picker.ProjectKind {
-		return marker + highlightText(projectLabel(row.place), string(m.query)), ""
+		return marker + highlightText(projectLabel(row.place), string(m.query), selected), ""
 	}
 	layout := m.projectLayout()
 	name := foldPrefix(row) + projectLabel(row.place)
@@ -2042,19 +2041,19 @@ func (m Model) placeText(row row, marker string) (string, string) {
 		count = fmt.Sprintf("  %d", row.count)
 	}
 	name = shell.Truncate(name, max(0, layout.name-shell.StringWidth(count)), "…")
-	nameText := highlightText(name, string(m.query))
+	nameText := highlightText(name, string(m.query), selected)
 	if prefix := foldPrefix(row); prefix != "" {
 		// Tree gutters and fold chevrons are structural, not part of fuzzy matching.
-		nameText = foldPrefixStyled(row) + highlightText(strings.TrimPrefix(name, prefix), string(m.query))
+		nameText = foldPrefixStyled(row) + highlightText(strings.TrimPrefix(name, prefix), string(m.query), selected)
 	}
 	if count != "" {
 		nameText += muted().Render(count)
 	}
 	nameCell := fit(nameText, layout.name)
-	gitCell := fit(m.projectGitStyled(row.place, layout.git), layout.git)
+	gitCell := fit(m.projectGitStyled(row.place, layout.git, selected), layout.git)
 	line := ""
 	if layout.search && layout.path > 0 {
-		line = m.projectPathCell(row.group, layout.path)
+		line = m.projectPathCell(row.group, layout.path, selected)
 	}
 	line += nameCell + "  " + gitCell
 	return marker + line, ""
@@ -2063,11 +2062,11 @@ func (m Model) placeText(row row, marker string) (string, string) {
 // projectGitStyled renders the branch and its Git summary as one cell: the
 // branch first, two spaces, then the summary. The branch truncates before the
 // summary so change counts and divergence stay visible.
-func (m Model) projectGitStyled(place picker.Place, width int) string {
+func (m Model) projectGitStyled(place picker.Place, width int, selected bool) string {
 	if width <= 0 {
 		return ""
 	}
-	branch := highlightText(projectBranch(place), string(m.query))
+	branch := highlightText(projectBranch(place), string(m.query), selected)
 	if !strings.Contains(branch, "\x1b[") {
 		branch = muted().Render(branch)
 	}
@@ -2092,9 +2091,9 @@ func (m Model) projectGitStyled(place picker.Place, width int) string {
 // projectPathCell renders the flat-search folder as a muted path segment
 // ending in a slash. It is right-aligned and truncated from the left so the
 // deep end of the path stays readable while names stay aligned.
-func (m Model) projectPathCell(group string, width int) string {
+func (m Model) projectPathCell(group string, width int, selected bool) string {
 	path := shell.TruncateLeft(abbreviateHome(group)+"/", width, "…")
-	pathText := highlightText(path, string(m.query))
+	pathText := highlightText(path, string(m.query), selected)
 	if !strings.Contains(pathText, "\x1b[") {
 		pathText = muted().Render(pathText)
 	}
@@ -2262,9 +2261,11 @@ func fit(value string, width int) string {
 }
 
 func selectedRowBackground(value string) string {
-	// Faint text disappears against the selection blue, so drop it and let the
-	// bright selection foreground apply to every visible segment.
-	value = strings.ReplaceAll(value, "\x1b[2m", "")
+	// Selected rows carry exactly one foreground. Strip every per-segment
+	// foreground (and faint) first, then restore the selection start after the
+	// resets that each segment emits. Bold and underline survive, so matched
+	// letters and marked names stay distinguishable without their own colour.
+	value = stripForeground(value)
 	style := lipgloss.NewStyle().Background(selectionBackground()).Foreground(selectionForeground())
 	start := strings.TrimSuffix(style.Render(""), "\x1b[0m")
 	if start == "" {
@@ -2272,6 +2273,68 @@ func selectedRowBackground(value string) string {
 	}
 	value = strings.ReplaceAll(value, "\x1b[0m", "\x1b[0m"+start)
 	return start + value + "\x1b[0m"
+}
+
+// stripForeground drops every foreground colour and the faint attribute from
+// styled text while keeping the remaining SGR attributes (reset, bold,
+// underline, …).
+func stripForeground(value string) string {
+	out := strings.Builder{}
+	for index := 0; index < len(value); {
+		if value[index] != '\x1b' || index+1 >= len(value) || value[index+1] != '[' {
+			out.WriteByte(value[index])
+			index++
+			continue
+		}
+		end := strings.IndexByte(value[index+2:], 'm')
+		if end < 0 {
+			out.WriteString(value[index:])
+			break
+		}
+		end += index + 2
+		if kept := keptAttributes(value[index+2 : end]); kept != "" {
+			out.WriteString("\x1b[")
+			out.WriteString(kept)
+			out.WriteByte('m')
+		}
+		index = end + 1
+	}
+	return out.String()
+}
+
+// keptAttributes removes the foreground colour and faint parameters from an
+// SGR parameter list and returns the rest joined as an SGR list.
+func keptAttributes(params string) string {
+	parts := strings.Split(params, ";")
+	kept := make([]string, 0, len(parts))
+	for position := 0; position < len(parts); position++ {
+		code, err := strconv.Atoi(parts[position])
+		if err != nil {
+			if parts[position] != "" {
+				kept = append(kept, parts[position])
+			}
+			continue
+		}
+		switch {
+		case code == 2, code == 39:
+			// Faint and the default foreground both fight the selection.
+		case code == 38:
+			// Skip the extended foreground payload (38;5;n or 38;2;r;g;b).
+			if position+1 < len(parts) {
+				switch parts[position+1] {
+				case "5":
+					position += 2
+				case "2":
+					position += 4
+				}
+			}
+		case code >= 30 && code <= 37, code >= 90 && code <= 97:
+			// Standard and bright foreground colours.
+		default:
+			kept = append(kept, parts[position])
+		}
+	}
+	return strings.Join(kept, ";")
 }
 
 // selectionBackground and selectionForeground are chosen together so the row's
@@ -2314,20 +2377,14 @@ func stateColor(agent capabilities.Agent) lipgloss.Style {
 	}
 }
 
-// stateColorFor brightens the state colour on the selected row: the dark
-// red, green and yellow variants do not contrast with the selection blue.
+// stateColorFor keeps the state cue on the selected row without a per-segment
+// colour: the selection foreground already contrasts with its background, so
+// the selected row renders the state as plain text.
 func stateColorFor(agent capabilities.Agent, selected bool) lipgloss.Style {
-	if !selected {
-		return stateColor(agent)
+	if selected {
+		return normal()
 	}
-	switch {
-	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && !agent.Seen:
-		return brightRed()
-	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped"):
-		return brightGreen()
-	default:
-		return brightYellow()
-	}
+	return stateColor(agent)
 }
 func normal() lipgloss.Style      { return lipgloss.NewStyle().Foreground(lipgloss.Color("default")) }
 func muted() lipgloss.Style       { return normal().Faint(true) }
@@ -2340,11 +2397,8 @@ func green() lipgloss.Style       { return lipgloss.NewStyle().Foreground(lipglo
 func yellow() lipgloss.Style      { return lipgloss.NewStyle().Foreground(lipgloss.Color("3")) }
 func brightGreen() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("10")) }
 func brightRed() lipgloss.Style   { return lipgloss.NewStyle().Foreground(lipgloss.Color("9")) }
-func brightYellow() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-}
-func bold() lipgloss.Style { return normal().Bold(true) }
-func highlightText(text, query string) string {
+func bold() lipgloss.Style        { return normal().Bold(true) }
+func highlightText(text, query string, selected bool) string {
 	match, ok := picker.Rank(query, text)
 	if !ok || len(match.Positions) == 0 {
 		return text
@@ -2357,7 +2411,13 @@ func highlightText(text, query string) string {
 	out := strings.Builder{}
 	for i, r := range runes {
 		if positions[i] {
-			out.WriteString(yellow().Bold(true).Render(string(r)))
+			style := yellow().Bold(true)
+			if selected {
+				// The selected row has no per-segment colour, so the match
+				// relies on bold and underline alone to stay visible.
+				style = style.Underline(true)
+			}
+			out.WriteString(style.Render(string(r)))
 		} else {
 			out.WriteRune(r)
 		}
@@ -2366,11 +2426,16 @@ func highlightText(text, query string) string {
 }
 
 // highlightMarkedText keeps the required magenta foreground for every name
-// character. Matching characters use bold and underline instead of a yellow
-// foreground so the query remains visible without changing the mark colour.
-func highlightMarkedText(text, query string) string {
+// character on an unselected row. Matching characters use bold and underline
+// instead of a yellow foreground so the query remains visible without changing
+// the mark colour. A selected row drops the magenta and keeps the mark cue as
+// bold weight instead.
+func highlightMarkedText(text, query string, selected bool) string {
 	match, ok := picker.Rank(query, text)
 	if !ok || len(match.Positions) == 0 {
+		if selected {
+			return bold().Render(text)
+		}
 		return magenta().Render(text)
 	}
 	positions := map[int]bool{}
@@ -2380,6 +2445,10 @@ func highlightMarkedText(text, query string) string {
 	out := strings.Builder{}
 	for i, r := range []rune(text) {
 		style := magenta()
+		if selected {
+			// The selected row keeps the mark cue as weight rather than colour.
+			style = bold()
+		}
 		if positions[i] {
 			style = style.Bold(true).Underline(true)
 		}

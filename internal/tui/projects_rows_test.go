@@ -224,6 +224,9 @@ func TestProjectBranchAndFolderMatchesAreHighlighted(t *testing.T) {
 	}}}, ProjectsTab)
 	branch.SetQuery("unique")
 	branch.SetSize(120, 8)
+	// The matched row is unselected here so its semantic yellow colour shows;
+	// a selected row keeps only bold and underline.
+	branch.cursor = "group:/work/folder"
 	if !strings.Contains(branch.View(), "\x1b[1;33mu") {
 		t.Fatalf("branch match was not highlighted: %q", branch.View())
 	}
@@ -233,6 +236,7 @@ func TestProjectBranchAndFolderMatchesAreHighlighted(t *testing.T) {
 	}}}, ProjectsTab)
 	folder.SetQuery("folder")
 	folder.SetSize(120, 8)
+	folder.cursor = "group:/home/tester/folder"
 	if !strings.Contains(folder.View(), "\x1b[1;33mf") {
 		t.Fatalf("folder match was not highlighted: %q", folder.View())
 	}
