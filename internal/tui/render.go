@@ -42,7 +42,7 @@ func (m Model) frame() renderFrame {
 		width: m.width, height: m.height, sized: m.sized, tab: m.input.tab,
 		query: append([]rune(nil), m.input.query...), rows: m.rows,
 		cursor: m.input.cursor, marked: m.input.marked,
-		markedTargetsList: m.input.markedTargetsCatalog(m.catalog), now: m.now,
+		markedTargetsList: projection.markedTargets(m.input.marked), now: m.now,
 		toast: m.toast, refreshErr: m.source.refreshErr, gitErrors: m.gitErrors,
 		projection: projection, confirmKill: m.input.confirmKill,
 		renameMode: m.input.renameMode, renameInput: append([]rune(nil), m.input.renameInput...),

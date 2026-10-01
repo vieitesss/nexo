@@ -192,18 +192,18 @@ func (c *Catalog) Snapshot() CatalogSnapshot {
 	}
 }
 
-// Marked returns marked container identities in source order from the current
-// coherent snapshot. Machine normalization keeps marks stable across remote
-// spellings and refreshes.
-func (c *Catalog) Marked(marked map[ContainerRef]bool) []ContainerRef {
-	snapshot := c.Snapshot()
+// Marked returns marked container identities in source order from this
+// snapshot. Machine normalization keeps marks stable across remote spellings
+// and refreshes. Deriving marks from an already-materialized snapshot lets a
+// caller reuse one coherent view for both counts and marks.
+func (s CatalogSnapshot) Marked(marked map[ContainerRef]bool) []ContainerRef {
 	normalizedMarked := make(map[ContainerRef]bool, len(marked))
 	for ref, value := range marked {
 		normalizedMarked[ContainerRef{Machine: NormalizeMachine(ref.Machine), ID: ref.ID}] = value
 	}
 	refs := make([]ContainerRef, 0)
 	seen := make(map[ContainerRef]bool)
-	for _, place := range snapshot.Places {
+	for _, place := range s.Places {
 		ref := ContainerRef{Machine: NormalizeMachine(place.Machine), ID: place.ContainerID}
 		if place.Kind != ContainerKind || ref.ID == "" || !normalizedMarked[ref] || seen[ref] {
 			continue
@@ -212,6 +212,12 @@ func (c *Catalog) Marked(marked map[ContainerRef]bool) []ContainerRef {
 		refs = append(refs, ref)
 	}
 	return refs
+}
+
+// Marked returns marked container identities in source order from the current
+// coherent snapshot.
+func (c *Catalog) Marked(marked map[ContainerRef]bool) []ContainerRef {
+	return c.Snapshot().Marked(marked)
 }
 
 // NormalizeMachine returns the stable machine namespace used by all catalog

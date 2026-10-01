@@ -263,6 +263,13 @@ func (p rowProjection) containerPlaces() []picker.Place {
 	return containerPlacesFrom(p.snapshot.Places)
 }
 
+// markedTargets derives marked identities from the snapshot the projection
+// already holds, so frame construction or a mouse hit test asks the catalog
+// for one coherent view instead of materializing a second one for the marks.
+func (p rowProjection) markedTargets(marked map[picker.ContainerRef]bool) []picker.ContainerRef {
+	return p.snapshot.Marked(marked)
+}
+
 func (p rowProjection) Rows(tab Tab) []row {
 	switch tab {
 	case AgentsTab:

@@ -415,7 +415,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		m.input.deps = m.deps
-		effect := m.input.key(msg, inputFrame{render: m.frame(), rows: m.rows, marked: m.input.markedTargetsCatalog(m.catalog)})
+		effect := m.input.key(msg, m.keyFrame())
 		if effect.rebuild {
 			m.rebuild(false)
 		}
@@ -426,7 +426,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, effect.cmd
 	case tea.MouseMsg:
 		m.input.deps = m.deps
-		effect := m.input.mouse(msg, inputFrame{render: m.frame(), rows: m.rows, marked: m.input.markedTargetsCatalog(m.catalog)})
+		effect := m.input.mouse(msg, m.mouseFrame())
 		if effect.rebuild {
 			m.rebuild(false)
 		}
@@ -452,6 +452,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// keyFrame supplies keyboard transitions with rows, height, and a lazy marked
+// lookup. Blocked and navigation-only keys therefore never materialize the
+// catalog snapshot a full presentation frame would build.
+func (m Model) keyFrame() inputFrame {
+	return inputFrame{
+		rows:   m.rows,
+		height: m.height,
+		marked: func() []picker.ContainerRef { return m.input.markedTargetsCatalog(m.catalog) },
+	}
+}
+
+// mouseFrame supplies pointer transitions with rows and a lazy layout frame.
+// The layout is built once, only for a click that reaches hit testing.
+func (m Model) mouseFrame() inputFrame {
+	return inputFrame{rows: m.rows, render: m.frame}
 }
 
 func (m *Model) applyGit(msg picker.GitContextMsg) {

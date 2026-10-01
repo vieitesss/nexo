@@ -2,8 +2,9 @@ package tui
 
 // Input is the transition module behind Model.Update. Its focused state owns
 // query editing, identity-stable selection, folding, modal actions, and the
-// selected result. It receives rows and a presentation hit-test rather than
-// the coordinator, so keyboard and mouse transitions can be tested directly.
+// selected result. It receives rows and a lazy presentation frame rather than
+// the coordinator, so keyboard and mouse transitions can be tested directly
+// and ignored events never materialize a catalog snapshot.
 
 import (
 	"context"
@@ -49,9 +50,29 @@ type inputEffect struct {
 }
 
 type inputFrame struct {
-	render renderFrame
 	rows   []row
-	marked []picker.ContainerRef
+	height int
+	marked func() []picker.ContainerRef
+	render func() renderFrame
+}
+
+// markedTargets resolves the marked container identities on demand. Only the
+// kill transition asks for them, so ordinary key and mouse events never pay
+// for the catalog snapshot the marks are derived from.
+func (f inputFrame) markedTargets() []picker.ContainerRef {
+	if f.marked == nil {
+		return nil
+	}
+	return f.marked()
+}
+
+// layout resolves the presentation frame on demand. Pointer transitions build
+// it once, when they are about to hit-test a real click.
+func (f inputFrame) layout() renderFrame {
+	if f.render == nil {
+		return renderFrame{}
+	}
+	return f.render()
 }
 
 func newInputState(tab Tab, deps Deps, ctx context.Context) *inputState {
@@ -174,10 +195,14 @@ func (s *inputState) mouse(msg tea.MouseMsg, frame inputFrame) inputEffect {
 		}
 		return inputEffect{}
 	}
-	if button != tea.MouseButtonLeft || event.Action != tea.MouseActionPress || event.X < 0 || event.X >= frame.render.width {
+	if button != tea.MouseButtonLeft || event.Action != tea.MouseActionPress {
 		return inputEffect{}
 	}
-	hit := frame.render.hitTest(event.X, event.Y)
+	layout := frame.layout()
+	if event.X < 0 || event.X >= layout.width {
+		return inputEffect{}
+	}
+	hit := layout.hitTest(event.X, event.Y)
 	if hit.tab != "" {
 		s.switchTo(hit.tab)
 		return inputEffect{rebuild: true}
@@ -330,7 +355,7 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 		s.toggleMark(frame.rows)
 		return inputEffect{rebuild: true}
 	case tea.KeyCtrlX:
-		refs := append([]picker.ContainerRef(nil), frame.marked...)
+		refs := append([]picker.ContainerRef(nil), frame.markedTargets()...)
 		if len(refs) == 0 {
 			if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ContainerKind && current.place.ContainerID != "" {
 				refs = []picker.ContainerRef{{Machine: current.place.Machine, ID: current.place.ContainerID}}
@@ -379,10 +404,10 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 		s.moveCursor(-1, frame.rows)
 		return inputEffect{}
 	case tea.KeyPgUp:
-		s.moveCursor(-s.pageSize(frame.render.height), frame.rows)
+		s.moveCursor(-s.pageSize(frame.height), frame.rows)
 		return inputEffect{}
 	case tea.KeyPgDown:
-		s.moveCursor(s.pageSize(frame.render.height), frame.rows)
+		s.moveCursor(s.pageSize(frame.height), frame.rows)
 		return inputEffect{}
 	case tea.KeyLeft:
 		if s.foldLeft(frame.rows) {
