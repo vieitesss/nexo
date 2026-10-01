@@ -14,6 +14,50 @@ import (
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
+func TestTmuxAgentPathWithTab(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	for _, name := range []string{"TMUX", "TMUX_PANE", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"} {
+		t.Setenv(name, "")
+	}
+	ctx := context.Background()
+	server := "nexo-test-tab-path-" + strings.ReplaceAll(t.Name(), "/", "-")
+	runTmux := func(args ...string) ([]byte, error) {
+		commandArgs := append([]string{"-L", server, "-f", "/dev/null"}, args...)
+		return exec.CommandContext(ctx, "tmux", commandArgs...).CombinedOutput()
+	}
+	t.Cleanup(func() { _, _ = runTmux("kill-server") })
+
+	path := filepath.Join(t.TempDir(), "a\tb")
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pi := filepath.Join(t.TempDir(), "pi")
+	if err := os.WriteFile(pi, []byte("#!/bin/sh\nprintf '⠋ working\\n'\nsleep 30\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runTmux("new-session", "-d", "-s", "work", "-c", path, pi); err != nil {
+		t.Fatalf("create session: %v: %s", err, output)
+	}
+
+	source := NewAgentSource(runner.Func(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "tmux" {
+			args = append([]string{"-L", server, "-f", "/dev/null"}, args...)
+		}
+		return runner.ExecRunner{}.Run(ctx, name, args...)
+	}))
+	source.SetStateDir(t.TempDir())
+	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 1, PollInterval: 1})
+	agents, err := source.ListAgents(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 1 || agents[0].Container != "work" || agents[0].Target != "work:0.0" {
+		t.Fatalf("discovery = %#v, want one agent in the tabbed-path pane", agents)
+	}
+}
+
 func TestTmuxAgentIntegration(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")

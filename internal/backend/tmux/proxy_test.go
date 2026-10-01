@@ -260,7 +260,7 @@ func TestProxySwitchesExistingSessionWithoutCreatingDuplicate(t *testing.T) {
 	if len(runner.calls) != 4 {
 		t.Fatalf("tmux calls = %#v, want list, two options, and switch", runner.calls)
 	}
-	if runner.calls[0].args[0] != "list-sessions" || runner.calls[1].args[0] != "set-option" || runner.calls[2].args[0] != "set-option" || runner.calls[3].args[0] != "switch-client" {
+	if runner.calls[0].args[1] != "list-sessions" || runner.calls[1].args[1] != "set-option" || runner.calls[2].args[1] != "set-option" || runner.calls[3].args[0] != "switch-client" {
 		t.Fatalf("tmux calls = %#v, want existing proxy switch", runner.calls)
 	}
 	if got := runner.calls[3].args[2]; got != "$1" {
@@ -274,7 +274,7 @@ func TestProxyCreatesSessionWithQuotedAttachCommand(t *testing.T) {
 			"list-sessions -F #{session_id}\t#{@nexo-proxy}": nil,
 		},
 		outputFunc: func(_ string, args []string) ([]byte, bool) {
-			if len(args) > 0 && args[0] == "new-session" {
+			if len(args) > 1 && args[1] == "new-session" {
 				return []byte("$2\n"), true
 			}
 			return nil, false
@@ -285,10 +285,10 @@ func TestProxyCreatesSessionWithQuotedAttachCommand(t *testing.T) {
 	if err := backend.Proxy(context.Background(), "devbox", "$1"); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
-	if got := runner.calls[1].args[0]; got != "new-session" {
+	if got := runner.calls[1].args[1]; got != "new-session" {
 		t.Fatalf("second tmux call = %#v, want new-session", runner.calls[1])
 	}
-	if got := runner.calls[1].args[4]; got != "#{session_id}" {
+	if got := runner.calls[1].args[5]; got != "#{session_id}" {
 		t.Fatalf("new-session format = %q, want session id format", got)
 	}
 	command := runner.calls[1].args[len(runner.calls[1].args)-1]

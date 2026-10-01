@@ -28,18 +28,21 @@ const (
 )
 
 const (
-	agentFrameStart      = "__NEXO_AGENTS_START__"
-	agentFrameEnd        = "__NEXO_AGENTS_END__"
-	remoteKindFrameStart = "__NEXO_REMOTE_KIND__"
+	agentFrameStart        = "__NEXO_AGENTS_START__"
+	agentFrameEnd          = "__NEXO_AGENTS_END__"
+	agentWarningFrameStart = "__NEXO_AGENTS_WARNING__"
+	remoteKindFrameStart   = "__NEXO_REMOTE_KIND__"
 )
 
 // MachineResult is one configured machine's listing result. An error does not
-// prevent other machines from being listed.
+// prevent other machines from being listed. Warning reports a non-fatal gap,
+// such as the remote nexo binary being unavailable for agent status.
 type MachineResult struct {
 	Machine    string                   `json:"machine"`
 	Kind       Kind                     `json:"kind,omitempty"`
 	Containers []capabilities.Container `json:"containers,omitempty"`
 	Agents     []capabilities.Agent     `json:"agents,omitempty"`
+	Warning    string                   `json:"warning,omitempty"`
 	Error      string                   `json:"error,omitempty"`
 }
 
@@ -138,8 +141,8 @@ func (l Lister) ListMachine(ctx context.Context, machine string) MachineResult {
 }
 
 // ListMachineWithAgents lists containers and, when available, the agent
-// statuses from the same machine. An unavailable remote nexo binary is a
-// best-effort omission: containers remain usable and no error is reported.
+// statuses from the same machine. An unavailable remote nexo binary leaves
+// containers usable and reports a short per-machine warning.
 func (l Lister) ListMachineWithAgents(ctx context.Context, machine string) MachineResult {
 	machine = strings.TrimSpace(machine)
 	result := MachineResult{Machine: machine}
@@ -173,6 +176,8 @@ func (l Lister) ListMachineWithAgents(ctx context.Context, machine string) Machi
 		}
 		return result
 	}
+	agentWarning, output := splitAgentWarning(output)
+	result.Warning = formatAgentWarning(agentWarning)
 	kind, listing := splitRemoteKind(output, l.Backend)
 	result.Kind = kind
 	containerOutput, agentOutput := splitAgentFrame(listing)
@@ -193,6 +198,13 @@ func (l Lister) ListMachineWithAgents(ctx context.Context, machine string) Machi
 		// a backend mismatch must not hide otherwise valid containers.
 		if agents, agentErr := decodeAgents(agentOutput); agentErr == nil {
 			result.Agents = agents
+		} else {
+			warning := formatAgentWarning(agentErr.Error())
+			if result.Warning == "" {
+				result.Warning = warning
+			} else {
+				result.Warning += "; " + warning
+			}
 		}
 	}
 	return result
@@ -201,6 +213,16 @@ func (l Lister) ListMachineWithAgents(ctx context.Context, machine string) Machi
 // List queries all configured machines in parallel. Results retain the input
 // order while each machine's own timeout controls completion.
 func (l Lister) List(ctx context.Context, machines []string) []MachineResult {
+	return l.list(ctx, machines, false)
+}
+
+// ListWithAgents is List plus the optional per-machine agent status and warning
+// frame. It backs the user-facing `nexo remote list` output.
+func (l Lister) ListWithAgents(ctx context.Context, machines []string) []MachineResult {
+	return l.list(ctx, machines, true)
+}
+
+func (l Lister) list(ctx context.Context, machines []string, withAgents bool) []MachineResult {
 	l.DetectKind = true
 	machines = uniqueMachines(machines)
 	results := make([]MachineResult, len(machines))
@@ -209,6 +231,10 @@ func (l Lister) List(ctx context.Context, machines []string) []MachineResult {
 	for index, machine := range machines {
 		go func(index int, machine string) {
 			defer wg.Done()
+			if withAgents {
+				results[index] = l.ListMachineWithAgents(ctx, machine)
+				return
+			}
 			results[index] = l.ListMachine(ctx, machine)
 		}(index, machine)
 	}
@@ -252,10 +278,9 @@ func (l Lister) remoteListingCommand(machine string, withAgents bool) string {
 	if configured == string(backend.Tmux) || configured == string(backend.Herdr) {
 		kind := Kind(configured)
 		listing := l.backendCommandFor(backend.Kind(configured))
-		agents := ShellCommand("nexo", "--backend", configured, "agents", "--json")
 		agentFrames := ""
 		if withAgents {
-			agentFrames = "; printf '\\n%s\\n' " + ShellCommand(agentFrameStart) + "; " + agents + " 2>/dev/null || true; printf '\\n%s\\n' " + ShellCommand(agentFrameEnd)
+			agentFrames = "; " + agentCapture(ShellCommand("nexo", "--backend", configured, "agents", "--json"))
 		}
 		return strings.Join([]string{
 			"listing_status=0",
@@ -271,25 +296,44 @@ func (l Lister) remoteListingCommand(machine string, withAgents bool) string {
 	tmuxList := l.backendTmuxCommand()
 	herdrAgents := ShellCommand("nexo", "--backend", string(backend.Herdr), "agents", "--json")
 	tmuxAgents := ShellCommand("nexo", "--backend", string(backend.Tmux), "agents", "--json")
-	agentFrames := ""
-	if withAgents {
-		agentFrames = "; printf '\\n%s\\n' " + ShellCommand(agentFrameStart) + "; AGENT_COMMAND 2>/dev/null || true; printf '\\n%s\\n' " + ShellCommand(agentFrameEnd)
-	}
 	// Herdr status exits successfully even when no server is running. Parse its
 	// running field before selecting the one authoritative listing command.
+	herdrBranch := "listing_output=$(" + herdrList + ") || listing_status=$?; printf '%s\\n' " + ShellCommand(remoteKindFrameStart+string(KindHerdr)) + "; printf '%s\\n' \"$listing_output\""
+	tmuxBranch := "listing_output=$(" + tmuxList + ") || listing_status=$?; printf '%s\\n' " + ShellCommand(remoteKindFrameStart+string(KindTmux)) + "; printf '%s\\n' \"$listing_output\""
+	if withAgents {
+		herdrBranch += "; " + agentCapture(herdrAgents)
+		tmuxBranch += "; " + agentCapture(tmuxAgents)
+	}
 	return strings.Join([]string{
 		"herdr_running=0",
 		"herdr_status=$(" + herdrStatus + " 2>/dev/null) || herdr_status=''",
 		"herdr_compact=$(printf '%s' \"$herdr_status\" | tr -d '[:space:]')",
 		"case \"$herdr_compact\" in *'\"running\":true'*) herdr_running=1;; esac",
 		"listing_status=0",
-		"if test $herdr_running -eq 1; then listing_output=$(" + herdrList + ") || listing_status=$?; printf '%s\\n' " + ShellCommand(remoteKindFrameStart+string(KindHerdr)) + "; printf '%s\\n' \"$listing_output\"" + strings.ReplaceAll(agentFrames, "AGENT_COMMAND", herdrAgents) + "; else listing_output=$(" + tmuxList + ") || listing_status=$?; printf '%s\\n' " + ShellCommand(remoteKindFrameStart+string(KindTmux)) + "; printf '%s\\n' \"$listing_output\"" + strings.ReplaceAll(agentFrames, "AGENT_COMMAND", tmuxAgents) + "; fi",
+		"if test $herdr_running -eq 1; then " + herdrBranch + "; else " + tmuxBranch + "; fi",
 		"exit $listing_status",
 	}, "; ")
 }
 
+// agentCapture returns a shell sequence that runs one remote agent listing and
+// frames its output. A failing command keeps the container listing usable and
+// reports the first stderr line as a single warning instead of silence.
+func agentCapture(agents string) string {
+	return strings.Join([]string{
+		"agent_err=$(mktemp \"${TMPDIR:-/tmp}/nexo-agents.XXXXXX\") || agent_err=",
+		"agents_status=0",
+		"agent_output=",
+		"if test -n \"$agent_err\"; then agent_output=$(" + agents + " 2>\"$agent_err\") || agents_status=$?; else agents_status=1; fi",
+		"printf '\\n%s\\n' " + ShellCommand(agentFrameStart),
+		"printf '%s\\n' \"$agent_output\"",
+		"printf '\\n%s\\n' " + ShellCommand(agentFrameEnd),
+		"if test $agents_status -ne 0; then if test -n \"$agent_err\"; then agent_message=$(head -n 1 \"$agent_err\"); else agent_message='unable to create temporary file'; fi; if test -z \"$agent_message\"; then agent_message='unknown error'; fi; printf '\\n%s%s\\n' " + ShellCommand(agentWarningFrameStart) + " \"$agent_message\"; fi",
+		"if test -n \"$agent_err\"; then rm -f \"$agent_err\"; fi",
+	}, "; ")
+}
+
 func (l Lister) backendTmuxCommand() string {
-	return ShellCommand("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
+	return ShellCommand("tmux", "-u", "list-sessions", "-F", "#{session_id}\t#{session_name}")
 }
 
 func (l Lister) runCommand(ctx context.Context, machine, command string) ([]byte, error) {
@@ -332,12 +376,10 @@ func (l Lister) backendAgentsCommand() string {
 	listing := l.backendCommand()
 	agents := ShellCommand("nexo", "--backend", string(l.Backend), "agents", "--json")
 	return strings.Join([]string{
-		"agent_status=0",
-		listing + " || agent_status=$?",
-		"printf '\\n%s\\n' " + ShellCommand(agentFrameStart),
-		agents + " 2>/dev/null || true",
-		"printf '\\n%s\\n' " + ShellCommand(agentFrameEnd),
-		"exit $agent_status",
+		"listing_status=0",
+		listing + " || listing_status=$?",
+		agentCapture(agents),
+		"exit $listing_status",
 	}, "; ")
 }
 
@@ -371,6 +413,33 @@ func splitRemoteKind(output []byte, fallback backend.Kind) (Kind, []byte) {
 func bytesHasRemoteKind(output []byte) bool {
 	text := string(output)
 	return strings.Contains(text, remoteKindFrameStart+string(KindTmux)) || strings.Contains(text, remoteKindFrameStart+string(KindHerdr))
+}
+
+func splitAgentWarning(output []byte) (string, []byte) {
+	lines := strings.Split(string(output), "\n")
+	filtered := lines[:0]
+	warning := ""
+	for _, line := range lines {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.HasPrefix(line, agentWarningFrameStart) {
+			if warning == "" {
+				warning = strings.TrimSpace(strings.TrimPrefix(line, agentWarningFrameStart))
+			}
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	return warning, []byte(strings.Join(filtered, "\n"))
+}
+
+// formatAgentWarning turns the first remote stderr line into one short,
+// self-describing warning. An empty frame means the agent command succeeded.
+func formatAgentWarning(message string) string {
+	message = normalizeError(message)
+	if message == "" {
+		return ""
+	}
+	return "agents unavailable: " + message
 }
 
 func splitAgentFrame(output []byte) (listing, agents []byte) {

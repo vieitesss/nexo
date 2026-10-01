@@ -231,7 +231,7 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 		return err
 	}
 	if b.Inside {
-		_, err = b.run(ctx, "switch-client", "-t", sessionID)
+		_, err = b.runClient(ctx, "switch-client", "-t", sessionID)
 		return err
 	}
 	return b.runInteractive(ctx, "attach-session", "-t", sessionID)

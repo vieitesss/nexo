@@ -320,6 +320,10 @@ devbox = "tmux"             # auto, tmux, or herdr
 
 ```
 
+Remote machines need a separate setup on each side. See
+[docs/remote.md](docs/remote.md#main-and-remote-machines) for what the main
+machine and each remote machine need.
+
 <details>
 <summary><strong>All configuration options and defaults</strong></summary>
 

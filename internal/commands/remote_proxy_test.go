@@ -109,7 +109,7 @@ func TestRemoteNewQuotesRemoteContainerName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if !strings.Contains(got[len(got)-1], "tmux new-session -d -P -F '#{session_name}'") || !strings.Contains(got[len(got)-1], "'name with spaces'") {
+	if !strings.Contains(got[len(got)-1], "tmux -u new-session -d -P -F '#{session_name}'") || !strings.Contains(got[len(got)-1], "'name with spaces'") {
 		t.Fatalf("remote command = %q, want printed canonical name and quoted name", got[len(got)-1])
 	}
 	if !reflect.DeepEqual(proxy.opened, [2]string{"devbox", "name with spaces"}) {

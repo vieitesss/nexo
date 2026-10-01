@@ -53,11 +53,13 @@ type PreviewBatch struct {
 
 // RemoteBatch is one asynchronous machine listing. Error keeps an unreachable
 // machine visible without turning a partial picker result into a failure.
+// Warning reports a non-fatal gap such as unavailable remote agent status.
 type RemoteBatch struct {
 	Machine string
 	Backend string
 	Places  []Place
 	Agents  []capabilities.Agent
+	Warning string
 	Error   string
 }
 

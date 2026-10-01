@@ -21,7 +21,7 @@ func TestRemoveWorktreeKillsCreatedSessionBeforeCleanupAndJoinsErrors(t *testing
 	if err == nil || !strings.Contains(err.Error(), "kill failed") || !strings.Contains(err.Error(), "worktree failed") || !strings.Contains(err.Error(), "branch failed") {
 		t.Fatalf("RemoveWorktree() error = %v, want all cleanup failures", err)
 	}
-	if len(runner.calls) != 3 || runner.calls[0].args[0] != "kill-session" || runner.calls[1].args[2] != "worktree" || runner.calls[2].args[2] != "branch" {
+	if len(runner.calls) != 3 || runner.calls[0].args[1] != "kill-session" || runner.calls[1].args[2] != "worktree" || runner.calls[2].args[2] != "branch" {
 		t.Fatalf("calls = %#v, want session kill before cleanup", runner.calls)
 	}
 }

@@ -61,7 +61,7 @@ func runRemoteList(ctx context.Context, invocation Invocation) error {
 		return fmt.Errorf("remote list accepts no arguments")
 	}
 	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithBackends(invocation.Config.Remote.Backends)
-	results := lister.List(ctx, invocation.Config.Remote.ConfiguredMachines())
+	results := lister.ListWithAgents(ctx, invocation.Config.Remote.ConfiguredMachines())
 	if invocation.JSON {
 		return json.NewEncoder(invocation.Stdout).Encode(results)
 	}
@@ -121,7 +121,7 @@ func runRemoteNew(ctx context.Context, invocation Invocation) error {
 	if configPath := strings.TrimSpace(invocation.Config.Remote.SSHConfig); configPath != "" {
 		args = append(args, "-F", configPath)
 	}
-	args = append(args, machine, "tmux new-session -d -P -F '#{session_name}' -s "+remoteShellQuote(tmux.EscapeSessionName(name)))
+	args = append(args, machine, "tmux -u new-session -d -P -F '#{session_name}' -s "+remoteShellQuote(tmux.EscapeSessionName(name)))
 	output, err := invocation.Runner.Run(ctx, "ssh", args...)
 	if err != nil {
 		if text := strings.TrimSpace(string(output)); text != "" {
@@ -174,7 +174,7 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 		if pane == "" {
 			return errors.New("remote close requires MACHINE/CONTAINER outside a proxy session")
 		}
-		output, err := invocation.Runner.Run(ctx, "tmux", "display-message", "-p", "-t", pane, "#{@nexo-proxy}")
+		output, err := invocation.Runner.Run(ctx, "tmux", tmux.UTF8Args("display-message", "-p", "-t", pane, "#{@nexo-proxy}")...)
 		if err != nil {
 			return fmt.Errorf("find current proxy: %w", err)
 		}
@@ -537,6 +537,11 @@ func writeRemoteResults(stdout io.Writer, results []remote.MachineResult) error 
 		}
 		if _, err := fmt.Fprintf(stdout, "%s:\n", result.Machine); err != nil {
 			return err
+		}
+		if result.Warning != "" {
+			if _, err := fmt.Fprintf(stdout, "  warning: %s\n", result.Warning); err != nil {
+				return err
+			}
 		}
 		for _, container := range result.Containers {
 			if _, err := fmt.Fprintf(stdout, "  %s\n", container.Name); err != nil {
