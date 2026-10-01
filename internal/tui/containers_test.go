@@ -20,28 +20,26 @@ func TestContainersAreOneLineAndNeverRenderPreview(t *testing.T) {
 		t.Fatalf("container frame retained old secondary/tree text: %q", plain)
 	}
 	for _, line := range strings.Split(plain, "\n") {
-		if strings.Contains(line, "one") && !strings.Contains(line, "machine") {
-			if strings.Contains(line, "stopped") {
-				return
+		if strings.Contains(line, "one") && strings.Contains(line, "●") {
+			if strings.Contains(line, "stopped") || strings.Contains(line, "3m") {
+				t.Fatalf("container row rendered agent details: %q", line)
 			}
-			t.Fatalf("container name and pill were split: %q", line)
+			return
 		}
 	}
 	t.Fatal("container row not found")
 }
 
-func TestContainerWidthDegradesPillsDotsThenAge(t *testing.T) {
+func TestContainerRowsRenderOnlyStateDots(t *testing.T) {
 	old := time.Now().Add(-3 * time.Minute)
 	model := NewModel(context.Background(), Deps{Containers: []capabilities.Container{{ID: "long", Name: "a-very-long-container-name-that-needs-truncation", Machine: picker.LocalMachine(), Activity: &old}}, Agents: []capabilities.Agent{{PaneID: "a", ContainerID: "long", Container: "long", Harness: "pi", State: "working"}, {PaneID: "b", ContainerID: "long", Container: "long", Harness: "claude", State: "stopped", Seen: true, StoppedSince: &old}}}, ContainersTab)
 	model.SetSize(120, 8)
 	full := shell.Plain(model.View())
-	if !strings.Contains(full, "pi working") || !strings.Contains(full, "claude stopped") || !strings.Contains(full, "3m") {
-		t.Fatalf("full container row = %q", full)
+	if strings.Contains(full, "pi working") || strings.Contains(full, "claude stopped") || strings.Contains(full, "3m") {
+		t.Fatalf("container row rendered agent details: %q", full)
 	}
-	model.SetSize(60, 8)
-	medium := shell.Plain(model.View())
-	if !strings.Contains(medium, "●●") && !strings.Contains(medium, "● ●") {
-		t.Fatalf("medium row did not degrade to dots: %q", medium)
+	if !strings.Contains(full, "● ●") && !strings.Contains(full, "●●") {
+		t.Fatalf("container row omitted state dots: %q", full)
 	}
 	model.SetSize(30, 8)
 	narrow := shell.Plain(model.View())
@@ -68,8 +66,8 @@ func TestRemoteProxyMergesWithRemoteContainerAndRemainsVisibleWhenStale(t *testi
 	}
 	model.SetSize(100, 12)
 	plain := shell.Plain(model.View())
-	if !strings.Contains(plain, "local proxy") {
-		t.Fatalf("view = %q, want local proxy indicator", plain)
+	if strings.Contains(plain, "local proxy") {
+		t.Fatalf("view retained removed proxy indicator: %q", plain)
 	}
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Error: "offline"})
 	count = 0

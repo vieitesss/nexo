@@ -53,6 +53,20 @@ func TestSearchWordDeletes(t *testing.T) {
 	}
 }
 
+func TestMouseIgnoresActionInFlight(t *testing.T) {
+	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
+	model.SetSize(80, 8)
+	before := model.Cursor()
+	model.actionInFlight = true
+	model = updateModel(t, model, tea.MouseMsg{X: 8, Y: 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if model.Cursor() != before {
+		t.Fatalf("cursor changed during action: %q -> %q", before, model.Cursor())
+	}
+	if _, ok := model.SelectedPlace(); ok {
+		t.Fatal("mouse accepted a row while an action was in flight")
+	}
+}
+
 func TestMouseIgnoresModalClicksAndWheel(t *testing.T) {
 	projects := []picker.Place{
 		{Kind: picker.ProjectKind, Path: "/work/root", Group: "/work", DisplayRemainder: "root"},

@@ -4,6 +4,16 @@ The terminal interface renders aligned, one-line rows in each tab. The selected
 row keeps its identity while the terminal is resized or asynchronous data is
 refreshed.
 
+## Agents and containers
+
+Agents and containers are grouped by machine. The local machine appears first,
+followed by remote machines; each machine header is bold with a muted agent or
+container count. Agents stay attention-ordered within their machine, and a
+remote header shows loading, warning, or error status while discovery runs.
+Container rows show the container name followed by one coloured state dot per
+agent. They do not repeat harness names, state words, ages, activity ages, or
+proxy labels. Agent rows show the container name without a machine prefix.
+
 ## Projects
 
 Projects are grouped by their containing folder. On an empty query every folder
@@ -39,7 +49,7 @@ and visible folders are highlighted independently within their cells.
 
 See the picker key table in the README for the complete list. Left/Right only
 fold project rows and project folders; they do not fold machine groups in the
-Containers tab. In the search row, Ctrl-W deletes back to whitespace, Alt-Backspace
+Agents or Containers tabs. In the search row, Ctrl-W deletes back to whitespace, Alt-Backspace
 deletes back to the previous alphanumeric word boundary, and Ctrl-U clears the
 query.
 
@@ -51,6 +61,10 @@ clicking elsewhere selects it, and a second click opens it. Clicks and wheel
 events are ignored while the kill confirmation or inline rename footer is
 active. Shift-drag still selects text in most terminals; hold Shift when you
 need the terminal's normal text selection.
+
+Kill and rename run without leaving the interface. Each action reports success
+or its error in a toast, then refreshes the local and remote rows. A successful
+kill clears marks and keeps the selection by container identity when possible.
 
 ## Colours
 
@@ -65,8 +79,9 @@ interface paints no background, so those are not used on screen.
 Semantic colours stay as terminal ANSI codes and follow the user's theme:
 agent state is red, yellow or green, Git additions and deletions are bright
 green and bright red, and errors are red. The selected row is the only painted
-background — one blue bar with a single foreground — and its text is stripped
-of every other colour.
+background — one blue bar with a single foreground. State dots remain explicit
+adaptive red, green, or amber variants on that background; on the Agents tab,
+the state word and stopped age retain the same state colour.
 
 The `[tui]` `theme` setting controls how adaptive colours are selected. The
 default `"auto"` queries OSC 11 on the controlling terminal (including inside

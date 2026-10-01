@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,6 +32,13 @@ func testContainerDeps() Deps {
 		{ID: "one", Name: "one", Machine: picker.LocalMachine()},
 		{ID: "two", Name: "two", Machine: "remote"},
 	}}
+}
+
+func TestNearestCursorableClampsRemovedRows(t *testing.T) {
+	rows := []row{{id: "first", cursorable: true}, {id: "second", cursorable: true}, {id: "third", cursorable: true}}
+	if got, ok := nearestCursorable(rows, 10); !ok || got != "third" {
+		t.Fatalf("nearest row for removed bottom selection = %q, %t; want third", got, ok)
+	}
 }
 
 func TestPrintableKeysAlwaysSearch(t *testing.T) {
@@ -257,6 +265,54 @@ func TestSelectedRowHasTheOnlyBackgroundSGR(t *testing.T) {
 	}
 	if count == 0 {
 		t.Fatalf("selected row has no background: %q", frame)
+	}
+}
+
+func TestSelectedStateColoursSurviveBothSelectionThemes(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	previous := lipgloss.HasDarkBackground()
+	t.Cleanup(func() { lipgloss.SetHasDarkBackground(previous) })
+	since := time.Now().Add(-2 * time.Hour)
+	deps := Deps{Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: picker.LocalMachine()}}, Agents: []capabilities.Agent{
+		{PaneID: "red", ContainerID: "one", Container: "one", Harness: "pi", State: "stopped", StoppedSince: &since},
+		{PaneID: "green", ContainerID: "one", Container: "one", Harness: "pi", State: "stopped", Seen: true, StoppedSince: &since},
+		{PaneID: "amber", ContainerID: "one", Container: "one", Harness: "pi", State: "working"},
+	}}
+	for _, dark := range []bool{true, false} {
+		lipgloss.SetHasDarkBackground(dark)
+		for _, tab := range []Tab{AgentsTab, ContainersTab} {
+			model := NewModel(context.Background(), deps, tab)
+			model.SetSize(100, 20)
+			for _, row := range model.rows {
+				if row.kind != itemRow {
+					continue
+				}
+				model.cursor = row.id
+				line := ""
+				for _, candidate := range strings.Split(model.View(), "\n") {
+					if strings.Contains(shell.Plain(candidate), "●") && strings.HasPrefix(candidate, selectedRowPrefix()) {
+						line = candidate
+						break
+					}
+				}
+				if line == "" {
+					t.Fatalf("dark=%v tab=%q row=%q has no selected state line", dark, tab, row.id)
+				}
+				if tab == AgentsTab {
+					token := foregroundTokens(selectedStateColor(row.agent).Render("x"))[0]
+					if !strings.Contains(line, "\x1b["+token+"m") {
+						t.Fatalf("dark=%v tab=%q row=%q lost state colour %q: %q", dark, tab, row.id, token, line)
+					}
+				} else {
+					for _, agent := range deps.Agents {
+						token := foregroundTokens(selectedStateColor(agent).Render("x"))[0]
+						if !strings.Contains(line, "\x1b["+token+"m") {
+							t.Fatalf("dark=%v tab=%q row=%q lost dot colour %q: %q", dark, tab, row.id, token, line)
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
