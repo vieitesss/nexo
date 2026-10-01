@@ -231,9 +231,9 @@ func TestRemoteSnapshotsReplaceOpaqueAgentRecords(t *testing.T) {
 // snapshotAgents reads agent association from the materialized place snapshot
 // the container rows render from.
 func snapshotAgents(model Model, machine, id string) []capabilities.Agent {
-	for _, place := range model.containerPlaces() {
-		if place.Machine == machine && place.ContainerID == id {
-			return place.Agents
+	for _, candidate := range model.projection().Rows(ContainersTab) {
+		if candidate.itemKind == "container" && candidate.place.Machine == machine && candidate.place.ContainerID == id {
+			return candidate.place.Agents
 		}
 	}
 	return nil
