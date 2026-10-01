@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -546,6 +547,47 @@ func selectionDeps() Deps {
 	}
 }
 
+// contrastRatioHex returns the WCAG contrast ratio between two #RRGGBB
+// colours.
+func contrastRatioHex(foreground, background string) float64 {
+	luminance := func(value string) float64 {
+		value = strings.TrimPrefix(value, "#")
+		channels := [3]float64{}
+		for index := range channels {
+			channel, err := strconv.ParseUint(value[index*2:index*2+2], 16, 8)
+			if err != nil {
+				panic(err)
+			}
+			linear := float64(channel) / 255
+			if linear <= 0.04045 {
+				channels[index] = linear / 12.92
+			} else {
+				channels[index] = math.Pow((linear+0.055)/1.055, 2.4)
+			}
+		}
+		return 0.2126*channels[0] + 0.7152*channels[1] + 0.0722*channels[2]
+	}
+	light, dark := luminance(foreground), luminance(background)
+	if light < dark {
+		light, dark = dark, light
+	}
+	return (light + 0.05) / (dark + 0.05)
+}
+
+// TestLightAccentStaysReadable pins the readability floor for the brighter
+// light-mode accent: it must keep at least 3:1 contrast on the light
+// backgrounds the TUI is used on.
+func TestLightAccentStaysReadable(t *testing.T) {
+	if palette.Accent.Light == palette.Accent.Dark {
+		t.Fatal("light accent equals the dark variant")
+	}
+	for _, background := range []string{"#FFFFFF", "#F5F5F5"} {
+		if ratio := contrastRatioHex(palette.Accent.Light, background); ratio < 3 {
+			t.Fatalf("light accent %s contrast against %s = %.2f, want at least 3", palette.Accent.Light, background, ratio)
+		}
+	}
+}
+
 func selectedStateCells(model Model, tab Tab, row row, plain string) map[int]bool {
 	allowed := map[int]bool{}
 	runes := []rune(plain)
@@ -670,7 +712,7 @@ func TestPaletteMatchesTheIcon(t *testing.T) {
 		}
 	}
 	// The colours that would be unreadable on a light terminal need their own
-	// light variant: an olive accent, a darker muted grey and a near-black fg.
+	// light variant: a brighter lime-olive accent, a darker muted grey and a near-black fg.
 	for name, pair := range map[string]lipgloss.AdaptiveColor{"fg": palette.Fg, "muted": palette.Muted, "accent": palette.Accent} {
 		if pair.Light == pair.Dark {
 			t.Fatalf("%s light variant equals the dark variant %q", name, pair.Light)

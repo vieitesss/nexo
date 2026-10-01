@@ -226,8 +226,8 @@ func TestConfigureThemeLightUsesLightAdaptiveColours(t *testing.T) {
 	if !bytes.Contains([]byte(selection), []byte("217")) {
 		t.Fatalf("selection = %q, want #d9eaf7 escape", selection)
 	}
-	wantAccent := lipgloss.NewStyle().Foreground(lipgloss.Color("#4E7A00")).Render("x")
+	wantAccent := lipgloss.NewStyle().Foreground(lipgloss.Color("#669900")).Render("x")
 	if accentToken != wantAccent {
-		t.Fatalf("accent = %q, want #4E7A00 escape %q", accentToken, wantAccent)
+		t.Fatalf("accent = %q, want #669900 escape %q", accentToken, wantAccent)
 	}
 }

@@ -74,9 +74,10 @@ kill clears marks and keeps the selection by container identity when possible.
 
 The brand colours come from the icon in `assets/logo.svg`. The lime accent
 (`#B8F15A`), the foreground (`#E8EAED`) and the muted grey (`#8A919E`) are
-adaptive: on a light terminal they switch to an olive accent (`#4E7A00`), a
-darker grey (`#5F6774`) and a near-black foreground (`#1F2329`) so the text
-stays readable. The icon also defines a
+adaptive: on a light terminal they switch to a brighter lime-olive accent
+(`#669900`), a darker grey (`#5F6774`) and a near-black foreground (`#1F2329`)
+so the text stays readable while the accent stays close to the lime. The icon
+also defines a
 ground (`#0F1115`), a tile (`#171A21`) and a tile border (`#2A2F3A`); the
 interface paints no background, so those are not used on screen.
 

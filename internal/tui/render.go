@@ -170,7 +170,7 @@ const (
 // tileBorder are the icon frame; the TUI never paints a background, so on
 // screen only Fg, Muted and Accent are used. Every entry carries a light and a
 // dark variant, because the lime accent is unreadable on a light terminal: the
-// light variants are an olive accent and a near-black foreground.
+// light variants are a brighter lime-olive accent and a near-black foreground.
 var palette = struct {
 	Ground     lipgloss.AdaptiveColor
 	Tile       lipgloss.AdaptiveColor
@@ -184,7 +184,7 @@ var palette = struct {
 	TileBorder: lipgloss.AdaptiveColor{Light: "#2A2F3A", Dark: "#2A2F3A"},
 	Fg:         lipgloss.AdaptiveColor{Light: "#1F2329", Dark: "#E8EAED"},
 	Muted:      lipgloss.AdaptiveColor{Light: "#5F6774", Dark: "#8A919E"},
-	Accent:     lipgloss.AdaptiveColor{Light: "#4E7A00", Dark: "#B8F15A"},
+	Accent:     lipgloss.AdaptiveColor{Light: "#669900", Dark: "#B8F15A"},
 }
 
 func (m renderFrame) view() string {
