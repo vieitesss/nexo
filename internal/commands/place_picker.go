@@ -11,7 +11,6 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
-	"github.com/vieitesss/nexo/internal/remote"
 )
 
 func containerOpenID(place picker.Place) string {
@@ -173,7 +172,7 @@ func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
 	if len(machines) == 0 || invocation.Runner == nil {
 		return nil
 	}
-	lister := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithBackends(invocation.Config.Remote.Backends).WithKindDetection()
+	orchestrator := newRemoteOrchestrator(invocation, containerActionResolver(invocation))
 	commands := make([]tea.Cmd, 0, len(machines))
 	seen := make(map[string]bool)
 	for _, configured := range machines {
@@ -184,15 +183,14 @@ func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
 		}
 		seen[key] = true
 		commands = append(commands, func() tea.Msg {
-			result := lister.ListMachineWithAgents(ctx, machine)
+			result := orchestrator.ListMachineWithAgents(ctx, machine)
 			places := picker.ContainerPlaces(result.Containers)
 			for index := range places {
 				if places[index].Kind != picker.ContainerKind {
 					continue
 				}
-				kind := result.Kind
 				places[index].OpenAction = func(openCtx context.Context, place picker.Place) error {
-					return openRemoteContainerWithResolver(openCtx, invocation, machine, containerOpenID(place), kind)
+					return orchestrator.Open(openCtx, result, containerOpenID(place))
 				}
 			}
 			return picker.RemoteBatch{Machine: result.Machine, Backend: string(result.Kind), Places: places, Agents: result.Agents, Warning: result.Warning, Error: result.Error}
