@@ -643,14 +643,6 @@ type workspacePane struct {
 	WorkingDirectory string `json:"working_directory"`
 }
 
-func (w workspace) ProjectPath() string {
-	paths := w.ProjectPaths()
-	if len(paths) == 0 {
-		return ""
-	}
-	return paths[0]
-}
-
 func (w workspace) ProjectPaths() []string {
 	paths := []string{w.Path, w.CWD, w.Root, w.Worktree}
 	for _, pane := range append(append([]workspacePane(nil), w.Panes...), panesFromTabs(w.Tabs)...) {
