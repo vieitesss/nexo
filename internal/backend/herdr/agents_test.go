@@ -150,10 +150,11 @@ func TestAgentSourcePrunesPanesAbsentFromSnapshot(t *testing.T) {
 	if _, err := source.ListAgents(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	states, err := source.readStates()
+	document, err := source.ledger().Read()
 	if err != nil {
 		t.Fatal(err)
 	}
+	states := document.Agents
 	if _, ok := states["w:p2"]; ok {
 		t.Fatalf("persisted states = %#v, want disappeared pane pruned", states)
 	}
@@ -180,8 +181,8 @@ func TestAgentSourceKeysDefaultServerByConfigPath(t *testing.T) {
 	if _, err := second.ListAgents(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if first.statePath("json") == second.statePath("json") {
-		t.Fatalf("state paths = %q, want distinct paths for distinct config paths", first.statePath("json"))
+	if first.ledger().Path("json") == second.ledger().Path("json") {
+		t.Fatalf("state paths = %q, want distinct paths for distinct config paths", first.ledger().Path("json"))
 	}
 }
 

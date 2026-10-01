@@ -11,9 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vieitesss/nexo/internal/agentstate"
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/git"
 	"github.com/vieitesss/nexo/internal/runner"
-	"github.com/vieitesss/nexo/internal/statefile"
 )
 
 // Source reads Herdr's native agent awareness. It deliberately does not read
@@ -26,17 +27,6 @@ type Source struct {
 	mu       sync.Mutex
 	stateDir string
 	server   string
-}
-
-type agentState struct {
-	Status         string     `json:"status"`
-	StateChangeSeq uint64     `json:"state_change_seq"`
-	Seen           bool       `json:"seen"`
-	StoppedSince   *time.Time `json:"stopped_since,omitempty"`
-}
-
-type persistedStates struct {
-	Agents map[string]agentState `json:"agents"`
 }
 
 type herdrAgent struct {
@@ -105,93 +95,70 @@ func (s *Source) ListAgents(ctx context.Context) ([]capabilities.Agent, error) {
 		s.server = herdrServerIdentity()
 	}
 
-	var agents []capabilities.Agent
-	if err := s.updateStates(func(states map[string]agentState) error {
-		agents = make([]capabilities.Agent, 0, len(native))
-		present := make(map[string]struct{}, len(native))
-		for _, current := range native {
-			if current.PaneID != "" {
-				present[current.PaneID] = struct{}{}
-			}
-			state, ok := mapAgentStatus(current.Status)
-			if !ok || current.PaneID == "" || agentName(current) == "" {
-				// Herdr's unknown status means that this pane is not an agent for
-				// nexo's purposes.
-				continue
-			}
-			tracked := states[current.PaneID]
-			statusChanged := tracked.Status != current.Status || tracked.StateChangeSeq != current.StateChangeSeq
-			if tracked.Status == "" {
-				statusChanged = true
-			}
-			if statusChanged {
-				tracked.Status = current.Status
-				tracked.StateChangeSeq = current.StateChangeSeq
-				if state == "working" {
-					tracked.StoppedSince = nil
-					tracked.Seen = false
-				} else {
-					stoppedSince := s.now()
-					tracked.StoppedSince = &stoppedSince
-					tracked.Seen = nativeSeen(current)
-				}
-			} else if current.Focused {
-				tracked.Seen = true
-			}
-			if state == "working" {
-				tracked.StoppedSince = nil
-			}
-			if current.Focused {
-				tracked.Seen = true
-			}
-			states[current.PaneID] = tracked
-			branch := s.branch(ctx, current)
-			container := strings.TrimSpace(current.WorkspaceLabel)
-			if container == "" {
-				container = workspaceLabels[current.WorkspaceID]
-			}
-			window := strings.TrimSpace(current.TabLabel)
-			if window == "" {
-				window = tabLabels[current.TabID]
-			}
-			agents = append(agents, capabilities.Agent{
-				PaneID:       current.PaneID,
-				Target:       current.PaneID,
-				ContainerID:  current.WorkspaceID,
-				Container:    container,
-				Window:       window,
-				Harness:      agentName(current),
-				State:        state,
-				Seen:         tracked.Seen,
-				StoppedSince: tracked.StoppedSince,
-				Branch:       branch,
-			})
+	present := make([]string, 0, len(native))
+	valid := make([]herdrAgent, 0, len(native))
+	observations := make([]agentstate.Observation, 0, len(native))
+	for _, current := range native {
+		if current.PaneID != "" {
+			present = append(present, current.PaneID)
 		}
-		for paneID := range states {
-			if _, ok := present[paneID]; !ok {
-				delete(states, paneID)
-			}
+		state, ok := mapAgentStatus(current.Status)
+		if !ok || current.PaneID == "" || agentName(current) == "" {
+			// Herdr's unknown status means that this pane is not an agent for
+			// nexo's purposes.
+			continue
 		}
-		return nil
-	}); err != nil {
+		valid = append(valid, current)
+		observations = append(observations, agentstate.Observation{
+			ID:         current.PaneID,
+			Working:    state == "working",
+			Status:     current.Status,
+			Sequence:   current.StateChangeSeq,
+			NativeSeen: nativeSeen(current),
+			Focused:    current.Focused,
+		})
+	}
+	results, err := s.ledger().Observe(
+		agentstate.Batch{Present: present, Observations: observations},
+		agentstate.Policy{Native: true},
+		nil,
+	)
+	if err != nil {
 		return nil, err
+	}
+	agents := make([]capabilities.Agent, 0, len(results))
+	for index, result := range results {
+		current := valid[index]
+		container := strings.TrimSpace(current.WorkspaceLabel)
+		if container == "" {
+			container = workspaceLabels[current.WorkspaceID]
+		}
+		window := strings.TrimSpace(current.TabLabel)
+		if window == "" {
+			window = tabLabels[current.TabID]
+		}
+		agents = append(agents, capabilities.Agent{
+			PaneID:       current.PaneID,
+			Target:       current.PaneID,
+			ContainerID:  current.WorkspaceID,
+			Container:    container,
+			Window:       window,
+			Harness:      agentName(current),
+			State:        result.State.State,
+			Seen:         result.State.Seen,
+			StoppedSince: result.State.StoppedSince,
+			Branch:       git.Branch(ctx, s.runner, herdrPath(current)),
+		})
 	}
 	return agents, nil
 }
 
-func (s *Source) branch(ctx context.Context, agent herdrAgent) string {
+func herdrPath(agent herdrAgent) string {
 	path := strings.TrimSpace(agent.ForegroundCWD)
 	if path == "" {
 		path = strings.TrimSpace(agent.CWD)
 	}
-	if path == "" {
-		return ""
-	}
-	output, err := s.runner.Run(ctx, "git", "-C", path, "branch", "--show-current")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(output))
+	return path
 }
 
 func nativeSeen(agent herdrAgent) bool {
@@ -319,56 +286,8 @@ func agentName(agent herdrAgent) string {
 	return ""
 }
 
-func (s *Source) readStates() (map[string]agentState, error) {
-	contents, err := os.ReadFile(s.statePath("json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return make(map[string]agentState), nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var saved persistedStates
-	if err := json.Unmarshal(contents, &saved); err != nil {
-		return nil, err
-	}
-	if saved.Agents == nil {
-		saved.Agents = make(map[string]agentState)
-	}
-	return saved.Agents, nil
-}
-
-func (s *Source) updateStates(update func(map[string]agentState) error) error {
-	stateDir := s.stateDir
-	if stateDir == "" {
-		stateDir = statefile.DefaultDir()
-	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return fmt.Errorf("create agent state directory: %w", err)
-	}
-	release, err := statefile.Lock(s.statePath("state.lock"), false)
-	if err != nil {
-		return fmt.Errorf("lock agent state: %w", err)
-	}
-	defer release()
-	states, err := s.readStates()
-	if err != nil {
-		return fmt.Errorf("read agent state: %w", err)
-	}
-	if err := update(states); err != nil {
-		return err
-	}
-	contents, err := json.MarshalIndent(persistedStates{Agents: states}, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal agent state: %w", err)
-	}
-	if err := statefile.WriteAtomic(s.statePath("json"), contents); err != nil {
-		return fmt.Errorf("write agent state: %w", err)
-	}
-	return nil
-}
-
-func (s *Source) statePath(suffix string) string {
-	return statefile.Path(s.stateDir, s.server, suffix)
+func (s *Source) ledger() *agentstate.Ledger {
+	return agentstate.New(s.stateDir, s.server, s.now)
 }
 
 func herdrServerIdentity() string {
