@@ -3,7 +3,6 @@ module github.com/vieitesss/nexo
 go 1.27.1
 
 require (
-	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.10.1
