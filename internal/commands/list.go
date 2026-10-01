@@ -12,7 +12,6 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
-	"github.com/vieitesss/nexo/internal/remote"
 )
 
 type listCommand struct{}
@@ -96,7 +95,7 @@ func listPlaces(ctx context.Context, invocation Invocation) error {
 	}
 	catalog := picker.NewCatalog(picker.ProjectPlaces(discovery.Candidates), containers, nil)
 	catalog.SetRemoteMachines(invocation.Config.Remote.ConfiguredMachines())
-	remoteResults := remote.NewLister(invocation.Runner, invocation.Selection.Kind, invocation.Config.Remote.SSHConfig).WithBackends(invocation.Config.Remote.Backends).List(ctx, invocation.Config.Remote.ConfiguredMachines())
+	remoteResults := newRemoteOrchestrator(invocation, nil).List(ctx, invocation.Config.Remote.ConfiguredMachines())
 	for _, result := range remoteResults {
 		if result.Error != "" {
 			if invocation.Stderr != nil {
