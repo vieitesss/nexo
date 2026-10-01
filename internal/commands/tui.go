@@ -12,6 +12,7 @@ import (
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/remote"
+	"github.com/vieitesss/nexo/internal/startup"
 	"github.com/vieitesss/nexo/internal/tui"
 )
 
@@ -31,62 +32,56 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 	}
 	var initial []capabilities.Agent
 	var initialErr error
-	var initialRead bool
 	var tab string
 	var err error
 	if len(invocation.Args) == 0 {
-		if source, ok := invocation.Adapter.(capabilities.AgentSource); ok {
-			initialRead = true
-			initial, initialErr = source.ListAgents(ctx)
-			if initialErr != nil {
-				initial = []capabilities.Agent{}
-				tab = string(tui.ContainersTab)
-			} else {
-				tab = string(tui.DefaultTab(initial))
-			}
-		} else {
-			tab = string(tui.ContainersTab)
-		}
+		// The initial agent snapshot is a background source. Passing an invalid
+		// tab lets the TUI paint Containers immediately, then apply the
+		// no-argument Agents rule when that snapshot arrives.
+		tab = ""
 	} else {
 		tab, err = tuiTab(ctx, invocation)
 	}
 	if err != nil {
 		return err
 	}
-	deps, err := tuiDependencies(ctx, invocation, tab, initial, initialErr, initialRead)
+	trace := startup.New("tui", invocation.Stderr)
+	trace.Mark("command-start")
+	deps, err := tuiDependencies(ctx, invocation, tab, initial, initialErr, true)
 	if err != nil {
 		return err
 	}
+	deps.AutoTab = len(invocation.Args) == 0
+	deps.StartupTrace = trace
 	return runTabbedTUI(ctx, deps, tui.Tab(tab))
 }
 
 func tuiDependencies(ctx context.Context, invocation Invocation, tab string, initial []capabilities.Agent, initialErr error, initialRead ...bool) (tui.Deps, error) {
-	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
-	for _, warning := range discovery.Warnings {
-		if invocation.Stderr != nil {
-			_, _ = fmt.Fprintf(invocation.Stderr, "nexo: warning: %s\n", warning)
-		}
-	}
-	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Theme: invocation.Config.TUI.EffectiveTheme(), Projects: picker.ProjectPlaces(discovery.Candidates), Input: invocation.Stdin, Output: invocation.Stdout}
-	localProxyIDs := make(map[string]bool)
-	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
-		containers, err := lister.ListContainers(ctx)
-		if err != nil {
-			return tui.Deps{}, fmt.Errorf("list containers: %w", err)
-		}
-		deps.Containers = containers
-		deps.ContainerSource = lister
-		for _, container := range containers {
-			if container.Proxy {
-				localProxyIDs[container.Machine+"\x00"+container.ID] = true
+	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Theme: invocation.Config.TUI.EffectiveTheme(), Agents: append([]capabilities.Agent(nil), initial...), Input: invocation.Stdin, Output: invocation.Stdout}
+	deps.ProjectSource = func(discoveryCtx context.Context) ([]picker.Place, error) {
+		discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
+		for _, warning := range discovery.Warnings {
+			if invocation.Stderr != nil {
+				_, _ = fmt.Fprintf(invocation.Stderr, "nexo: warning: %s\n", warning)
 			}
 		}
+		if discoveryCtx.Err() != nil {
+			return nil, discoveryCtx.Err()
+		}
+		return picker.ProjectPlaces(discovery.Candidates), nil
+	}
+	localProxyIDs := make(map[string]bool)
+	if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
+		// Container discovery is a source command. It must not delay the first
+		// frame; action-time proxy checks below refresh the small identity set.
+		deps.ContainerSource = lister
 	}
 	if source, ok := invocation.Adapter.(capabilities.AgentSource); ok {
 		deps.AgentSource = source
-		deps.Agents = initial
 		readInitial := len(initialRead) > 0 && initialRead[0]
 		if !readInitial {
+			// Kept for embedders that explicitly request a synchronous snapshot;
+			// the command path always passes true and refreshes asynchronously.
 			agents, listErr := source.ListAgents(ctx)
 			if listErr != nil {
 				deps.AgentError = listErr
@@ -143,7 +138,20 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 		}
 		for _, group := range groups {
 			for _, id := range group.ids {
-				if !localProxyIDs[group.machine+"\x00"+id] {
+				isProxy := localProxyIDs[group.machine+"\x00"+id]
+				if !isProxy {
+					if lister, ok := invocation.Adapter.(capabilities.ContainerLister); ok {
+						if containers, listErr := lister.ListContainers(actionCtx); listErr == nil {
+							for _, container := range containers {
+								if container.ID == id && container.Machine == group.machine && container.Proxy {
+									isProxy = true
+									break
+								}
+							}
+						}
+					}
+				}
+				if !isProxy {
 					continue
 				}
 				actions, resolveErr := (localContainerResolver{adapter: invocation.Adapter}).ResolveContainerActions(actionCtx, picker.LocalMachine())

@@ -11,8 +11,11 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
 	"github.com/charmbracelet/x/term"
+	"github.com/vieitesss/nexo/internal/startup"
 	"golang.org/x/sys/unix"
 )
 
@@ -29,6 +32,15 @@ const (
 type terminalQuery interface {
 	io.ReadWriter
 	Fd() uintptr
+}
+
+func detectThemeCmd(trace *startup.Trace) tea.Cmd {
+	return func() tea.Msg {
+		trace.Mark("theme-start")
+		dark := detectDarkBackground()
+		trace.Mark("theme-done")
+		return themeMsg{dark: dark}
+	}
 }
 
 // tmuxClientTheme reports tmux's view of the client terminal, "light" or

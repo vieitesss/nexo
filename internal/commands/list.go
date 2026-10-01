@@ -8,10 +8,13 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
+	"github.com/vieitesss/nexo/internal/remote"
+	"github.com/vieitesss/nexo/internal/startup"
 )
 
 type listCommand struct{}
@@ -23,6 +26,8 @@ func init() {
 func (listCommand) Name() string { return "list" }
 
 func (listCommand) Run(ctx context.Context, invocation Invocation) error {
+	trace := startup.New("list", invocation.Stderr)
+	trace.Mark("start")
 	if invocation.Stdout == nil {
 		return errors.New("list command requires stdout")
 	}
@@ -34,6 +39,7 @@ func (listCommand) Run(ctx context.Context, invocation Invocation) error {
 		return listPlaces(ctx, invocation)
 	}
 	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
+	trace.Mark("projects-discovered")
 	for _, warning := range discovery.Warnings {
 		if invocation.Stderr != nil {
 			if _, err := fmt.Fprintf(invocation.Stderr, "nexo: warning: %s\n", warning); err != nil {
@@ -42,8 +48,11 @@ func (listCommand) Run(ctx context.Context, invocation Invocation) error {
 		}
 	}
 	if invocation.JSON {
-		return json.NewEncoder(invocation.Stdout).Encode(discovery.Candidates)
+		err := json.NewEncoder(invocation.Stdout).Encode(discovery.Candidates)
+		trace.Mark("encoded")
+		return err
 	}
+	trace.Mark("encoded")
 	return writeCandidates(invocation.Stdout, discovery.Candidates)
 }
 
@@ -63,6 +72,8 @@ func parseListArgs(args []string) (bool, error) {
 }
 
 func listPlaces(ctx context.Context, invocation Invocation) error {
+	trace := startup.New("list-places", invocation.Stderr)
+	trace.Mark("start")
 	if err := invocation.Selection.Require(); err != nil {
 		return err
 	}
@@ -70,7 +81,14 @@ func listPlaces(ctx context.Context, invocation Invocation) error {
 	if !ok {
 		return fmt.Errorf("backend %q does not support listing containers", invocation.Selection.Kind)
 	}
+	trace.Mark("remote-start")
+	remoteResultsCh := make(chan []remote.MachineResult, 1)
+	go func() {
+		remoteResultsCh <- newRemoteOrchestrator(invocation, nil).List(ctx, invocation.Config.Remote.ConfiguredMachines())
+		trace.Mark("remote-done")
+	}()
 	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
+	trace.Mark("projects-discovered")
 	for _, warning := range discovery.Warnings {
 		if invocation.Stderr != nil {
 			if _, err := fmt.Fprintf(invocation.Stderr, "nexo: warning: %s\n", warning); err != nil {
@@ -82,20 +100,28 @@ func listPlaces(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return fmt.Errorf("list containers: %w", err)
 	}
+	trace.Mark("containers-listed")
 	if reader, ok := invocation.Adapter.(capabilities.ScreenReader); ok {
+		var screens sync.WaitGroup
 		for index := range containers {
 			if containers[index].ActivePaneID == "" {
 				continue
 			}
-			preview, readErr := reader.ReadScreen(ctx, containers[index].ActivePaneID)
-			if readErr == nil {
-				containers[index].Preview = preview
-			}
+			screens.Add(1)
+			go func(index int, paneID string) {
+				defer screens.Done()
+				preview, readErr := reader.ReadScreen(ctx, paneID)
+				if readErr == nil {
+					containers[index].Preview = preview
+				}
+			}(index, containers[index].ActivePaneID)
 		}
+		screens.Wait()
+		trace.Mark("screens-read")
 	}
 	catalog := picker.NewCatalog(picker.ProjectPlaces(discovery.Candidates), containers, nil)
 	catalog.SetRemoteMachines(invocation.Config.Remote.ConfiguredMachines())
-	remoteResults := newRemoteOrchestrator(invocation, nil).List(ctx, invocation.Config.Remote.ConfiguredMachines())
+	remoteResults := <-remoteResultsCh
 	for _, result := range remoteResults {
 		if result.Error != "" {
 			if invocation.Stderr != nil {
@@ -109,8 +135,11 @@ func listPlaces(ctx context.Context, invocation Invocation) error {
 	}
 	places := catalog.Snapshot().Places
 	if invocation.JSON {
-		return json.NewEncoder(invocation.Stdout).Encode(places)
+		err := json.NewEncoder(invocation.Stdout).Encode(places)
+		trace.Mark("encoded")
+		return err
 	}
+	trace.Mark("encoded")
 	return writePlaces(invocation.Stdout, places)
 }
 

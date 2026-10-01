@@ -38,6 +38,17 @@ type renderFrame struct {
 
 func (m Model) frame() renderFrame {
 	projection := m.projection()
+	if m.trace != nil && m.sized && m.width > 0 && m.height > 0 {
+		m.trace.MarkOnce("first-frame")
+		for _, item := range []struct {
+			name string
+			tab  Tab
+		}{{"agents", AgentsTab}, {"containers", ContainersTab}, {"projects", ProjectsTab}} {
+			if hasLoadedRows(projection.Rows(item.tab)) {
+				m.trace.MarkOnce("first-rows-" + item.name)
+			}
+		}
+	}
 	return renderFrame{
 		width: m.width, height: m.height, sized: m.sized, tab: m.input.tab,
 		query: append([]rune(nil), m.input.query...), rows: m.rows,
@@ -72,6 +83,15 @@ func (m renderFrame) currentContainer() bool {
 
 func (m renderFrame) markedTargets() []picker.ContainerRef {
 	return append([]picker.ContainerRef(nil), m.markedTargetsList...)
+}
+
+func hasLoadedRows(rows []row) bool {
+	for _, candidate := range rows {
+		if candidate.kind == itemRow || candidate.kind == groupRow {
+			return true
+		}
+	}
+	return false
 }
 
 type hitTarget struct {

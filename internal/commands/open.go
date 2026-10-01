@@ -10,6 +10,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/projects"
+	"github.com/vieitesss/nexo/internal/startup"
 )
 
 type openCommand struct{}
@@ -26,12 +27,15 @@ func init() {
 func (openCommand) Name() string { return "open" }
 
 func (openCommand) Run(ctx context.Context, invocation Invocation) error {
+	trace := startup.New("open", invocation.Stderr)
+	trace.Mark("start")
 	parsed, err := parseOpenArgs(invocation.Args)
 	if err != nil {
 		return err
 	}
 
 	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
+	trace.Mark("projects-discovered")
 	for _, candidate := range discovery.Candidates {
 		if candidate.Path == parsed.Path {
 			return openCandidate(ctx, invocation, parsed)
@@ -41,6 +45,8 @@ func (openCommand) Run(ctx context.Context, invocation Invocation) error {
 }
 
 func openCandidate(ctx context.Context, invocation Invocation, parsed openArgs) error {
+	trace := startup.New("open-action", invocation.Stderr)
+	trace.Mark("start")
 	if err := invocation.Selection.Require(); err != nil {
 		return err
 	}
@@ -49,6 +55,7 @@ func openCandidate(ctx context.Context, invocation Invocation, parsed openArgs) 
 		return fmt.Errorf("backend %q does not support opening projects", invocation.Selection.Kind)
 	}
 	container, err := opener.OpenProject(ctx, parsed.Path, parsed.Options)
+	trace.Mark("backend-opened")
 	if err != nil {
 		return err
 	}
