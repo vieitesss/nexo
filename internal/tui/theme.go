@@ -2,9 +2,11 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +16,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const backgroundQueryTimeout = 150 * time.Millisecond
+const (
+	backgroundQueryTimeout = 150 * time.Millisecond
+	tmuxThemeTimeout       = 500 * time.Millisecond
+)
 
 const (
 	osc11Query = "\x1b]11;?\x07"
@@ -26,9 +31,21 @@ type terminalQuery interface {
 	Fd() uintptr
 }
 
+// tmuxClientTheme reports tmux's view of the client terminal, "light" or
+// "dark", or an empty string when tmux does not know.
+var tmuxClientTheme = func() string {
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxThemeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "#{client_theme}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // configureTheme selects the adaptive colour variant used by lipgloss. An
 // explicit choice never touches the terminal; auto asks the controlling tty
-// and falls back to COLORFGBG and then dark.
+// and falls back to tmux's client theme, COLORFGBG and then dark.
 func configureTheme(theme string) {
 	switch theme {
 	case "light":
@@ -43,21 +60,36 @@ func configureTheme(theme string) {
 func detectDarkBackground() bool {
 	terminal, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return colorFGBGIsDark(os.Getenv("COLORFGBG"))
+		return fallbackDarkBackground()
 	}
 	defer func() { _ = terminal.Close() }()
 
 	if !term.IsTerminal(terminal.Fd()) {
-		return colorFGBGIsDark(os.Getenv("COLORFGBG"))
+		return fallbackDarkBackground()
 	}
 	state, err := term.MakeRaw(terminal.Fd())
 	if err != nil {
-		return colorFGBGIsDark(os.Getenv("COLORFGBG"))
+		return fallbackDarkBackground()
 	}
 	defer func() { _ = term.Restore(terminal.Fd(), state) }()
 
 	if dark, answered := queryDarkBackground(terminal, backgroundQueryTimeout); answered {
 		return dark
+	}
+	return fallbackDarkBackground()
+}
+
+// fallbackDarkBackground decides when the tty does not report its background.
+// tmux answers OSC 11 for panes but not for display-popup, so inside tmux ask
+// it for the client's theme before trusting COLORFGBG.
+func fallbackDarkBackground() bool {
+	if os.Getenv("TMUX") != "" {
+		switch tmuxClientTheme() {
+		case "light":
+			return false
+		case "dark":
+			return true
+		}
 	}
 	return colorFGBGIsDark(os.Getenv("COLORFGBG"))
 }

@@ -170,6 +170,32 @@ func TestColorFGBGAndLuminance(t *testing.T) {
 	}
 }
 
+func TestFallbackDarkBackgroundAsksTmuxFirst(t *testing.T) {
+	previous := tmuxClientTheme
+	t.Cleanup(func() { tmuxClientTheme = previous })
+	for _, test := range []struct {
+		name      string
+		tmux      string
+		theme     string
+		colorFGBG string
+		want      bool
+	}{
+		{name: "tmux light beats dark COLORFGBG", tmux: "/tmp/tmux,1,0", theme: "light", colorFGBG: "15;0", want: false},
+		{name: "tmux dark beats light COLORFGBG", tmux: "/tmp/tmux,1,0", theme: "dark", colorFGBG: "0;15", want: true},
+		{name: "unknown tmux theme uses COLORFGBG", tmux: "/tmp/tmux,1,0", theme: "", colorFGBG: "0;15", want: false},
+		{name: "outside tmux ignores tmux", tmux: "", theme: "light", colorFGBG: "", want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("TMUX", test.tmux)
+			t.Setenv("COLORFGBG", test.colorFGBG)
+			tmuxClientTheme = func() string { return test.theme }
+			if got := fallbackDarkBackground(); got != test.want {
+				t.Fatalf("fallbackDarkBackground() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestConfigureThemeLightUsesLightAdaptiveColours(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	previous := lipgloss.HasDarkBackground()
