@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -311,6 +313,251 @@ func TestFooterOnlyAdvertisesCurrentActions(t *testing.T) {
 	for _, action := range []string{"Enter", "Ctrl-X", "Ctrl-R", "Ctrl-T"} {
 		if !strings.Contains(containerFooter, action) {
 			t.Fatalf("container footer missing %q: %q", action, containerFooter)
+		}
+	}
+}
+
+var ansiParameters = regexp.MustCompile(`\x1b\[([0-9;:]*)m`)
+
+// backgroundCoverage walks a styled line and reports how many visible cells
+// had an active background out of the line's total width.
+func backgroundCoverage(line string) (covered, total int) {
+	background := false
+	for index := 0; index < len(line); {
+		if line[index] == '\x1b' {
+			match := ansiParameters.FindStringSubmatch(line[index:])
+			if match == nil {
+				index++
+				continue
+			}
+			parameters := strings.FieldsFunc(match[1], func(r rune) bool { return r == ';' || r == ':' })
+			if len(parameters) == 0 {
+				background = false
+			}
+			for _, parameter := range parameters {
+				value, _ := strconv.Atoi(parameter)
+				if value == 0 || value == 49 {
+					background = false
+				}
+				if value == 48 || value == 7 {
+					background = true
+				}
+			}
+			index += len(match[0])
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(line[index:])
+		width := shell.StringWidth(line[index : index+size])
+		total += width
+		if background {
+			covered += width
+		}
+		index += size
+	}
+	return covered, total
+}
+
+func channel(hex string) (int, int, int) {
+	r, g, b, _ := lipgloss.Color(hex).RGBA()
+	return int(r >> 8), int(g >> 8), int(b >> 8)
+}
+
+// TestSelectedRowUsesLightForegroundAcrossTheFullWidth checks the selection
+// is readable in every tab and in both themes: each painted row carries the
+// explicit selection foreground and its background covers every column,
+// padding included.
+func TestSelectedRowUsesLightForegroundAcrossTheFullWidth(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	previous := lipgloss.HasDarkBackground()
+	t.Cleanup(func() { lipgloss.SetHasDarkBackground(previous) })
+	for _, dark := range []bool{true, false} {
+		lipgloss.SetHasDarkBackground(dark)
+		style := lipgloss.NewStyle().Background(selectionBackground()).Foreground(selectionForeground())
+		start := strings.TrimSuffix(style.Render(""), "\x1b[0m")
+		if start == "" {
+			t.Fatal("selection style rendered no escape sequence")
+		}
+		for _, tab := range []Tab{AgentsTab, ContainersTab, ProjectsTab} {
+			model := NewModel(context.Background(), richDeps(), tab)
+			model.SetSize(100, 24)
+			cursorable := []string{}
+			for _, row := range model.rows {
+				if row.cursorable {
+					cursorable = append(cursorable, row.id)
+				}
+			}
+			if len(cursorable) == 0 {
+				t.Fatalf("tab %q has no cursorable rows", tab)
+			}
+			for _, id := range cursorable {
+				model.cursor = id
+				lines := strings.Split(model.View(), "\n")
+				painted := 0
+				for _, line := range lines[2 : len(lines)-1] {
+					if !strings.HasPrefix(line, start) {
+						continue
+					}
+					painted++
+					covered, total := backgroundCoverage(line)
+					if covered != total || total != model.width {
+						t.Fatalf("dark=%v tab %q row %q: background covers %d of %d cells (width %d): %q", dark, tab, id, covered, total, model.width, line)
+					}
+				}
+				if painted == 0 {
+					t.Fatalf("dark=%v tab %q row %q has no selection background", dark, tab, id)
+				}
+			}
+		}
+		if dark {
+			if r, g, b := channel(selectionForeground().Dark); r < 200 || g < 200 || b < 200 {
+				t.Fatalf("dark selection foreground is not light: %d,%d,%d", r, g, b)
+			}
+		} else if r, g, b := channel(selectionForeground().Light); r > 80 || g > 80 || b > 80 {
+			t.Fatalf("light selection foreground is not dark: %d,%d,%d", r, g, b)
+		}
+	}
+}
+
+// selectedRowPrefix is the escape sequence that opens a painted selection row:
+// its adaptive background and foreground.
+func selectedRowPrefix() string {
+	style := lipgloss.NewStyle().Background(selectionBackground()).Foreground(selectionForeground())
+	return strings.TrimSuffix(style.Render(""), "\x1b[0m")
+}
+
+// selectionForegroundToken renders the selection foreground and returns the SGR
+// parameters that paint it, so tests can compare them to a row's active colour.
+func selectionForegroundToken(t *testing.T) string {
+	t.Helper()
+	tokens := foregroundTokens(selectedRowPrefix() + "x")
+	if len(tokens) == 0 || tokens[0] == "" {
+		t.Fatalf("selection style rendered no foreground: %q", selectedRowPrefix())
+	}
+	return tokens[0]
+}
+
+// foregroundTokens returns the foreground active at every visible rune of a
+// styled line. A token is the raw SGR parameter list ("31", "38;5;12",
+// "38;2;r;g;b") or "" for the terminal default.
+func foregroundTokens(value string) []string {
+	tokens := []string{}
+	current := ""
+	for index := 0; index < len(value); {
+		if value[index] == '\x1b' && index+1 < len(value) && value[index+1] == '[' {
+			end := strings.IndexByte(value[index+2:], 'm')
+			if end < 0 {
+				break
+			}
+			end += index + 2
+			params := strings.FieldsFunc(value[index+2:end], func(r rune) bool { return r == ';' || r == ':' })
+			for position := 0; position < len(params); position++ {
+				code, err := strconv.Atoi(params[position])
+				if err != nil {
+					continue
+				}
+				switch {
+				case code == 0 || code == 39:
+					current = ""
+				case code >= 30 && code <= 37, code >= 90 && code <= 97:
+					current = params[position]
+				case code == 38 && position+1 < len(params):
+					switch params[position+1] {
+					case "5":
+						if position+2 < len(params) {
+							current = strings.Join(params[position:position+3], ";")
+							position += 2
+						}
+					case "2":
+						if position+4 < len(params) {
+							current = strings.Join(params[position:position+5], ";")
+							position += 4
+						}
+					}
+				}
+			}
+			index = end + 1
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(value[index:])
+		tokens = append(tokens, current)
+		index += size
+	}
+	return tokens
+}
+
+// selectionDeps builds one row of every kind that carries its own colour: a
+// project with a full Git summary, a container to mark, and agents in each
+// state. "con" matches all of them so the query paints them on the selection.
+func selectionDeps() Deps {
+	since := time.Now().Add(-2 * time.Minute)
+	local := picker.LocalMachine()
+	return Deps{
+		Projects: []picker.Place{{
+			Kind: picker.ProjectKind, Path: "/work/con", Group: "/work", DisplayRemainder: "con", Git: true,
+			GitContext: &picker.GitContext{Identity: "con", Adds: 2, Deletes: 1, Dirty: true, Ahead: 1, Behind: 1},
+		}},
+		Containers: []capabilities.Container{{ID: "con-one", Name: "con-one", Machine: local}},
+		Agents: []capabilities.Agent{
+			{PaneID: "agent-one", Target: "con-one:0.1", ContainerID: "con-one", Container: "con-one", Harness: "con-pi", State: "stopped", Seen: true, StoppedSince: &since, Branch: "con-branch"},
+			{PaneID: "agent-two", Target: "two:0.1", ContainerID: "two", Container: "two", Harness: "claude", State: "stopped", StoppedSince: &since},
+			{PaneID: "agent-three", Target: "three:0.1", ContainerID: "three", Container: "three", Harness: "work", State: "working"},
+		},
+	}
+}
+
+// TestSelectedRowHasOnlySelectionForeground parses the selected row's SGR and
+// asserts that no foreground other than the selection foreground is active on
+// any visible cell. The fixture carries a search query, a marked item, a Git
+// summary and every agent state, so each tab exercises the segments that used
+// to leak their own colour through the selection.
+func TestSelectedRowHasOnlySelectionForeground(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	previous := lipgloss.HasDarkBackground()
+	t.Cleanup(func() { lipgloss.SetHasDarkBackground(previous) })
+	for _, dark := range []bool{true, false} {
+		lipgloss.SetHasDarkBackground(dark)
+		expected := selectionForegroundToken(t)
+		for _, tab := range []Tab{AgentsTab, ContainersTab, ProjectsTab} {
+			model := NewModel(context.Background(), selectionDeps(), tab)
+			model.SetSize(120, 30)
+			model.SetQuery("con")
+			if tab == ContainersTab {
+				model.toggleMark()
+			}
+			cues := map[string]bool{}
+			for _, row := range model.rows {
+				if !row.cursorable {
+					continue
+				}
+				model.cursor = row.id
+				lines := strings.Split(model.View(), "\n")
+				painted := 0
+				for _, line := range lines[2 : len(lines)-1] {
+					if !strings.HasPrefix(line, selectedRowPrefix()) {
+						continue
+					}
+					painted++
+					for cell, token := range foregroundTokens(line) {
+						if token != expected {
+							t.Fatalf("dark=%v tab %q row %q cell %d: foreground %q, want %q: %q", dark, tab, row.id, cell, token, expected, line)
+						}
+					}
+					plain := shell.Plain(line)
+					for _, cue := range []string{"+2", "−1", "*", "↑1", "↓1", "◆", "●"} {
+						if strings.Contains(plain, cue) {
+							cues[cue] = true
+						}
+					}
+				}
+				if painted == 0 {
+					t.Fatalf("dark=%v tab %q row %q has no selected line", dark, tab, row.id)
+				}
+			}
+			// Each tab must actually render its cue on the selection, otherwise
+			// the foreground check above proves nothing.
+			if cue := map[Tab]string{AgentsTab: "●", ContainersTab: "◆", ProjectsTab: "+2"}[tab]; !cues[cue] {
+				t.Fatalf("dark=%v tab %q did not render cue %q on the selected rows", dark, tab, cue)
+			}
 		}
 	}
 }

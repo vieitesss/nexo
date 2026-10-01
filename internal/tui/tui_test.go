@@ -80,11 +80,14 @@ func TestCtrlTMarksContainer(t *testing.T) {
 	}
 }
 
-func TestMarkedSearchNameKeepsMagentaForeground(t *testing.T) {
+func TestMarkedNameKeepsMagentaForegroundWhenUnselected(t *testing.T) {
 	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
 	model = updateModel(t, model, keyMsg(tea.KeyCtrlT))
 	model.SetQuery("one")
 	model.SetSize(80, 24)
+	// Move the cursor off the marked container: a selected row drops every
+	// per-segment colour and keeps the mark as bold weight instead.
+	model.cursor = "machine:" + picker.LocalMachine()
 	var line string
 	for _, candidate := range strings.Split(model.View(), "\n") {
 		if strings.Contains(shell.Plain(candidate), "◆ one") {
