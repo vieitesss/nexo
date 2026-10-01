@@ -89,6 +89,21 @@ func TestAgentMachineHeadersAreSkippedByKeyboardAndMouse(t *testing.T) {
 	}
 }
 
+// TestErroredMachineSectionLeavesNoCursor is the failure half of the empty-
+// section rule: a machine whose listing failed shows its error and still has no
+// selectable row to park the cursor on.
+func TestErroredMachineSectionLeavesNoCursor(t *testing.T) {
+	model := NewModel(context.Background(), Deps{RemoteMachines: []string{"dev"}}, ContainersTab)
+	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Error: "offline"})
+	model.SetSize(80, 12)
+	if model.Cursor() != "" {
+		t.Fatalf("cursor = %q, want none when the only section failed", model.Cursor())
+	}
+	if !strings.Contains(shell.Plain(model.View()), "offline") {
+		t.Fatalf("failed section did not render its error: %q", model.View())
+	}
+}
+
 // TestEmptyMachineSectionsLeaveNoCursor keeps startup selection honest when a
 // section has no selectable row yet: nothing is selected, and navigation and
 // Enter do nothing instead of parking the cursor on a header.
