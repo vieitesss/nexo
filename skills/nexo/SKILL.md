@@ -299,7 +299,8 @@ rolls back the worktree, and returns status `1` with no JSON.
 The output is one object with `path`, `branch`, and the `container` the creator
 opened. The container uses the same shape as `nexo open --json`: `backend`,
 `id`, `name`, `path`, and `created`. The encoder deliberately omits the input
-repository, the `--new-branch` choice, backend container ID, and session name.
+repository, the `--new-branch` choice, and the old top-level container ID and
+session name fields that the container now carries.
 
 ```json
 {
