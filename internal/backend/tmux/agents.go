@@ -255,6 +255,8 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		allow[strings.ToLower(filepath.Base(strings.TrimSpace(process)))] = struct{}{}
 	}
 	var result []pane
+	var tree processTree
+	haveTree := false
 	for _, line := range strings.Split(strings.TrimRight(string(output), "\n"), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -269,18 +271,17 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		paneIndexField := 7
 		pathField := 8
 		current := strings.TrimSpace(fields[2])
-		args := current
-		if !isHarness(current, allow) {
-			if fields[1] == "" {
-				continue
+		harness := findHarness(current, allow)
+		if harness == "" {
+			// macOS reports a foreground comm such as "node" or a version
+			// string, and pane_pid is the pane's shell. The agent is usually a
+			// descendant of that shell, so inspect one shared process snapshot.
+			if !haveTree {
+				tree = s.processTree(ctx)
+				haveTree = true
 			}
-			ps, psErr := s.runner.Run(ctx, "ps", "-o", "args=", "-p", fields[1])
-			if psErr != nil {
-				continue
-			}
-			args = string(ps)
+			harness = findPaneHarness(fields[1], tree, allow)
 		}
-		harness := findHarness(args, allow)
 		if harness == "" {
 			continue
 		}
@@ -302,17 +303,86 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 	return result, nil
 }
 
-func isHarness(command string, allow map[string]struct{}) bool {
-	_, ok := allow[strings.ToLower(filepath.Base(strings.TrimSpace(command)))]
-	return ok
-}
-
 func findHarness(args string, allow map[string]struct{}) string {
 	for _, field := range strings.Fields(args) {
 		field = strings.Trim(field, "\"'(),[]{}")
 		base := strings.ToLower(filepath.Base(field))
 		if _, ok := allow[base]; ok {
 			return base
+		}
+	}
+	return ""
+}
+
+// processTree is one point-in-time view of the process table. Both BSD/macOS
+// ps and procps accept the "ps -A -o pid=,ppid=,args=" snapshot used to build
+// it.
+type processTree struct {
+	args     map[int]string
+	children map[int][]int
+}
+
+func (s *Source) processTree(ctx context.Context) processTree {
+	output, err := s.runner.Run(ctx, "ps", "-A", "-o", "pid=,ppid=,args=")
+	if err != nil {
+		return processTree{}
+	}
+	return parseProcessTree(output)
+}
+
+func parseProcessTree(output []byte) processTree {
+	tree := processTree{args: make(map[int]string), children: make(map[int][]int)}
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimLeft(line, " \t")
+		if line == "" {
+			continue
+		}
+		pidEnd := strings.IndexAny(line, " \t")
+		if pidEnd < 0 {
+			continue
+		}
+		pid, err := strconv.Atoi(line[:pidEnd])
+		if err != nil {
+			continue
+		}
+		line = strings.TrimLeft(line[pidEnd:], " \t")
+		ppidEnd := strings.IndexAny(line, " \t")
+		if ppidEnd < 0 {
+			continue
+		}
+		ppid, err := strconv.Atoi(line[:ppidEnd])
+		if err != nil {
+			continue
+		}
+		tree.args[pid] = strings.TrimSpace(line[ppidEnd:])
+		tree.children[ppid] = append(tree.children[ppid], pid)
+	}
+	return tree
+}
+
+// findPaneHarness walks a pane's process tree breadth-first and returns the
+// first harness named by a process command line. The pane process itself is
+// included because a pane can run the agent as its main process while tmux
+// still reports a non-harness current command.
+func findPaneHarness(panePID string, tree processTree, allow map[string]struct{}) string {
+	start, err := strconv.Atoi(strings.TrimSpace(panePID))
+	if err != nil {
+		return ""
+	}
+	queue := []int{start}
+	visited := map[int]struct{}{start: {}}
+	for len(queue) > 0 {
+		pid := queue[0]
+		queue = queue[1:]
+		if harness := findHarness(tree.args[pid], allow); harness != "" {
+			return harness
+		}
+		for _, child := range tree.children[pid] {
+			if _, ok := visited[child]; ok {
+				continue
+			}
+			visited[child] = struct{}{}
+			queue = append(queue, child)
 		}
 	}
 	return ""

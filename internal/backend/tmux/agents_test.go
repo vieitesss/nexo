@@ -3,6 +3,7 @@ package tmux
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,83 @@ import (
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
 )
+
+func TestFindHarnessMatchesProcessArgs(t *testing.T) {
+	allow := map[string]struct{}{"pi": {}, "claude": {}}
+	for _, test := range []struct {
+		name string
+		args string
+		want string
+	}{
+		{name: "node script", args: "node /opt/homebrew/bin/pi", want: "pi"},
+		{name: "claude resume", args: "/Users/x/.local/bin/claude --resume", want: "claude"},
+		{name: "markdown file", args: "vim notes/claude.md", want: ""},
+		{name: "login shell", args: "-zsh", want: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := findHarness(test.args, allow); got != test.want {
+				t.Fatalf("findHarness(%q) = %q, want %q", test.args, got, test.want)
+			}
+		})
+	}
+}
+
+func TestAgentPanesFindsHarnessInPaneDescendants(t *testing.T) {
+	processes := "  100     1 -zsh\n" +
+		"  101   100 node /opt/homebrew/bin/pi\n" +
+		"  102   101 sleep 30\n" +
+		"  200     1 -zsh\n" +
+		"  201   200 /Users/x/.local/bin/claude --resume\n" +
+		"  202   200 vim notes/claude.md\n" +
+		"  300     1 -bash\n"
+	panes := []string{
+		"%1\t100\tnode\t$1\twork\teditor\t1\t0\t/tmp/work",
+		"%2\t200\t2.1.30\t$2\tdev\tshell\t1\t0\t/tmp/dev",
+		"%3\t300\tpi\t$3\tover\tmain\t0\t0\t/tmp/over",
+		"%4\t202\tvim\t$4\tnotes\tmain\t0\t0\t/tmp/notes",
+	}
+	psCalls := 0
+	r := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "tmux":
+			return []byte(strings.Join(panes, "\n") + "\n"), nil
+		case "ps":
+			psCalls++
+			for i, arg := range args {
+				if arg != "-p" || i+1 >= len(args) {
+					continue
+				}
+				for _, line := range strings.Split(processes, "\n") {
+					fields := strings.Fields(line)
+					if len(fields) > 2 && fields[0] == args[i+1] {
+						return []byte(strings.Join(fields[2:], " ") + "\n"), nil
+					}
+				}
+				return nil, nil
+			}
+			return []byte(processes), nil
+		case "git":
+			return []byte("\n"), nil
+		default:
+			return nil, nil
+		}
+	})
+	source := NewAgentSource(r)
+	got, err := source.agentPanes(context.Background(), config.AgentsConfig{Processes: []string{"pi", "claude"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	harnesses := make([]string, 0, len(got))
+	for _, current := range got {
+		harnesses = append(harnesses, current.harness)
+	}
+	if !reflect.DeepEqual(harnesses, []string{"pi", "claude", "pi"}) {
+		t.Fatalf("harnesses = %#v, want descendant and fast-path detection", harnesses)
+	}
+	if psCalls != 1 {
+		t.Fatalf("ps calls = %d, want one snapshot per listing", psCalls)
+	}
+}
 
 func TestOnlyOneWatcherLockPerServer(t *testing.T) {
 	path := t.TempDir() + "/server.lock"
