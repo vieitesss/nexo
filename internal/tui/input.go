@@ -590,20 +590,26 @@ func (s *inputState) accept(rows []row) inputEffect {
 	return inputEffect{quit: true}
 }
 
+// runKill builds the kill command from the callback and context captured now.
+// Command construction is the last point where the live transition state is
+// safe to read: the returned closure runs on Bubble Tea's command goroutine
+// while later events keep rewriting inputState.
 func (s *inputState) runKill(refs []picker.ContainerRef) tea.Cmd {
+	kill, ctx := s.deps.KillContainers, s.ctx
 	return func() tea.Msg {
-		if s.deps.KillContainers == nil {
+		if kill == nil {
 			return actionMsg{kind: "kill", err: errors.New("container killing is not supported")}
 		}
-		return actionMsg{kind: "kill", err: s.deps.KillContainers(s.ctx, refs)}
+		return actionMsg{kind: "kill", err: kill(ctx, refs)}
 	}
 }
 
 func (s *inputState) runRename(ref picker.ContainerRef, name string) tea.Cmd {
+	rename, ctx := s.deps.RenameContainer, s.ctx
 	return func() tea.Msg {
-		if s.deps.RenameContainer == nil {
+		if rename == nil {
 			return actionMsg{kind: "rename", err: errors.New("container renaming is not supported")}
 		}
-		return actionMsg{kind: "rename", err: s.deps.RenameContainer(s.ctx, ref, name)}
+		return actionMsg{kind: "rename", err: rename(ctx, ref, name)}
 	}
 }
