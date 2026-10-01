@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -204,6 +205,38 @@ func TestLoadParsesRemoteSettings(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Remote, RemoteConfig{Machines: []string{"devbox", "gpu1"}, SSHConfig: "/tmp/ssh-config"}) {
 		t.Fatalf("Remote = %#v, want configured machines", got.Remote)
+	}
+}
+
+func TestLoadExpandsRemoteSSHConfigHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"tilde directory", "~/.ssh/config", filepath.Join(home, ".ssh", "config")},
+		{"tilde alone", "~", home},
+		{"absolute", "/tmp/ssh-config", "/tmp/ssh-config"},
+		{"empty", "", ""},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			contents := "[remote]\nssh-config = " + strconv.Quote(testCase.value) + "\n"
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if got.Remote.SSHConfig != testCase.want {
+				t.Fatalf("Remote.SSHConfig = %q, want %q", got.Remote.SSHConfig, testCase.want)
+			}
+		})
 	}
 }
 

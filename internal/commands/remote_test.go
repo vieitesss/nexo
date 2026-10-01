@@ -3,6 +3,9 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -74,5 +77,41 @@ func TestRemoteListShowsAgentWarningWithoutHidingContainers(t *testing.T) {
 	got := output.String()
 	if !strings.Contains(got, "api") || !strings.Contains(got, "warning: agents unavailable: nexo: command not found") {
 		t.Fatalf("output = %q, want containers plus agent warning", got)
+	}
+}
+
+func TestRemoteListPassesExpandedSSHConfigToSSH(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	contents := "[remote]\nmachines = [\"devbox\"]\nssh-config = \"~/.ssh/config\"\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	var gotArgs []string
+	fake := funcRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		gotArgs = append([]string(nil), args...)
+		return []byte("$1\tdev\n"), nil
+	})
+	var output strings.Builder
+	if err := (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Config:    cfg,
+		Runner:    fake,
+		Stdout:    &output,
+		Args:      []string{"list"},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	want := filepath.Join(home, ".ssh", "config")
+	index := slices.Index(gotArgs, "-F")
+	if index < 0 || index+1 >= len(gotArgs) || gotArgs[index+1] != want {
+		t.Fatalf("ssh args = %#v, want -F %q", gotArgs, want)
 	}
 }

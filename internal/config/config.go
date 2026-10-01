@@ -100,7 +100,7 @@ func parse(contents []byte, path string) (Config, error) {
 		Remote: RemoteConfig{
 			Machines:  raw.Remote.Machines,
 			Backends:  raw.Remote.Backends,
-			SSHConfig: raw.Remote.SSHConfig,
+			SSHConfig: expandConfigHome(raw.Remote.SSHConfig, os.Getenv("HOME")),
 			Transport: raw.Remote.Transport,
 		},
 	}
