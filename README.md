@@ -287,6 +287,7 @@ statuses, and safe verification.
 | `Ctrl-T` | Mark the selected container |
 | `Ctrl-O` | Open the clone form for the selected Projects row |
 | `Ctrl-D` | Open the new-directory form in the Projects tab |
+| `Ctrl-E` | Open the branch-extraction form for the selected Git checkout or worktree |
 | `Ctrl-X` | Kill marked or selected containers after confirmation |
 | `Ctrl-R` | Rename the selected container |
 | `Esc` / `Ctrl-C` | Clear search, then close / close |

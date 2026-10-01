@@ -31,6 +31,14 @@ at `DESTINATION`, leaving a return branch checked out in `REPO`. This is the
 inverse of `create`: the branch keeps its commits and its identity while its
 working tree moves, and the original checkout is freed for another branch.
 
+The Projects tab exposes the same operation with `Ctrl-E` on a selected Git
+checkout or linked worktree. Its staged form pre-fills a sibling destination and
+an editable return branch using the CLI suggestion policy. The form keeps dirty
+checkouts, existing destinations, branch ownership conflicts, and missing return
+branches inline; Escape cancels, including an in-flight request. Success refreshes
+and selects the extracted worktree, then opens and focuses it using the selected
+backend's normal worktree policy.
+
 The whole preflight runs before anything is mutated:
 
 - `REPO` is clean, with no staged, unstaged, or untracked changes. The check
