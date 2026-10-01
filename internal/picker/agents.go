@@ -47,20 +47,12 @@ func AgentDot(agents []capabilities.Agent) (Decoration, bool) {
 	return Decoration{Text: "●", Style: style}, true
 }
 
-// ApplyAgentDotsForMachine applies one source machine's agent snapshot without
-// touching places owned by other machines. The source machine is supplied by
-// the caller because Agent deliberately does not invent a machine identity.
-func ApplyAgentDotsForMachine(places []Place, agents []capabilities.Agent, machine string) []Place {
-	return applyAgentDots(places, agents, strings.TrimSpace(machine))
-}
-
 func applyAgentDots(places []Place, agents []capabilities.Agent, machine string) []Place {
 	byID := make(map[string][]capabilities.Agent)
 	byLabel := make(map[string][]capabilities.Agent)
 	for _, agent := range agents {
 		if id := strings.TrimSpace(agent.ContainerID); id != "" {
 			byID[id] = append(byID[id], agent)
-			continue
 		}
 		if label := strings.TrimSpace(agent.Container); label != "" {
 			byLabel[label] = append(byLabel[label], agent)
@@ -107,11 +99,8 @@ func sameMachine(place Place, machine string) bool {
 	if machine == "" {
 		return true
 	}
-	placeMachine := strings.TrimSpace(place.Machine)
-	if placeMachine == "" {
-		placeMachine = LocalMachine()
-	}
-	return placeMachine == machine
+	placeMachine := NormalizeMachine(place.Machine)
+	return placeMachine == NormalizeMachine(machine)
 }
 
 func isAgentDot(decoration Decoration) bool {

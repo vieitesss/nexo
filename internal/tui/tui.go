@@ -215,12 +215,13 @@ type ToastMsg struct{ Text string }
 // Model is the complete tabbed Bubble Tea model. Tests can drive it through
 // Update and inspect View without starting a terminal or a multiplexer.
 type Model struct {
-	ctx    context.Context
-	deps   Deps
-	tab    Tab
-	query  []rune
-	rows   []row
-	cursor string
+	ctx     context.Context
+	deps    Deps
+	catalog *picker.Catalog
+	tab     Tab
+	query   []rune
+	rows    []row
+	cursor  string
 
 	width, height   int
 	sized           bool
@@ -228,7 +229,6 @@ type Model struct {
 	folded          map[string]bool
 	expanded        map[string]bool
 	marked          map[picker.ContainerRef]bool
-	remotePlaces    []picker.Place
 	remoteMachines  []string
 	remoteLoaded    map[string]bool
 	groupErrors     map[string]string
@@ -275,20 +275,22 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	remoteMachines := make([]string, 0, len(deps.RemoteMachines))
 	seenRemoteMachines := make(map[string]bool, len(deps.RemoteMachines))
 	for _, machine := range deps.RemoteMachines {
-		machine = normalizeRemoteMachine(machine)
-		if machine == "" || seenRemoteMachines[machine] {
+		machine = picker.NormalizeMachine(machine)
+		if machine == "" || machine == picker.LocalMachine() || seenRemoteMachines[machine] {
 			continue
 		}
 		seenRemoteMachines[machine] = true
 		remoteMachines = append(remoteMachines, machine)
 	}
 	deps.RemoteMachines = remoteMachines
+	catalog := picker.NewCatalog(deps.Projects, deps.Containers, deps.Agents)
+	catalog.SetRemoteMachines(remoteMachines)
 	now := deps.Now
 	if now == nil {
 		now = time.Now
 	}
 	m := Model{
-		ctx: loadCtx, cancelLoads: cancelLoads, deps: deps, tab: tab, agents: newAgentRecords(deps.Agents, ""),
+		ctx: loadCtx, cancelLoads: cancelLoads, deps: deps, catalog: catalog, tab: tab, agents: newAgentRecords(deps.Agents, ""),
 		folded: make(map[string]bool), expanded: make(map[string]bool), marked: make(map[picker.ContainerRef]bool),
 		groupErrors: make(map[string]string), groupWarnings: make(map[string]string), gitErrors: make(map[string]string), now: now, refreshErr: deps.AgentError,
 		remoteMachines: append([]string(nil), deps.RemoteMachines...), remoteLoaded: make(map[string]bool), refreshInFlight: new(bool), generations: &sourceGenerations{}, gitSlots: make(chan struct{}, gitConcurrency(deps.GitLoader)),
@@ -296,6 +298,7 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	for _, machine := range remoteMachines {
 		m.remoteLoaded[machine] = false
 	}
+	m.syncCatalog()
 	m.rebuild(false)
 	return m
 }
@@ -634,10 +637,10 @@ func nearestCursorable(rows []row, index int) (string, bool) {
 }
 
 func (m Model) sourcePlaces() []picker.Place {
-	places := append([]picker.Place(nil), m.deps.Projects...)
-	places = append(places, picker.ContainerPlaces(m.deps.Containers)...)
-	places = append(places, m.remotePlaces...)
-	return places
+	if m.catalog == nil {
+		return append([]picker.Place(nil), m.deps.Projects...)
+	}
+	return append([]picker.Place(nil), m.catalog.Snapshot().Places...)
 }
 func (m Model) projectPlaces() []picker.Place {
 	places := m.sourcePlaces()
@@ -732,38 +735,21 @@ func (m Model) matchCount(tab Tab) int {
 }
 
 func (m Model) containerPlaces() []picker.Place {
-	places := picker.MergeContainerPlaces(picker.ContainerPlaces(m.deps.Containers), m.remotePlaces)
-	for i := range places {
-		if places[i].Kind == picker.ContainerKind {
-			places[i].Machine = normalizedMachine(places[i].Machine)
-			places[i].Group = places[i].Machine
+	places := m.sourcePlaces()
+	out := places[:0]
+	for _, place := range places {
+		if place.Kind == picker.ContainerKind {
+			out = append(out, place)
 		}
-		if places[i].Kind != picker.ContainerKind {
-			continue
-		}
-		places[i].Agents = m.agentsFor(places[i])
 	}
-	return places
+	return out
 }
 
 func (m Model) agentsFor(place picker.Place) []capabilities.Agent {
-	if place.Kind == "" {
-		place.Kind = picker.ContainerKind
+	if m.catalog == nil {
+		return nil
 	}
-	all := make([]capabilities.Agent, 0)
-	for _, record := range m.allAgents() {
-		if record.machine != place.Machine {
-			continue
-		}
-		all = append(all, record.agent)
-	}
-	// Keep association semantics in the shared picker helper: IDs are only
-	// meaningful inside the source machine, and label fallback is scoped too.
-	updated := picker.ApplyAgentDotsForMachine([]picker.Place{place}, all, place.Machine)
-	if len(updated) == 1 {
-		return updated[0].Agents
-	}
-	return nil
+	return m.catalog.AgentsFor(place)
 }
 
 func (m Model) rowsForTab(tab Tab) []row {
@@ -829,37 +815,10 @@ func agentIdentity(record agentRecord) string {
 }
 
 func (m Model) machineNames() []string {
-	seen := map[string]bool{picker.LocalMachine(): true}
-	for _, place := range m.containerPlaces() {
-		if place.Machine != "" {
-			seen[place.Machine] = true
-		}
+	if m.catalog == nil {
+		return []string{picker.LocalMachine()}
 	}
-	for _, machine := range m.remoteMachines {
-		if machine != "" {
-			seen[machine] = true
-		}
-	}
-	for _, record := range m.allAgents() {
-		if record.machine != "" {
-			seen[record.machine] = true
-		}
-	}
-	names := make([]string, 0, len(seen))
-	for name := range seen {
-		names = append(names, name)
-	}
-	sort.SliceStable(names, func(i, j int) bool {
-		local := picker.LocalMachine()
-		if names[i] == local {
-			return names[j] != local
-		}
-		if names[j] == local {
-			return false
-		}
-		return names[i] < names[j]
-	})
-	return names
+	return append([]string(nil), m.catalog.Snapshot().Machines...)
 }
 
 func (m Model) containerRows() []row {
@@ -1170,7 +1129,10 @@ func (m Model) currentItem() (row, bool) {
 }
 
 func (m Model) markedTargets() []picker.ContainerRef {
-	return picker.MarkedContainerRefs(m.containerPlaces(), m.marked)
+	if m.catalog == nil {
+		return nil
+	}
+	return m.catalog.Marked(m.marked)
 }
 
 // Update implements tea.Model. Printable keys are intentionally handled last
@@ -1192,6 +1154,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.refreshErr = nil
 			m.agents = newAgentRecords(msg.agents, "")
+			if m.catalog != nil {
+				m.catalog.ReplaceLocalAgents(msg.agents)
+				m.syncCatalog()
+			}
 			m.rebuild(false)
 		}
 		m.finishReload("agents")
@@ -1204,6 +1170,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toast = "container refresh: " + msg.err.Error()
 		} else {
 			m.deps.Containers = append([]capabilities.Container(nil), msg.containers...)
+			if m.catalog != nil {
+				m.catalog.ReplaceContainers(msg.containers)
+				m.syncCatalog()
+			}
 			m.rebuild(false)
 		}
 		m.finishReload("containers")
@@ -1225,6 +1195,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// to AgentSource. A batch without machine provenance is local.
 		if msg.Error == "" {
 			m.agents = newAgentRecords(msg.Agents, "")
+			if m.catalog != nil {
+				m.catalog.ReplaceLocalAgents(msg.Agents)
+				m.syncCatalog()
+			}
 			m.rebuild(false)
 		}
 		return m, nil
@@ -1291,12 +1265,6 @@ func (m *Model) applyGit(msg picker.GitContextMsg) {
 			m.deps.Projects[i].LinkedWorktree = true
 		}
 	}
-	for i := range m.remotePlaces {
-		if m.remotePlaces[i].Path == msg.Path {
-			m.remotePlaces[i].GitContext = &value
-			m.remotePlaces[i].ParentPath = value.PrimaryPath
-		}
-	}
 	// A linked worktree belongs beside its primary checkout, even when
 	// discovery assigned the path to another configured parent.
 	for i := range m.deps.Projects {
@@ -1312,6 +1280,9 @@ func (m *Model) applyGit(msg picker.GitContextMsg) {
 	}
 	if selectedPath == msg.Path {
 		m.revealProjectAncestors(msg.Path)
+	}
+	if m.catalog != nil {
+		m.catalog.SetProjects(m.deps.Projects)
 	}
 	m.rebuild(false)
 }
@@ -1336,44 +1307,47 @@ func (m *Model) revealProjectAncestors(path string) {
 }
 
 func (m *Model) applyRemote(msg picker.RemoteBatch) {
-	machine := normalizeRemoteMachine(msg.Machine)
-	if machine == "" {
+	if m.catalog == nil {
 		return
 	}
-	m.groupErrors[machine] = sanitize(msg.Error)
-	m.groupWarnings[machine] = sanitize(msg.Warning)
-	m.remoteLoaded[machine] = true
-	seen := false
-	for _, configured := range m.remoteMachines {
-		if configured == machine {
-			seen = true
-		}
-	}
-	if !seen {
-		m.remoteMachines = append(m.remoteMachines, machine)
-	}
-	updatedPlaces := m.remotePlaces[:0]
-	for _, place := range m.remotePlaces {
-		if normalizeRemoteMachine(place.Machine) != machine {
-			updatedPlaces = append(updatedPlaces, place)
-		}
-	}
-	for i := range msg.Places {
-		msg.Places[i].Machine = machine
-		msg.Places[i].Group = machine
-	}
-	m.remotePlaces = append(updatedPlaces, msg.Places...)
-	updatedAgents := make([]agentRecord, 0, len(m.remoteAgents)+len(msg.Agents))
-	for _, record := range m.remoteAgents {
-		if normalizeRemoteMachine(record.machine) != machine {
-			updatedAgents = append(updatedAgents, record)
-		}
-	}
-	for _, agent := range msg.Agents {
-		updatedAgents = append(updatedAgents, agentRecord{agent: agent, machine: machine, backend: msg.Backend})
-	}
-	m.remoteAgents = updatedAgents
+	m.catalog.ApplyRemote(msg)
+	m.syncCatalog()
 	m.rebuild(false)
+}
+
+// syncCatalog projects one catalog snapshot into the TUI's row-oriented cache.
+// The catalog remains the policy module; these records only avoid teaching row
+// rendering about source batches and machine normalization.
+func (m *Model) syncCatalog() {
+	if m.catalog == nil {
+		return
+	}
+	snapshot := m.catalog.Snapshot()
+	local := picker.LocalMachine()
+	m.agents = nil
+	m.remoteAgents = nil
+	for _, record := range snapshot.Agents {
+		value := agentRecord{agent: record.Agent, machine: record.Machine, backend: record.Backend}
+		if record.Machine == local {
+			m.agents = append(m.agents, value)
+		} else {
+			m.remoteAgents = append(m.remoteAgents, value)
+		}
+	}
+	m.remoteMachines = nil
+	m.remoteLoaded = make(map[string]bool)
+	m.groupErrors = make(map[string]string)
+	m.groupWarnings = make(map[string]string)
+	for _, machine := range snapshot.Machines {
+		if machine == local {
+			continue
+		}
+		m.remoteMachines = append(m.remoteMachines, machine)
+		status := snapshot.Status[machine]
+		m.remoteLoaded[machine] = status.Loaded
+		m.groupErrors[machine] = sanitize(status.Error)
+		m.groupWarnings[machine] = sanitize(status.Warning)
+	}
 }
 func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Modal footer actions own input until they are confirmed or cancelled.
@@ -2437,21 +2411,6 @@ func hint(keyValue, label string) string {
 
 func sanitize(value string) string { return shell.Plain(value) }
 
-func normalizeRemoteMachine(machine string) string {
-	return strings.ToLower(strings.TrimSpace(sanitize(machine)))
-}
-
-func normalizedMachine(machine string) string {
-	machine = strings.TrimSpace(sanitize(machine))
-	if machine == "" || strings.EqualFold(machine, "local") {
-		return picker.LocalMachine()
-	}
-	if strings.EqualFold(machine, picker.LocalMachine()) {
-		return picker.LocalMachine()
-	}
-	return strings.ToLower(machine)
-}
-
 func fit(value string, width int) string {
 	if width <= 0 {
 		return ""
@@ -2711,5 +2670,9 @@ func highlightMarkedText(text, query string, selected bool) string {
 
 func (m *Model) SetAgents(agents []capabilities.Agent) {
 	m.agents = newAgentRecords(agents, "")
+	if m.catalog != nil {
+		m.catalog.ReplaceLocalAgents(agents)
+		m.syncCatalog()
+	}
 	m.rebuild(false)
 }
