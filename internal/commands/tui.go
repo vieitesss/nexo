@@ -109,7 +109,8 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 		if !ok {
 			return fmt.Errorf("backend %q does not support opening projects", invocation.Selection.Kind)
 		}
-		return opener.OpenProject(openCtx, place.Path, capabilities.OpenOptions{})
+		_, err := opener.OpenProject(openCtx, place.Path, capabilities.OpenOptions{})
+		return err
 	}
 	resolver := containerActionResolver(invocation)
 	deps.OpenContainer = func(openCtx context.Context, place picker.Place) error {

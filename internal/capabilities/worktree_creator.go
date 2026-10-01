@@ -8,6 +8,9 @@ type WorktreeCreateOptions struct {
 	Branch      string
 	Destination string
 	NewBranch   bool
+	// NoFocus asks the backend to open the worktree container without moving
+	// the user's view to it.
+	NoFocus bool
 }
 
 // Worktree is the result of creating a Git worktree.
@@ -18,6 +21,8 @@ type Worktree struct {
 	NewBranch   bool   `json:"-"`
 	ContainerID string `json:"-"`
 	SessionName string `json:"-"`
+	// Container is the container the creator opened for the worktree.
+	Container OpenedContainer `json:"-"`
 }
 
 // WorktreeCreator creates a worktree and, when appropriate, opens its

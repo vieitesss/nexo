@@ -135,31 +135,97 @@ func TestSessionNameUsesParentAndBaseAndIsTmuxSafe(t *testing.T) {
 }
 
 func TestOpenProjectSwitchesToExistingExactSessionInsideTmux(t *testing.T) {
-	runner := &fakeRunner{}
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"display-message -p -t =acme_app: #{session_id}": []byte("$12\n"),
+	}}
 	backend := New(runner, true)
-	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
+	container, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{})
+	if err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
-	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"switch-client", "-t", "=acme_app"}}}
+	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "display-message", "-p", "-t", "=acme_app:", "#{session_id}"}}, {name: "tmux", args: []string{"switch-client", "-t", "=acme_app"}}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+	if container.ID != "$12" || container.Name != "acme_app" || container.Path != "/work/acme/app" || container.Created {
+		t.Fatalf("container = %#v, want existing session $12", container)
+	}
+}
+
+func TestOpenProjectNoFocusReusesExistingSessionInsideTmux(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"display-message -p -t =acme_app: #{session_id}": []byte("$5\n"),
+	}}
+	backend := New(runner, true)
+	container, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{NoFocus: true})
+	if err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+	want := []call{
+		{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}},
+		{name: "tmux", args: []string{"-u", "display-message", "-p", "-t", "=acme_app:", "#{session_id}"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want no switch-client: %#v", runner.calls, want)
+	}
+	if container.ID != "$5" || container.Created {
+		t.Fatalf("container = %#v, want reused session $5", container)
+	}
+}
+
+func TestOpenProjectNoFocusCreatesDetachedSessionOutsideTmux(t *testing.T) {
+	runner := &fakeRunner{
+		fail: map[string]error{
+			"has-session -t =acme_app": errors.New("can't find session: acme_app"),
+		},
+		outputs: map[string][]byte{
+			"display-message -p -t =acme_app: #{session_id}": []byte("$9\n"),
+		},
+	}
+	backend := New(runner, false)
+	container, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{NoFocus: true})
+	if err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+	want := []call{
+		{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}},
+		{name: "tmux", args: []string{"-u", "new-session", "-d", "-s", "acme_app", "-c", "/work/acme/app"}},
+		{name: "tmux", args: []string{"-u", "display-message", "-p", "-t", "=acme_app:", "#{session_id}"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want detached session without attach: %#v", runner.calls, want)
+	}
+	if runner.interactiveCalls != 0 {
+		t.Fatalf("interactive calls = %d, want no attach", runner.interactiveCalls)
+	}
+	if !container.Created || container.ID != "$9" || container.Name != "acme_app" {
+		t.Fatalf("container = %#v, want created session $9", container)
 	}
 }
 
 func TestOpenProjectCreatesAndAttachesMissingSessionOutsideTmux(t *testing.T) {
-	runner := &fakeRunner{fail: map[string]error{
-		"has-session -t =acme_app": errors.New("can't find session: acme_app"),
-	}}
+	runner := &fakeRunner{
+		fail: map[string]error{
+			"has-session -t =acme_app": errors.New("can't find session: acme_app"),
+		},
+		outputs: map[string][]byte{
+			"display-message -p -t =acme_app: #{session_id}": []byte("$12\n"),
+		},
+	}
 	backend := New(runner, false)
-	if err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{}); err != nil {
+	container, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{})
+	if err != nil {
 		t.Fatalf("OpenProject() error = %v", err)
 	}
-	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "new-session", "-d", "-s", "acme_app", "-c", "/work/acme/app"}}, {name: "tmux", args: []string{"attach-session", "-t", "=acme_app"}}}
+	want := []call{{name: "tmux", args: []string{"-u", "has-session", "-t", "=acme_app"}}, {name: "tmux", args: []string{"-u", "new-session", "-d", "-s", "acme_app", "-c", "/work/acme/app"}}, {name: "tmux", args: []string{"-u", "display-message", "-p", "-t", "=acme_app:", "#{session_id}"}}, {name: "tmux", args: []string{"attach-session", "-t", "=acme_app"}}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
 	if runner.interactiveCalls != 1 {
 		t.Fatalf("interactive calls = %d, want 1", runner.interactiveCalls)
+	}
+	if !container.Created || container.ID != "$12" {
+		t.Fatalf("container = %#v, want created session $12", container)
 	}
 }
 
@@ -169,7 +235,7 @@ func TestOpenProjectReportsInteractiveAttachError(t *testing.T) {
 		"attach-session -t =acme_app": want,
 	}}
 	backend := New(runner, false)
-	err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{})
+	_, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{})
 	var tmuxErr *Error
 	if !errors.As(err, &tmuxErr) || !strings.Contains(tmuxErr.Stderr, "not a terminal") {
 		t.Fatalf("error = %v, want typed interactive error", err)
@@ -185,7 +251,7 @@ func TestOpenProjectReportsTypedTmuxErrorWithStderr(t *testing.T) {
 		"has-session -t =acme_app": want,
 	}}
 	backend := New(runner, true)
-	err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{})
+	_, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{})
 	var tmuxErr *Error
 	if !errors.As(err, &tmuxErr) || !strings.Contains(tmuxErr.Stderr, "permission denied") {
 		t.Fatalf("error = %v, want typed error carrying stderr", err)
@@ -257,7 +323,7 @@ func TestFocusPaneSelectsAndAttachesOutsideTmux(t *testing.T) {
 
 func TestOpenProjectRejectsContainerSelectionOnTmux(t *testing.T) {
 	backend := New(&fakeRunner{})
-	err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{ContainerID: "container-1"})
+	_, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{ContainerID: "container-1"})
 	var unsupported *UnsupportedError
 	if !errors.As(err, &unsupported) {
 		t.Fatalf("error = %v, want UnsupportedError", err)

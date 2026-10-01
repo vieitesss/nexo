@@ -118,14 +118,15 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 	}
 
 	result := capabilities.Worktree{Path: path, Branch: options.Branch, Repo: options.Repo, NewBranch: options.NewBranch}
-	createdSession, err := b.openProject(ctx, path, capabilities.OpenOptions{})
-	if createdSession {
-		result.SessionName = projects.TargetName(path)
+	container, err := b.openProject(ctx, path, capabilities.OpenOptions{NoFocus: options.NoFocus})
+	result.Container = container
+	if container.Created {
+		result.SessionName = container.Name
 	}
 	if err != nil {
 		rollbackErr := b.rollbackWorktree(ctx, options.Repo, path, options.NewBranch, options.Branch, branchExisted)
-		if createdSession {
-			if _, killErr := b.run(ctx, "kill-session", "-t", "="+projects.TargetName(path)); killErr != nil {
+		if container.Created {
+			if _, killErr := b.run(ctx, "kill-session", "-t", "="+container.Name); killErr != nil {
 				rollbackErr = errors.Join(rollbackErr, killErr)
 			}
 		}
@@ -193,39 +194,57 @@ func (b *Backend) runGit(ctx context.Context, args ...string) ([]byte, error) {
 	return nil, &Error{Operation: "git", Args: append([]string(nil), args...), Stderr: stderr, Err: err}
 }
 
-// OpenProject opens path in a tmux session and focuses that session.
-func (b *Backend) OpenProject(ctx context.Context, path string, options capabilities.OpenOptions) error {
-	_, err := b.openProject(ctx, path, options)
-	return err
+// OpenProject opens path in a tmux session and focuses it unless NoFocus is
+// set.
+func (b *Backend) OpenProject(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
+	return b.openProject(ctx, path, options)
 }
 
-func (b *Backend) openProject(ctx context.Context, path string, options capabilities.OpenOptions) (bool, error) {
+func (b *Backend) openProject(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
 	if options.ContainerID != "" {
-		return false, &UnsupportedError{Option: "--workspace-id"}
+		return capabilities.OpenedContainer{}, &UnsupportedError{Option: "--workspace-id"}
 	}
 	if b == nil || b.Runner == nil {
-		return false, errors.New("tmux project opener requires a command runner")
+		return capabilities.OpenedContainer{}, errors.New("tmux project opener requires a command runner")
 	}
 
 	name := projects.TargetName(path)
 	_, err := b.run(ctx, "has-session", "-t", "="+name)
 	exists := err == nil
 	if err != nil && !isMissingSession(err) {
-		return false, err
+		return capabilities.OpenedContainer{}, err
 	}
 	created := false
 	if !exists {
 		if _, err := b.run(ctx, "new-session", "-d", "-s", name, "-c", path); err != nil {
-			return false, err
+			return capabilities.OpenedContainer{}, err
 		}
 		created = true
 	}
 
+	container := capabilities.OpenedContainer{Name: name, Path: path, Created: created}
+	id, err := b.sessionID(ctx, name)
+	if err != nil {
+		return container, err
+	}
+	container.ID = id
+
+	if options.NoFocus {
+		return container, nil
+	}
 	if b.Inside {
 		_, err = b.runClient(ctx, "switch-client", "-t", "="+name)
-		return created, err
+		return container, err
 	}
-	return created, b.runInteractive(ctx, "attach-session", "-t", "="+name)
+	return container, b.runInteractive(ctx, "attach-session", "-t", "="+name)
+}
+
+func (b *Backend) sessionID(ctx context.Context, name string) (string, error) {
+	output, err := b.run(ctx, "display-message", "-p", "-t", "="+name+":", "#{session_id}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func (b *Backend) runInteractive(ctx context.Context, operation string, args ...string) error {

@@ -218,9 +218,9 @@ nexo --help
 | `nexo list` | List configured project candidates; use `--places` to include local and configured remote containers. |
 | `nexo tui [agents\|containers\|projects]` | Render the TUI in the terminal supplied by your binding. With no tab, open Agents for unseen-stopped agents, otherwise Containers. |
 | `nexo agents` | List agent panes; add `watch` or `seen PANE_ID`. |
-| `nexo open PATH` | Open a discovered project candidate; Herdr also accepts `--workspace-id ID`. |
+| `nexo open PATH` | Open a discovered project candidate; add `--no-focus` to create or reuse its container without switching to it. Herdr also accepts `--workspace-id ID`. |
 | `nexo remote` | Run `list`, `open MACHINE/CONTAINER`, `new MACHINE [NAME]`, or `close [MACHINE/CONTAINER]`. |
-| `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch` or `--add-parent`. |
+| `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch`, `--add-parent`, or `--no-focus`. |
 | `nexo tmux init` | Install tmux focus hooks and the agent watcher (tmux backend only). |
 
 Examples:
@@ -240,6 +240,9 @@ nexo --backend=tmux agents seen %4
 
 # Open a project already found by `list`.
 nexo --backend=tmux open ~/src/api
+
+# Create or reuse the container without moving the user's view.
+nexo --backend=tmux --json open ~/src/api --no-focus
 
 # List and open configured remote containers.
 nexo --backend=tmux remote list --json
