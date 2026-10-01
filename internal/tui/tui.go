@@ -272,11 +272,14 @@ type remoteMsg struct {
 	batch      picker.RemoteBatch
 }
 
-// remoteNewMsg carries a validated name from the remote new-container form to
-// the coordinator, which closes the TUI and runs the accepted action.
+// remoteNewMsg carries a validated name and its form generation from the
+// remote new-container form to the coordinator, which closes the TUI and runs
+// the accepted action. The generation lets a late result from a canceled or
+// replaced form be rejected.
 type remoteNewMsg struct {
-	target RemoteTarget
-	name   string
+	target     RemoteTarget
+	name       string
+	generation uint64
 }
 
 type pullRequestMsg struct {
@@ -632,6 +635,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toast = msg.Text
 		return m, nil
 	case remoteNewMsg:
+		if m.input.form == nil || msg.generation == 0 || msg.generation != m.input.actionGeneration {
+			return m, nil
+		}
 		target := msg.target
 		m.input.selectedRemoteTarget = &target
 		m.input.selectedRemoteName = msg.name

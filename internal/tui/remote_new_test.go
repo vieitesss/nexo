@@ -37,6 +37,14 @@ func newRowFor(model Model, id string) (row, bool) {
 	return row{}, false
 }
 
+func remoteNewPlaces(machine string, names ...string) []picker.Place {
+	containers := make([]capabilities.Container, 0, len(names))
+	for index, name := range names {
+		containers = append(containers, capabilities.Container{ID: machine + "-" + string(rune('a'+index)), Name: name, Machine: machine})
+	}
+	return picker.ContainerPlaces(containers)
+}
+
 // TestRemoteNewRowCarriesResolvedBackend pins the projection contract: a
 // successfully loaded reachable machine gets one selectable new-container row
 // that carries its resolved multiplexer kind, and the local machine does not.
@@ -151,4 +159,206 @@ func TestRemoteNewRowRendersAsMutedAction(t *testing.T) {
 	model.input.cursor = "new:dev"
 	model.SetSize(100, 14)
 	noBackgroundSGR(t, model.View())
+}
+
+// TestRemoteNewRowRefinementPrefersRealMatch is the refinement regression: a
+// query edit that drops the selected container while another real match
+// remains must keep the cursor on that match. The synthetic creation row sits
+// right after it and must never absorb Enter.
+func TestRemoteNewRowRefinementPrefersRealMatch(t *testing.T) {
+	created := false
+	deps := remoteNewDeps()
+	deps.OpenContainer = func(context.Context, picker.Place) error { return nil }
+	deps.NewRemoteContainer = func(context.Context, RemoteTarget, string) error {
+		created = true
+		return nil
+	}
+	model := NewModel(context.Background(), deps, ContainersTab)
+	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Backend: "tmux", Places: remoteNewPlaces("dev", "alpha", "alpine")})
+	model.SetQuery("a")
+	model.input.cursor = containerIdentity(picker.Place{Machine: "dev", ContainerID: "dev-b"})
+	model.SetQuery("alph")
+
+	want := containerIdentity(picker.Place{Machine: "dev", ContainerID: "dev-a"})
+	if got := model.Cursor(); got != want {
+		t.Fatalf("cursor after refinement = %q, want alpha %q; rows=%v", got, want, model.Rows())
+	}
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("enter did not accept the refined match")
+	}
+	if model.input.selectedRemoteTarget != nil {
+		t.Fatal("enter proposed remote creation after refinement")
+	}
+	if err := model.execute(context.Background()); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if created {
+		t.Fatal("refinement created a container instead of opening the match")
+	}
+}
+
+// TestRemoteReloadHidesNewRowsUntilCurrentResult is the reload regression: a
+// coordinated reload must hide every machine's creation row until that
+// machine's own current-generation listing arrives, even when an interleaved
+// local refresh restores the catalog snapshot.
+func TestRemoteReloadHidesNewRowsUntilCurrentResult(t *testing.T) {
+	dev := picker.RemoteBatch{Machine: "dev", Backend: "tmux", Places: remoteNewPlaces("dev", "dev-one")}
+	gpu := picker.RemoteBatch{Machine: "gpu", Backend: "herdr", Places: remoteNewPlaces("gpu", "gpu-one")}
+	deps := remoteNewDeps()
+	deps.RemoteMachines = []string{"dev", "gpu"}
+	deps.ContainerSource = fixedContainerSource{containers: deps.Containers}
+	deps.RemoteCommands = []tea.Cmd{
+		func() tea.Msg { return dev },
+		func() tea.Msg { return gpu },
+	}
+	model := NewModel(context.Background(), deps, ContainersTab)
+	model = updateModel(t, model, dev)
+	model = updateModel(t, model, gpu)
+	for _, machine := range []string{"dev", "gpu"} {
+		if _, ok := newRowFor(model, "new:"+machine); !ok {
+			t.Fatalf("precondition: %s new row missing: %v", machine, model.Rows())
+		}
+	}
+
+	if cmd := model.source.Reload(); cmd == nil {
+		t.Fatal("reload scheduled no commands")
+	}
+	model.rebuild(false)
+	for _, machine := range []string{"dev", "gpu"} {
+		if _, ok := newRowFor(model, "new:"+machine); ok {
+			t.Fatalf("reload exposed new row for still-loading %s: %v", machine, model.Rows())
+		}
+	}
+
+	// A local refresh completing mid-reload must not restore cached statuses.
+	model = updateModel(t, model, containersMsg{generation: model.source.generations.containers, containers: deps.Containers})
+	for _, machine := range []string{"dev", "gpu"} {
+		if _, ok := newRowFor(model, "new:"+machine); ok {
+			t.Fatalf("local refresh resurrected new row for still-loading %s: %v", machine, model.Rows())
+		}
+	}
+
+	model = updateModel(t, model, remoteMsg{generation: model.source.generations.remotes, batch: picker.RemoteBatch{Machine: "dev", Backend: "tmux", Places: remoteNewPlaces("dev", "dev-one")}})
+	if _, ok := newRowFor(model, "new:dev"); !ok {
+		t.Fatalf("dev new row missing after its current result: %v", model.Rows())
+	}
+	if _, ok := newRowFor(model, "new:gpu"); ok {
+		t.Fatalf("gpu new row exposed before its current result: %v", model.Rows())
+	}
+
+	model = updateModel(t, model, remoteMsg{generation: model.source.generations.remotes, batch: picker.RemoteBatch{Machine: "gpu", Backend: "herdr", Places: remoteNewPlaces("gpu", "gpu-one")}})
+	if _, ok := newRowFor(model, "new:gpu"); !ok {
+		t.Fatalf("gpu new row missing after its current result: %v", model.Rows())
+	}
+}
+
+// TestRemoteNewFormRejectsLateSubmitAfterCancel is the cancel race: leaving
+// the name form before the command result is delivered must invalidate that
+// result so it cannot create the container or quit a later interface.
+func TestRemoteNewFormRejectsLateSubmitAfterCancel(t *testing.T) {
+	created := false
+	deps := remoteNewDeps()
+	deps.NewRemoteContainer = func(context.Context, RemoteTarget, string) error {
+		created = true
+		return nil
+	}
+	model := loadRemoteMachine(t, NewModel(context.Background(), deps, ContainersTab), "dev", "tmux")
+	model.input.cursor = "new:dev"
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.input.form == nil {
+		t.Fatal("empty query did not open the name form")
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
+	updated, submit := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if submit == nil {
+		t.Fatal("valid name did not submit")
+	}
+	late := submit()
+	if late == nil {
+		t.Fatal("submit command returned no message before cancellation")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if model.input.form != nil {
+		t.Fatal("escape did not close the form")
+	}
+	if again := submit(); again != nil {
+		t.Fatal("canceled command still produced a message")
+	}
+	updated, cmd := model.Update(late)
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("late message quit the model")
+	}
+	if model.input.selectedRemoteTarget != nil || model.Cancelled() {
+		t.Fatalf("late submit ran the canceled action: target=%#v cancelled=%t", model.input.selectedRemoteTarget, model.Cancelled())
+	}
+	if created {
+		t.Fatal("late submit created a container")
+	}
+}
+
+// TestRemoteNewFormRejectsLateSubmitFromReplacedForm covers replacement: the
+// result of a canceled form must not be accepted by the form that replaced it,
+// even though both forms submitted.
+func TestRemoteNewFormRejectsLateSubmitFromReplacedForm(t *testing.T) {
+	model := loadRemoteMachine(t, NewModel(context.Background(), remoteNewDeps(), ContainersTab), "dev", "tmux")
+	model.input.cursor = "new:dev"
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("first")})
+	updated, submitFirst := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	first := submitFirst()
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.input.form == nil {
+		t.Fatal("replacement form did not open")
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second")})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	updated, cmd := model.Update(first)
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("late result from the replaced form quit the model")
+	}
+	if model.input.selectedRemoteTarget != nil || model.input.form == nil {
+		t.Fatalf("replaced-form state disturbed: target=%#v form=%v", model.input.selectedRemoteTarget, model.input.form)
+	}
+}
+
+// TestRemoteNewRowRejectsMultilineQueryName pins the shared one-line policy:
+// a multiline query-derived name must open the form with the error inline for
+// every resolved backend instead of quitting and letting the backend reject
+// the name after the TUI is gone.
+func TestRemoteNewRowRejectsMultilineQueryName(t *testing.T) {
+	for _, backend := range []string{"tmux", "herdr"} {
+		t.Run(backend, func(t *testing.T) {
+			model := loadRemoteMachine(t, NewModel(context.Background(), remoteNewDeps(), ContainersTab), "dev", backend)
+			model.input.cursor = "new:dev"
+			model.SetQuery("alpha\nbeta")
+			model.input.cursor = "new:dev"
+			updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			model = updated.(Model)
+			if cmd != nil {
+				t.Fatal("multiline query quit the model")
+			}
+			if model.input.selectedRemoteTarget != nil {
+				t.Fatal("multiline query selected a remote target")
+			}
+			if model.input.form == nil {
+				t.Fatal("multiline query did not open the name form")
+			}
+			if got := model.input.form.stageError; got != "name must be one line" {
+				t.Fatalf("stage error = %q, want the one-line policy", got)
+			}
+			if got := formValue(model.input.form, "name"); got != "alpha\nbeta" {
+				t.Fatalf("prefilled name = %q", got)
+			}
+		})
+	}
 }

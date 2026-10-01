@@ -208,8 +208,12 @@ func (s *sourceState) Reload() tea.Cmd {
 	if len(s.remoteCommands) > 0 {
 		s.generations.remotes++
 		pending.remotes = len(s.remoteCommands)
-		for machine := range s.remoteLoaded {
+		if s.catalog != nil {
+			s.catalog.MarkRemoteLoading(s.remoteMachines)
+		}
+		for _, machine := range s.remoteMachines {
 			s.remoteLoaded[machine] = false
+			delete(s.remoteBackends, machine)
 			delete(s.groupErrors, machine)
 			delete(s.groupWarnings, machine)
 		}
