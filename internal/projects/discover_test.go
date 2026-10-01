@@ -118,6 +118,22 @@ func TestDiscoverWarnsAndSkipsMissingOrUnreadablePaths(t *testing.T) {
 	}
 }
 
+func TestDiscoverPreservesSymlinkCandidatePath(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "projects")
+	target := filepath.Join(home, "target")
+	mustMkdir(t, root)
+	mustMkdir(t, filepath.Join(target, ".git"))
+	link := filepath.Join(root, "alias")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	got := Discover(config.ProjectsConfig{Paths: []string{root}}, home)
+	if len(got.Candidates) != 1 || got.Candidates[0].Path != link {
+		t.Fatalf("candidates = %#v, want lexical symlink %q", got.Candidates, link)
+	}
+}
+
 func mustMkdir(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {

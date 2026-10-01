@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -114,6 +115,29 @@ func (b *Backend) RenameContainer(ctx context.Context, id, name string) error {
 	}
 	_, err := b.run(ctx, "rename-session", "-t", id, name)
 	return err
+}
+
+// ProjectActive reports whether any live tmux pane currently has the lexical
+// project path as its working directory. It is deliberately read-only so the
+// deletion preflight can reject active projects before mutation.
+func (b *Backend) ProjectActive(ctx context.Context, path string) (bool, error) {
+	if b == nil || b.Runner == nil {
+		return false, errors.New("tmux active-project check requires a command runner")
+	}
+	output, err := b.run(ctx, "list-panes", "-a", "-F", "#{pane_current_path}")
+	if err != nil {
+		if isNoServer(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	path = filepath.Clean(path)
+	for _, line := range strings.Split(string(output), "\n") {
+		if filepath.Clean(strings.TrimSpace(line)) == path {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // KillContainer kills one selected tmux session.

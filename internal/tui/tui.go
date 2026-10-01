@@ -92,12 +92,15 @@ type Deps struct {
 	// staged form. The backend owns preflight, creation, opening and rollback.
 	ExtractWorktree     func(context.Context, string, string, string) (capabilities.Worktree, error)
 	ExtractReturnBranch func(context.Context, string) (string, error)
-	AddProjectPath      func(context.Context, string) error
-	CloneConfig         config.CloneConfig
-	ProjectPaths        []string
-	Home                string
-	KillContainers      func(context.Context, []picker.ContainerRef) error
-	RenameContainer     func(context.Context, picker.ContainerRef, string) error
+	// DeleteProject performs a preflight and then removes the exact lexical
+	// project path. Permanent and force are explicit choices in the form.
+	DeleteProject func(context.Context, string, bool, bool) error
+	AddProjectPath func(context.Context, string) error
+	CloneConfig    config.CloneConfig
+	ProjectPaths   []string
+	Home           string
+	KillContainers  func(context.Context, []picker.ContainerRef) error
+	RenameContainer func(context.Context, picker.ContainerRef, string) error
 
 	Input      io.Reader
 	Output     io.Writer
@@ -501,7 +504,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SetSize(msg.Width, msg.Height)
 		return m, nil
 	case actionMsg:
-		if msg.kind == "clone" || msg.kind == "mkdir" || msg.kind == "extract" {
+		if msg.kind == "clone" || msg.kind == "mkdir" || msg.kind == "extract" || msg.kind == "delete" {
 			if msg.generation != 0 && msg.generation != m.input.actionGeneration {
 				return m, nil
 			}

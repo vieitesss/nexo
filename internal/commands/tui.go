@@ -165,6 +165,19 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 			Repo: repo, Destination: destination, ReturnBranch: returnBranch,
 		})
 	}
+	deps.DeleteProject = func(deleteCtx context.Context, path string, permanent, force bool) error {
+		args := []string{path}
+		if permanent {
+			args = append([]string{"--permanent"}, args...)
+		}
+		if force {
+			args = append([]string{"--force"}, args...)
+		}
+		return (deleteCommand{}).Run(deleteCtx, Invocation{
+			Selection: invocation.Selection, Config: invocation.Config, ConfigPath: invocation.ConfigPath,
+			Runner: invocation.Runner, Adapter: invocation.Adapter, Args: args,
+		})
+	}
 	deps.OpenProject = func(openCtx context.Context, place picker.Place) error {
 		opener, ok := invocation.Adapter.(capabilities.ProjectOpener)
 		if !ok {

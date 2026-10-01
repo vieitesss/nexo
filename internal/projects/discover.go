@@ -72,13 +72,14 @@ func Discover(cfg config.ProjectsConfig, home string) Discovery {
 			discovery.warnRead(home, err)
 		} else {
 			for _, name := range discovery.readDirectories(homePath) {
-				path, err := canonical(filepath.Join(homePath, name))
+				lexical := lexicalPath(filepath.Join(homePath, name))
+				path, err := canonical(lexical)
 				if err != nil {
 					discovery.warnRead(filepath.Join(homePath, name), err)
 					continue
 				}
 				if git, linked := gitStatus(path); git {
-					discovery.add(path, homePath, git, linked)
+					discovery.add(lexical, homePath, git, linked)
 				}
 			}
 		}
@@ -136,6 +137,16 @@ func (d *Discovery) readDirectories(path string) []string {
 		}
 		if info.IsDir() {
 			names = append(names, entry.Name())
+			continue
+		}
+		// A symlink to a directory is itself a project candidate. Stat is used
+		// only to discover directory shape; Candidate.Path remains lexical so
+		// deletion can Lstat and remove the link rather than its target.
+		if entry.Type()&os.ModeSymlink != 0 {
+			target, statErr := os.Stat(filepath.Join(path, entry.Name()))
+			if statErr == nil && target.IsDir() {
+				names = append(names, entry.Name())
+			}
 		}
 	}
 	return names
@@ -143,14 +154,26 @@ func (d *Discovery) readDirectories(path string) []string {
 
 func (d *Discovery) addChildren(path, group string) {
 	for _, name := range d.readDirectories(path) {
-		candidate, err := canonical(filepath.Join(path, name))
+		lexical := lexicalPath(filepath.Join(path, name))
+		candidate, err := canonical(lexical)
 		if err != nil {
 			d.warnRead(filepath.Join(path, name), err)
 			continue
 		}
 		git, linked := gitStatus(candidate)
-		d.add(candidate, group, git, linked)
+		// Keep the directory entry's lexical spelling. In particular, a
+		// candidate that is itself a symlink must reach deletion preflight as a
+		// link rather than as its resolved target.
+		d.add(lexical, group, git, linked)
 	}
+}
+
+func lexicalPath(path string) string {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(absolute)
 }
 
 func (d *Discovery) add(path, group string, status ...bool) {

@@ -405,6 +405,14 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 			}
 		}
 		return inputEffect{}
+	case tea.KeyCtrlY:
+		if s.tab == ProjectsTab {
+			if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ProjectKind && current.place.Path != "" {
+				s.form = newDeleteForm(s.deps, s.ctx, current.place.Path)
+				return inputEffect{rebuild: true}
+			}
+		}
+		return inputEffect{}
 	case tea.KeyCtrlX:
 		refs := append([]picker.ContainerRef(nil), frame.markedTargets()...)
 		if len(refs) == 0 {
