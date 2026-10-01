@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vieitesss/nexo/internal/agentstate"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
@@ -262,8 +263,8 @@ func TestMarkSeenUnknownPaneLeavesExistingStateByteIdentical(t *testing.T) {
 	source := NewAgentSource(r)
 	source.SetStateDir(t.TempDir())
 	source.server = "/tmp/tmux-test"
-	if err := source.updateStates(func(states map[string]agentState) error {
-		states["%1"] = agentState{State: "stopped"}
+	if err := source.ledger().Update(func(document *agentstate.Document) error {
+		document.Agents["%1"] = agentstate.State{State: "stopped"}
 		return nil
 	}); err != nil {
 		t.Fatal(err)

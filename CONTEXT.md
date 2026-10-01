@@ -113,6 +113,12 @@ _Avoid_: idle, done
 A stopped agent whose exact pane you have / have not focused since it
 stopped. Unseen-stopped agents are the ones that need you.
 
+**Agent state ledger**:
+The shared durable module that turns normalized backend observations into
+agent state, owns stopped/seen transition timestamps and disappearance cleanup,
+and persists records under the per-backend state lock. Backend adapters retain
+native observation and notification mechanics.
+
 **Agents tab**:
 The TUI tab that lists every agent pane, unseen-stopped first, and jumps to
 the chosen one. It answers "who needs me?" while the Containers and Projects

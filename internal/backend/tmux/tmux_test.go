@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vieitesss/nexo/internal/agentstate"
 	"github.com/vieitesss/nexo/internal/capabilities"
 )
 
@@ -262,8 +263,8 @@ func seedStoppedAgent(t *testing.T, backend *Backend, paneID string) {
 	t.Helper()
 	backend.agents.SetStateDir(t.TempDir())
 	backend.agents.server = "test-server"
-	if err := backend.agents.updateStates(func(states map[string]agentState) error {
-		states[paneID] = agentState{State: "stopped"}
+	if err := backend.agents.ledger().Update(func(document *agentstate.Document) error {
+		document.Agents[paneID] = agentstate.State{State: "stopped"}
 		return nil
 	}); err != nil {
 		t.Fatalf("seed agent state: %v", err)
@@ -285,9 +286,9 @@ func TestFocusPaneSwitchesContainerWindowAndPaneByExactID(t *testing.T) {
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
-	states, err := backend.agents.readPersistedStates()
-	if err != nil || !states.Agents["%7"].Seen {
-		t.Fatalf("agent state after focus = %#v, err=%v; want seen", states.Agents["%7"], err)
+	document, err := backend.agents.ledger().Read()
+	if err != nil || !document.Agents["%7"].Seen {
+		t.Fatalf("agent state after focus = %#v, err=%v; want seen", document.Agents["%7"], err)
 	}
 }
 
@@ -297,9 +298,9 @@ func TestFocusPaneSelectsAndAttachesOutsideTmux(t *testing.T) {
 	seedStoppedAgent(t, backend, "%7")
 	seenBeforeAttach := false
 	runner.interactiveCheck = func() {
-		states, err := backend.agents.readPersistedStates()
+		document, err := backend.agents.ledger().Read()
 		if err == nil {
-			seenBeforeAttach = states.Agents["%7"].Seen
+			seenBeforeAttach = document.Agents["%7"].Seen
 		}
 	}
 	if err := backend.FocusPane(context.Background(), "%7"); err != nil {
