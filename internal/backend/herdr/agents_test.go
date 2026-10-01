@@ -181,8 +181,8 @@ func TestAgentSourceKeysDefaultServerByConfigPath(t *testing.T) {
 	if _, err := second.ListAgents(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if first.statePath("json") == second.statePath("json") {
-		t.Fatalf("state paths = %q, want distinct paths for distinct config paths", first.statePath("json"))
+	if first.ledger().Path("json") == second.ledger().Path("json") {
+		t.Fatalf("state paths = %q, want distinct paths for distinct config paths", first.ledger().Path("json"))
 	}
 }
 

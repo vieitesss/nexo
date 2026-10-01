@@ -290,10 +290,6 @@ func (s *Source) ledger() *agentstate.Ledger {
 	return agentstate.New(s.stateDir, s.server, s.now)
 }
 
-func (s *Source) statePath(suffix string) string {
-	return s.ledger().Path(suffix)
-}
-
 func herdrServerIdentity() string {
 	if socket := strings.TrimSpace(os.Getenv("HERDR_SOCKET_PATH")); socket != "" {
 		return socket
