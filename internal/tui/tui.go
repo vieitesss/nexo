@@ -841,12 +841,9 @@ func (m Model) projectRows() []row {
 			}
 		}
 		key := "group:" + group
-		// Empty-query project browsing is an overview: all worktrees are
-		// visible below their checkout. Folding remains available explicitly.
-		expanded := !m.folded[key]
-		if m.expanded[key] {
-			expanded = true
-		}
+		// Empty-query browsing is an overview of folders: every folder and every
+		// checkout starts folded. Right unfolds a row explicitly.
+		expanded := m.expanded[key] && !m.folded[key]
 		rows = append(rows, row{id: key, kind: groupRow, label: group, group: group, count: len(groupPlaces), cursorable: true, expanded: expanded, foldable: true})
 		if !expanded {
 			continue
@@ -906,10 +903,7 @@ func projectMatchBefore(left, right row) bool {
 func (m Model) projectRow(place picker.Place, group string, depth int, treePrefix string, cursorable bool, all []picker.Place) row {
 	match, _ := picker.Rank("", projectLabel(place))
 	children := m.children(place, all)
-	expanded := len(children) == 0 || !m.folded[projectIdentity(place)]
-	if m.expanded[projectIdentity(place)] {
-		expanded = true
-	}
+	expanded := len(children) == 0 || (m.expanded[projectIdentity(place)] && !m.folded[projectIdentity(place)])
 	return row{id: projectIdentity(place), kind: itemRow, itemKind: "project", label: projectLabel(place), group: group, depth: depth, count: len(children), cursorable: cursorable, matched: true, score: match.Score, place: place, expanded: expanded, foldable: len(children) > 0, treePrefix: treePrefix}
 }
 
@@ -1123,9 +1117,10 @@ func (m *Model) revealProjectAncestors(path string) {
 		if found == nil || found.ParentPath == "" {
 			return
 		}
-		m.expanded[projectIdentity(*found)] = true
-		m.expanded["project:"+found.ParentPath] = true
-		m.expanded["group:"+found.Group] = true
+		for _, key := range []string{projectIdentity(*found), "project:" + found.ParentPath, "group:" + found.Group} {
+			m.expanded[key] = true
+			delete(m.folded, key)
+		}
 		path = found.ParentPath
 	}
 }
@@ -1289,10 +1284,10 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveCursor(m.pageSize())
 		return m, nil
 	case tea.KeyLeft:
-		m.toggleFold(false)
+		m.foldLeft()
 		return m, nil
 	case tea.KeyRight:
-		m.toggleFold(true)
+		m.foldRight()
 		return m, nil
 	case tea.KeyEnter:
 		return m.accept()
@@ -1379,21 +1374,59 @@ func (m Model) currentContainer() bool {
 	current, ok := m.currentItem()
 	return ok && current.place.Kind == picker.ContainerKind && current.place.ContainerID != ""
 }
-func (m *Model) toggleFold(expand bool) {
+
+// foldRight unfolds the selected folder or checkout and keeps it selected.
+func (m *Model) foldRight() {
 	current, ok := m.currentRow()
 	if !ok || m.tab != ProjectsTab || !current.foldable {
 		return
 	}
-	key := current.id
-	if expand {
-		delete(m.folded, key)
-		m.expanded[key] = true
-	} else {
-		m.folded[key] = true
-		delete(m.expanded, key)
-	}
+	delete(m.folded, current.id)
+	m.expanded[current.id] = true
 	m.rebuild(false)
-	m.cursor = key
+	m.cursor = current.id
+}
+
+// foldLeft folds the selected row's parent and moves the selection there. A
+// worktree folds its checkout, a project folds its folder, and an expanded
+// folder folds itself. A folded folder is already collapsed and does nothing.
+// Search rows are flat, so folding keys only act while browsing folders.
+func (m *Model) foldLeft() {
+	if m.tab != ProjectsTab || string(m.query) != "" {
+		return
+	}
+	current, ok := m.currentRow()
+	if !ok {
+		return
+	}
+	parent := foldParent(current)
+	if parent == "" {
+		return
+	}
+	delete(m.expanded, parent)
+	m.folded[parent] = true
+	m.rebuild(false)
+	m.cursor = parent
+}
+
+// foldParent reports the row that Left folds from the selected row, or the
+// empty string when Left has nothing to fold.
+func foldParent(current row) string {
+	switch current.kind {
+	case groupRow:
+		if current.expanded {
+			return current.id
+		}
+	case itemRow:
+		if current.itemKind != "project" {
+			return ""
+		}
+		if current.place.ParentPath != "" {
+			return "project:" + current.place.ParentPath
+		}
+		return "group:" + current.place.Group
+	}
+	return ""
 }
 func (m Model) accept() (tea.Model, tea.Cmd) {
 	current, ok := m.currentItem()
@@ -1665,20 +1698,20 @@ func (m Model) containerText(row row, marker string) (string, string) {
 func activityAge(now, activity time.Time) string { return stoppedAge(now, activity) }
 
 type projectColumns struct {
-	name, branch, summary, path int
-	search                      bool
+	name, git, path int
+	search          bool
 }
 
 const (
 	// projectMinName is the floor the name column may shrink to before a row
 	// stops being readable.
 	projectMinName = 16
-	// projectMinBranch is the floor the branch column may shrink to before the
+	// projectMinBranch is the floor the Git column may shrink to before the
 	// name column gives up any of its own cells.
 	projectMinBranch = 12
-	// projectComfortBranch is the width the branch wants before the folder
-	// column is worth keeping. Dropping the folder buys the branch this space.
-	projectComfortBranch = 16
+	// projectMinPath is the narrowest folder column worth rendering: enough for
+	// a leading ellipsis and a path segment.
+	projectMinPath = 6
 	// projectNameShare is the share of the row the name column may claim
 	// before it is capped. Names are what the user scans, so they lead.
 	projectNameShare = 0.45
@@ -1686,13 +1719,13 @@ const (
 
 // projectLayout sizes the project columns from the content of the visible
 // rows. Names lead: the longest visible name claims its share of the row up
-// front, the Git summary takes its widest value, and the branch lives on what
-// remains. The flat-mode folder column is dropped first when keeping it would
-// starve the branch; only once the branch has fallen to its floor does the
-// name shrink below its cap, and never below its floor.
+// front, the branch and its Git summary share one column, and the flat-mode
+// folder on the left takes only what is left over. The folder is left-
+// truncated and dropped before the name gives up cells; the branch truncates
+// before its Git summary, which stays visible.
 func (m Model) projectLayout() projectColumns {
 	layout := projectColumns{search: string(m.query) != ""}
-	maxName, maxBranch, maxSummary, maxPath := 0, 0, 0, 0
+	maxName, maxGit, maxSummary, maxPath := 0, 0, 0, 0
 	for _, candidate := range m.rows {
 		if candidate.kind != itemRow || candidate.itemKind != "project" {
 			continue
@@ -1700,35 +1733,39 @@ func (m Model) projectLayout() projectColumns {
 		if width := projectNameWidth(candidate); width > maxName {
 			maxName = width
 		}
-		if width := shell.StringWidth(projectBranch(candidate.place)); width > maxBranch {
-			maxBranch = width
+		branch := shell.StringWidth(projectBranch(candidate.place))
+		summary := shell.StringWidth(m.projectSummary(candidate.place))
+		git := branch
+		if summary > 0 {
+			if branch > 0 {
+				git += 2
+			}
+			git += summary
 		}
-		if width := shell.StringWidth(m.projectSummary(candidate.place)); width > maxSummary {
-			maxSummary = width
+		if git > maxGit {
+			maxGit = git
+		}
+		if summary > maxSummary {
+			maxSummary = summary
 		}
 		if layout.search {
-			if width := shell.StringWidth(abbreviateHome(candidate.group)); width > maxPath {
+			// The trailing slash is part of the folder cell.
+			if width := shell.StringWidth(abbreviateHome(candidate.group)) + 1; width > maxPath {
 				maxPath = width
 			}
 		}
 	}
 
-	// The marker and the two-space gutters between columns are fixed costs;
-	// the folder column pays for its own gutter when it survives.
-	available := max(0, m.width-(2+2+2))
+	// The marker and the gutter between the name and the Git column are fixed
+	// costs; the folder column pays for its own gutter when it survives.
+	base := max(0, m.width-(2+2))
 
-	// The summary is only as wide as its widest value; no value means the
-	// column takes no cells at all.
-	layout.summary = maxSummary
-
-	// Do not cap a row that already fits naturally. The proportional cap is
-	// only a pressure rule for terminals that cannot show every column.
-	natural := maxName + maxBranch + maxSummary
-	if layout.search && maxPath > 0 {
-		natural += maxPath + 2
-	}
-	if natural <= available {
-		layout.name, layout.branch, layout.path = maxName, maxBranch, maxPath
+	// Do not cap a row that already fits naturally.
+	if maxName+maxGit <= base && (!layout.search || maxPath == 0 || maxName+maxGit+maxPath+2 <= base) {
+		layout.name, layout.git = maxName, maxGit
+		if layout.search && maxPath > 0 {
+			layout.path = maxPath
+		}
 		return layout
 	}
 
@@ -1743,25 +1780,40 @@ func (m Model) projectLayout() projectColumns {
 	if nameTarget < nameFloor {
 		nameTarget = nameFloor
 	}
+	if nameTarget > base {
+		nameTarget = base
+	}
 
-	// The folder column is the first thing dropped: it only survives when the
-	// branch can still reach its comfortable width after the name, the summary
-	// and the folder itself have been served.
-	if layout.search && maxPath > 0 {
-		rest := available - layout.summary - nameTarget - (maxPath + 2)
-		if rest >= min(maxBranch, projectComfortBranch) {
-			layout.path = maxPath
-			available -= maxPath + 2
+	// The Git summary never truncates; the branch gives up cells first and the
+	// name shrinks only after the summary floor is protected.
+	gitFloor := max(maxSummary, min(maxGit, projectMinBranch))
+	git := min(maxGit, max(base-nameTarget, 0))
+	if git < gitFloor {
+		nameTarget = min(nameTarget, max(nameFloor, base-gitFloor))
+		git = min(maxGit, max(base-nameTarget, 0))
+		if git < gitFloor {
+			git = gitFloor
 		}
 	}
 
-	// The branch lives on the remainder. When there is too little it falls to
-	// its floor, and only then does the name give up cells down to its floor.
-	rest := available - layout.summary - nameTarget
-	layout.branch = min(maxBranch, max(rest, projectMinBranch))
-	layout.name = min(nameTarget, max(nameFloor, available-layout.summary-layout.branch))
+	// The Git column takes what it needs first; the folder gets only what is
+	// left. It is right-aligned and left-truncated, so it can stop short of its
+	// natural width without moving the name, and it is dropped before the name
+	// gives up cells or the branch is cut.
+	pathCost := 0
+	if layout.search && maxPath > 0 {
+		if leftover := base - nameTarget - git; leftover >= projectMinPath+2 {
+			layout.path = min(maxPath, leftover-2)
+			pathCost = layout.path + 2
+		}
+	}
+
+	// The name keeps its target unless protecting the summary floor leaves it
+	// with less room.
+	layout.name = min(nameTarget, max(nameFloor, base-pathCost-git))
+	layout.git = git
 	layout.name = max(layout.name, 0)
-	layout.branch = max(layout.branch, 0)
+	layout.git = max(layout.git, 0)
 	return layout
 }
 
@@ -1803,24 +1855,54 @@ func (m Model) placeText(row row, marker string) (string, string) {
 		nameText = bold().Render(nameText)
 	}
 	nameCell := fit(nameText, layout.name)
-	branchText := highlightText(projectBranch(row.place), string(m.query))
-	if !strings.Contains(branchText, "\x1b[") {
-		branchText = muted().Render(branchText)
-	}
-	branch := fit(branchText, layout.branch)
-	summary := fit(m.projectSummaryStyled(row.place), layout.summary)
-	line := nameCell + "  " + branch + "  " + summary
+	gitCell := fit(m.projectGitStyled(row.place, layout.git), layout.git)
+	line := ""
 	if layout.search && layout.path > 0 {
-		path := abbreviateHome(row.group)
-		pathCell := shell.Truncate(path, layout.path, "…")
-		pathText := highlightText(pathCell, string(m.query))
-		if !strings.Contains(pathText, "\x1b[") {
-			pathText = muted().Render(pathText)
-		}
-		pathCell = strings.Repeat(" ", max(0, layout.path-shell.StringWidth(pathCell))) + pathText
-		line += "  " + pathCell
+		line = m.projectPathCell(row.group, layout.path) + "  "
 	}
+	line += nameCell + "  " + gitCell
 	return marker + line, ""
+}
+
+// projectGitStyled renders the branch and its Git summary as one cell: the
+// branch first, two spaces, then the summary. The branch truncates before the
+// summary so change counts and divergence stay visible.
+func (m Model) projectGitStyled(place picker.Place, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	branch := highlightText(projectBranch(place), string(m.query))
+	if !strings.Contains(branch, "\x1b[") {
+		branch = muted().Render(branch)
+	}
+	summary := m.projectSummaryStyled(place)
+	if summary == "" {
+		return shell.Truncate(branch, width, "")
+	}
+	summaryWidth := shell.StringWidth(summary)
+	if summaryWidth >= width {
+		return shell.Truncate(summary, width, "")
+	}
+	if projectBranch(place) == "" {
+		return summary
+	}
+	branchWidth := width - summaryWidth - 2
+	if branchWidth <= 0 {
+		return summary
+	}
+	return shell.Truncate(branch, branchWidth, "") + "  " + summary
+}
+
+// projectPathCell renders the flat-search folder as a muted path segment
+// ending in a slash. It is right-aligned and truncated from the left so the
+// deep end of the path stays readable while names stay aligned.
+func (m Model) projectPathCell(group string, width int) string {
+	path := shell.TruncateLeft(abbreviateHome(group)+"/", width, "…")
+	pathText := highlightText(path, string(m.query))
+	if !strings.Contains(pathText, "\x1b[") {
+		pathText = muted().Render(pathText)
+	}
+	return strings.Repeat(" ", max(0, width-shell.StringWidth(path))) + pathText
 }
 
 func projectBranch(place picker.Place) string {
@@ -1882,10 +1964,10 @@ func (m Model) projectSummaryStyled(place picker.Place) string {
 		parts = append(parts, yellow().Render("*"))
 	}
 	if g.Ahead > 0 {
-		parts = append(parts, muted().Render("↑"+itoa(g.Ahead)))
+		parts = append(parts, divergence().Render("↑"+itoa(g.Ahead)))
 	}
 	if g.Behind > 0 {
-		parts = append(parts, muted().Render("↓"+itoa(g.Behind)))
+		parts = append(parts, divergence().Render("↓"+itoa(g.Behind)))
 	}
 	return strings.Join(parts, " ")
 }
@@ -1916,7 +1998,7 @@ func (m Model) footer() string {
 	}
 	left = append(left, hint("Tab", "tabs"))
 	if m.tab == ProjectsTab {
-		if current, ok := m.currentRow(); ok && current.foldable {
+		if current, ok := m.currentRow(); ok && (current.foldable || foldParent(current) != "") {
 			left = append(left, hint("←→", "fold"))
 		}
 	}
@@ -2015,6 +2097,7 @@ func stateColor(agent capabilities.Agent) lipgloss.Style {
 func normal() lipgloss.Style      { return lipgloss.NewStyle().Foreground(lipgloss.Color("default")) }
 func muted() lipgloss.Style       { return normal().Faint(true) }
 func accent() lipgloss.Style      { return lipgloss.NewStyle().Foreground(lipgloss.Color("6")) }
+func divergence() lipgloss.Style  { return lipgloss.NewStyle().Foreground(lipgloss.Color("6")) }
 func magenta() lipgloss.Style     { return lipgloss.NewStyle().Foreground(lipgloss.Color("5")) }
 func red() lipgloss.Style         { return lipgloss.NewStyle().Foreground(lipgloss.Color("1")) }
 func green() lipgloss.Style       { return lipgloss.NewStyle().Foreground(lipgloss.Color("2")) }

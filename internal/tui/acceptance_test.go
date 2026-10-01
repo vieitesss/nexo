@@ -123,26 +123,37 @@ func TestProjectQueryStartsAtMatchingItem(t *testing.T) {
 
 func TestOnlyProjectsFold(t *testing.T) {
 	projects := NewModel(context.Background(), richDeps(), ProjectsTab)
-	if got := len(projects.Rows()); got != 4 {
-		t.Fatalf("groups start expanded with all worktrees, rows = %v", projects.Rows())
+	if got := projects.Rows(); len(got) != 1 || got[0] != "group:/work" {
+		t.Fatalf("folders start folded, rows = %v", projects.Rows())
 	}
-	projects = updateModel(t, projects, keyMsg(tea.KeyUp)) // group
+	// Left on a folded folder does nothing; Right unfolds it.
 	projects = updateModel(t, projects, keyMsg(tea.KeyLeft))
 	if got := projects.Rows(); len(got) != 1 || got[0] != "group:/work" {
-		t.Fatalf("group did not fold as a unit: %v", got)
+		t.Fatalf("Left on folded folder changed rows: %v", got)
 	}
 	projects = updateModel(t, projects, keyMsg(tea.KeyRight))
-	if got := len(projects.Rows()); got != 4 {
-		t.Fatalf("group did not unfold with all worktrees: %v", projects.Rows())
-	}
-	projects = updateModel(t, projects, keyMsg(tea.KeyDown)) // checkout
-	projects = updateModel(t, projects, keyMsg(tea.KeyLeft))
 	if got := projects.Rows(); len(got) != 3 || got[1] != "project:/work/nexo" || got[2] != "project:/work/other" {
-		t.Fatalf("linked worktree did not fold under checkout: %v", got)
+		t.Fatalf("folder did not unfold to folded checkouts: %v", got)
 	}
+	// Right on the checkout reveals its worktree.
+	projects = updateModel(t, projects, keyMsg(tea.KeyDown))
 	projects = updateModel(t, projects, keyMsg(tea.KeyRight))
 	if got := len(projects.Rows()); got != 4 {
 		t.Fatalf("checkout did not unfold with its worktree: %v", projects.Rows())
+	}
+	// Left on the worktree folds the checkout and moves the selection there.
+	projects = updateModel(t, projects, keyMsg(tea.KeyDown))
+	projects = updateModel(t, projects, keyMsg(tea.KeyLeft))
+	if got := projects.Rows(); len(got) != 3 || got[1] != "project:/work/nexo" {
+		t.Fatalf("worktree did not fold under checkout: %v", got)
+	}
+	if projects.Cursor() != "project:/work/nexo" {
+		t.Fatalf("Left on worktree cursor = %q", projects.Cursor())
+	}
+	// Left on the checkout folds the folder.
+	projects = updateModel(t, projects, keyMsg(tea.KeyLeft))
+	if got := projects.Rows(); len(got) != 1 || got[0] != "group:/work" {
+		t.Fatalf("checkout did not fold folder: %v", got)
 	}
 	containers := NewModel(context.Background(), richDeps(), ContainersTab)
 	containers = updateModel(t, containers, keyMsg(tea.KeyUp))

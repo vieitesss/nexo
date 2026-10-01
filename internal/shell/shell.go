@@ -34,6 +34,25 @@ func Truncate(value string, width int, tail string) string {
 	return ansi.Truncate(normalize(value), width, normalize(tail))
 }
 
+// TruncateLeft shortens value from the left to width cells, prefixing head.
+// It is the left-anchored counterpart of Truncate for right-aligned columns
+// such as search folders, where the meaningful tail must stay visible.
+func TruncateLeft(value string, width int, head string) string {
+	if width <= 0 {
+		return ""
+	}
+	value = normalize(value)
+	if StringWidth(value) <= width {
+		return value
+	}
+	head = normalize(head)
+	drop := StringWidth(value) - width + StringWidth(head)
+	if drop <= 0 {
+		return value
+	}
+	return ansi.TruncateLeft(value, drop, head)
+}
+
 // PromptLine keeps the prompt, input tail, and cursor visible within width.
 func PromptLine(width int, prompt, value, cursor string) string {
 	if width <= 0 {

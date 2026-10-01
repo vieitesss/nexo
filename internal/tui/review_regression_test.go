@@ -55,27 +55,28 @@ func TestSearchIsFlatAndIgnoresGroupFolding(t *testing.T) {
 		t.Fatalf("fold key changed flat search rows: %v", got)
 	}
 	model.SetQuery("")
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp}) // group header
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
-	if got := model.Rows(); len(got) != 1 {
-		t.Fatalf("empty-query group fold rows = %v", got)
+	if got := model.Rows(); len(got) != 1 || got[0] != "group:/work" {
+		t.Fatalf("empty-query rows = %v, want folded folder", got)
 	}
+	// Right unfolds the folder; Left on the expanded folder folds it again.
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRight})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown}) // checkout
+	if got := model.Rows(); len(got) != 3 {
+		t.Fatalf("empty-query unfold rows = %v", got)
+	}
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
-	if got := model.Rows(); len(got) != 3 || got[1] != "project:/work/nexo" || got[2] != "project:/work/other" {
-		t.Fatalf("empty-query checkout fold rows = %v", got)
+	if got := model.Rows(); len(got) != 1 || got[0] != "group:/work" {
+		t.Fatalf("empty-query re-fold rows = %v", got)
 	}
 }
 
 func TestGitLoadPreservesExpandedGroupState(t *testing.T) {
 	model := NewModel(context.Background(), richDeps(), ProjectsTab)
-	if got := model.Rows(); len(got) != 4 {
-		t.Fatalf("initial rows = %v, want expanded group", got)
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRight})
+	if got := model.Rows(); len(got) != 3 {
+		t.Fatalf("initial rows = %v, want unfolded folder", got)
 	}
 	model = updateModel(t, model, picker.GitContextMsg{Path: "/work/nexo", Context: picker.GitContext{Identity: "main"}})
-	if got := model.Rows(); len(got) != 4 {
+	if got := model.Rows(); len(got) != 3 {
 		t.Fatalf("Git load changed expanded group: %v", got)
 	}
 }
