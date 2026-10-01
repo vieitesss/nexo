@@ -19,7 +19,7 @@ func TestListMachineDetectsHerdrKindAndDecodesOneRoundTrip(t *testing.T) {
 		}
 		return []byte(remoteKindFrameStart + string(KindHerdr) + "\n" + `{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"api"}]}}` + "\n"), nil
 	}), backend.Tmux, "")
-	result := orchestrator.ListMachine(context.Background(), "gpu1")
+	result := listMachine(orchestrator, "gpu1")
 	if calls != 1 || result.Error != "" || result.Kind != KindHerdr || len(result.Containers) != 1 || result.Containers[0].ID != "w1" {
 		t.Fatalf("result = %#v, calls = %d, want one Herdr listing", result, calls)
 	}
@@ -40,7 +40,7 @@ func TestDetectedTmuxNoServerRetainsKindAndEmptyListing(t *testing.T) {
 	orchestrator := newTestOrchestrator(fakeRunner(func(_ context.Context, _ string, _ ...string) ([]byte, error) {
 		return []byte(remoteKindFrameStart + string(KindTmux) + "\n"), &exec.ExitError{Stderr: []byte("no server running")}
 	}), backend.Herdr, "")
-	result := orchestrator.ListMachine(context.Background(), "offline")
+	result := listMachine(orchestrator, "offline")
 	if result.Error != "" || result.Kind != KindTmux || len(result.Containers) != 0 {
 		t.Fatalf("result = %#v, want successful empty tmux listing", result)
 	}
