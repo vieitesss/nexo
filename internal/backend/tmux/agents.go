@@ -259,7 +259,7 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		fields := strings.Split(line, "\t")
+		fields := strings.SplitN(line, "\t", 9)
 		if len(fields) != 9 {
 			continue
 		}
