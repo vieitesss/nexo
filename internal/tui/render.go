@@ -570,7 +570,7 @@ func (m renderFrame) projectGitStyled(place picker.Place, width int, selected bo
 			branch = muted().Render(branch)
 		}
 	}
-	tail := m.projectPullRequestStyled(place)
+	tail := m.projectPullRequestStyled(place, selected)
 	if summary := m.projectSummaryStyled(place); summary != "" {
 		if tail != "" {
 			tail += "  "
@@ -628,11 +628,19 @@ func projectPullRequestText(place picker.Place) string {
 	return "#" + itoa(request.Number)
 }
 
-func (m renderFrame) projectPullRequestStyled(place picker.Place) string {
-	if request := projectPullRequest(place); request != nil {
-		return pullRequestStyle(request.State).Render("#" + itoa(request.Number))
+func (m renderFrame) projectPullRequestStyled(place picker.Place, selected bool) string {
+	request := projectPullRequest(place)
+	if request == nil {
+		return ""
 	}
-	return ""
+	text := pullRequestStyle(request.State).Render("#" + itoa(request.Number))
+	if selected {
+		// The selection pass strips unmarked foregrounds. Marking the badge
+		// keeps its state colour while the selected row stays the only row
+		// with a painted background.
+		return selectedStateMarkerStart + text + selectedStateMarkerEnd
+	}
+	return text
 }
 
 func (m renderFrame) projectSummary(place picker.Place) string {
@@ -934,19 +942,26 @@ func brightGreen() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipglo
 
 func brightRed() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("9")) }
 
-func magenta() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("5")) }
+// pullRequestPalette is the badge foreground per review state. The light
+// variants are dark enough to read on light terminals and on the light
+// selection background; the dark variants are bright enough for dark
+// terminals and the dark selection background. These are ANSI palette
+// indices, so the terminal's own palette decides the exact contrast; the
+// values here are the conventional xterm variants.
+var pullRequestPalette = map[picker.PullRequestState]lipgloss.AdaptiveColor{
+	picker.PullRequestOpen:   {Light: "22", Dark: "46"},
+	picker.PullRequestMerged: {Light: "90", Dark: "219"},
+	picker.PullRequestClosed: {Light: "88", Dark: "217"},
+}
 
 // pullRequestStyle gives each review state its own ANSI colour. The badge sets
 // no background, so the selected row stays the only painted row.
 func pullRequestStyle(state picker.PullRequestState) lipgloss.Style {
-	switch state {
-	case picker.PullRequestMerged:
-		return magenta()
-	case picker.PullRequestClosed:
-		return brightRed()
-	default:
-		return green()
+	color, ok := pullRequestPalette[state]
+	if !ok {
+		color = pullRequestPalette[picker.PullRequestOpen]
 	}
+	return lipgloss.NewStyle().Foreground(color)
 }
 
 func bold() lipgloss.Style { return normal().Bold(true) }

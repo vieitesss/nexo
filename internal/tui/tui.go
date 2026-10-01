@@ -71,8 +71,11 @@ type Deps struct {
 	AgentRefreshInterval time.Duration
 	GitLoader            picker.GitLoader
 	PullRequestLoader    picker.PullRequestLoader
-	RemoteCommands       []tea.Cmd
-	RemoteMachines       []string
+	// PullRequestRefreshInterval overrides how often the TUI checks visible
+	// checkouts for an expired pull request answer. Zero uses the default.
+	PullRequestRefreshInterval time.Duration
+	RemoteCommands             []tea.Cmd
+	RemoteMachines             []string
 
 	OpenProject     func(context.Context, picker.Place) error
 	OpenContainer   func(context.Context, picker.Place) error
@@ -140,6 +143,25 @@ func pullRequestConcurrency(loader picker.PullRequestLoader) int {
 		return configured.PullRequestConcurrency()
 	}
 	return picker.DefaultPullRequestConcurrency
+}
+
+// defaultPullRequestRefreshInterval is the revalidation check cadence. The
+// loader's freshness window decides when a check actually asks gh, so this is
+// only how often the TUI looks for expired answers.
+const defaultPullRequestRefreshInterval = 5 * time.Second
+
+func pullRequestRefreshInterval(configured time.Duration) time.Duration {
+	if configured <= 0 {
+		return defaultPullRequestRefreshInterval
+	}
+	return configured
+}
+
+func pullRequestFreshness(loader picker.PullRequestLoader) time.Duration {
+	if configured, ok := loader.(interface{ PullRequestFreshness() time.Duration }); ok && configured.PullRequestFreshness() > 0 {
+		return configured.PullRequestFreshness()
+	}
+	return picker.DefaultPullRequestFreshness
 }
 
 func validTab(tab Tab) bool {
@@ -238,6 +260,8 @@ type agentRecord struct {
 
 type refreshTickMsg struct{}
 
+type pullRequestRefreshMsg struct{}
+
 // ToastMsg replaces footer hints with a short status message.
 type ToastMsg struct{ Text string }
 
@@ -294,6 +318,7 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	if now == nil {
 		now = time.Now
 	}
+	deps.Now = now
 	source := newSource(loadCtx, catalog, deps, cancelLoads, remoteMachines)
 	source.syncCatalog()
 	m := Model{
@@ -466,6 +491,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case refreshTickMsg:
 		return m, m.source.Tick()
+	case pullRequestRefreshMsg:
+		cmds := m.source.duePullRequestCommands(m.visibleProjectPlaces())
+		if tick := m.source.pullRequestTick(); tick != nil {
+			cmds = append(cmds, tick)
+		}
+		if len(cmds) == 0 {
+			return m, nil
+		}
+		return m, tea.Batch(cmds...)
 	case themeTickMsg:
 		return m, m.theme.Tick()
 	case themeReloadMsg:
@@ -481,7 +515,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			return m, nil
 		}
-		return m, m.source.pullRequestCommand(msg.Path)
+		return m, m.source.duePullRequestCommand(msg.Path)
 	case tea.KeyMsg:
 		m.autoTab = false
 		m.userInteracted = true
@@ -584,6 +618,33 @@ func (m *Model) applyPullRequest(msg pullRequestMsg) {
 	if m.catalog != nil {
 		m.catalog.SetProjects(m.deps.Projects)
 	}
+}
+
+// visibleProjectPlaces returns the project rows around the cursor, one
+// viewport either side. Revalidation passes look only at what the user can
+// reach, so a large catalog does not turn a tick into a query per row.
+func (m Model) visibleProjectPlaces() []picker.Place {
+	cursor := -1
+	for index, candidate := range m.rows {
+		if candidate.cursorable && candidate.id == m.input.cursor {
+			cursor = index
+			break
+		}
+	}
+	if cursor < 0 {
+		return nil
+	}
+	from, to := max(0, cursor-m.height), min(len(m.rows), cursor+m.height+1)
+	places := make([]picker.Place, 0, to-from)
+	seen := make(map[string]bool, to-from)
+	for _, candidate := range m.rows[from:to] {
+		if candidate.kind != itemRow || candidate.itemKind != "project" || !candidate.place.Git || candidate.place.Path == "" || seen[candidate.place.Path] {
+			continue
+		}
+		seen[candidate.place.Path] = true
+		places = append(places, candidate.place)
+	}
+	return places
 }
 
 func (m *Model) applyGit(msg picker.GitContextMsg) {
