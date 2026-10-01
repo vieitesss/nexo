@@ -357,7 +357,6 @@ func TestProjectsLoadingAndDetachedBranchStates(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
 func TestProjectGitSummaryFollowsBranchInSameColumn(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	places := []picker.Place{

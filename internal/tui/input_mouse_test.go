@@ -93,22 +93,27 @@ func TestMouseCheckoutChevronAndOpenHitAreas(t *testing.T) {
 	}
 	model := NewModel(context.Background(), Deps{Projects: projects}, ProjectsTab)
 	model.SetSize(80, 8)
-	if got := model.Rows(); len(got) != 3 {
-		t.Fatalf("initial rows = %v, want group, checkout and worktree", got)
+	if got := model.Rows(); len(got) != 1 {
+		t.Fatalf("initial rows = %v, want folded group", got)
+	}
+	// Folders start folded; expand the folder before testing its checkout row.
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
+	if got := model.Rows(); len(got) != 2 {
+		t.Fatalf("rows after folder expansion = %v, want group and folded checkout", got)
 	}
 
 	// The root checkout chevron is rendered after the two-cell row marker.
 	model = updateModel(t, model, tea.MouseMsg{X: 2, Y: 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
-	if got := model.Rows(); len(got) != 2 {
-		t.Fatalf("rows after chevron click = %v, want folded checkout", got)
+	if got := model.Rows(); len(got) != 3 {
+		t.Fatalf("rows after chevron click = %v, want expanded checkout", got)
 	}
 	// Clicking its name selects it without changing its fold state.
 	model = updateModel(t, model, tea.MouseMsg{X: 8, Y: 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	if model.Cursor() != "project:/work/root" {
 		t.Fatalf("cursor after checkout name click = %q", model.Cursor())
 	}
-	if got := model.Rows(); len(got) != 2 {
-		t.Fatalf("rows after checkout name click = %v, want folded checkout", got)
+	if got := model.Rows(); len(got) != 3 {
+		t.Fatalf("rows after checkout name click = %v, want expanded checkout", got)
 	}
 	// A second click opens the checkout like Enter.
 	model = updateModel(t, model, tea.MouseMsg{X: 8, Y: 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
@@ -140,15 +145,26 @@ func TestMouseUsesRenderedBodyLayout(t *testing.T) {
 		t.Fatalf("tab after click = %q, want projects", model.Tab())
 	}
 
-	// The first body row is the group header. Its click folds the group.
+	// The first body row is a folded group header. Its click unfolds the group.
+	if got := model.Rows(); len(got) != 1 || got[0] != "group:/work" {
+		t.Fatalf("initial rows = %v, want folded group", got)
+	}
+	model = updateModel(t, model, tea.MouseMsg{X: 1, Y: 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if got := model.Rows(); len(got) != 3 {
+		t.Fatalf("rows after folded header click = %v, want expanded group", got)
+	}
+	// Clicking it again folds it, rather than opening a header.
 	model = updateModel(t, model, tea.MouseMsg{X: 1, Y: 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	if got := model.Rows(); len(got) != 1 || got[0] != "group:/work" {
-		t.Fatalf("rows after header click = %v, want folded group", got)
+		t.Fatalf("rows after second header click = %v, want folded group", got)
 	}
-	// Clicking it again unfolds it, rather than opening a header.
+	// Expand it again, then expand the selected checkout, so the rendered body
+	// has enough rows for a scrolled viewport.
 	model = updateModel(t, model, tea.MouseMsg{X: 1, Y: 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	model = updateModel(t, model, keyMsg(tea.KeyDown))
+	model = updateModel(t, model, keyMsg(tea.KeyRight))
 	if got := model.Rows(); len(got) != 4 {
-		t.Fatalf("rows after second header click = %v, want expanded group", got)
+		t.Fatalf("rows after checkout expansion = %v, want expanded group and checkout", got)
 	}
 
 	// The rendered body has a scrolled viewport. Click a visible child using
@@ -187,5 +203,33 @@ func TestMouseUsesRenderedBodyLayout(t *testing.T) {
 	model = updateModel(t, model, tea.MouseMsg{X: 4, Y: clickY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	if _, ok := model.SelectedPlace(); !ok {
 		t.Fatal("second click did not open the selected project")
+	}
+}
+
+func TestMouseSelectsFlatSearchRow(t *testing.T) {
+	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
+	model.SetQuery("gitops")
+	model.SetSize(120, 12)
+	lines, start := model.bodyLayout(model.height - 3)
+	visibleIndex := -1
+	for index := start; index < len(lines); index++ {
+		if lines[index].rowID != "" && lines[index].rowID != model.Cursor() {
+			visibleIndex = index
+			break
+		}
+	}
+	if visibleIndex < 0 {
+		t.Fatal("flat search did not render a second row")
+	}
+	clicked := lines[visibleIndex].rowID
+	clickY := 2 + visibleIndex - start
+	model = updateModel(t, model, tea.MouseMsg{X: 8, Y: clickY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if model.Cursor() != clicked {
+		t.Fatalf("cursor after flat row click = %q, want %q", model.Cursor(), clicked)
+	}
+	model = updateModel(t, model, tea.MouseMsg{X: 8, Y: clickY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	place, ok := model.SelectedPlace()
+	if !ok || place.Path == "" {
+		t.Fatalf("second flat row click selected %+v, want a project", place)
 	}
 }
