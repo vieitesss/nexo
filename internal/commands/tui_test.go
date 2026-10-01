@@ -13,7 +13,6 @@ import (
 
 type tuiFakeAdapter struct {
 	agents []capabilities.Agent
-	popup  string
 }
 
 type countingAgentAdapter struct {
@@ -29,12 +28,7 @@ func (f *tuiFakeAdapter) ListAgents(context.Context) ([]capabilities.Agent, erro
 	return f.agents, nil
 }
 
-func (f *tuiFakeAdapter) ShowPopup(_ context.Context, command string) error {
-	f.popup = command
-	return nil
-}
-
-func TestTUIRoutesExplicitTabsWithoutOpeningPopup(t *testing.T) {
+func TestTUIRoutesExplicitTabs(t *testing.T) {
 	command, ok := NewRegistry().Lookup("tui")
 	if !ok {
 		t.Fatal("tui command is not registered")
@@ -51,9 +45,6 @@ func TestTUIRoutesExplicitTabsWithoutOpeningPopup(t *testing.T) {
 			})
 			if err == nil {
 				t.Fatal("Run() error = nil, want canceled picker")
-			}
-			if adapter.popup != "" {
-				t.Fatalf("popup command = %q, want no popup request", adapter.popup)
 			}
 		})
 	}
@@ -81,7 +72,7 @@ func defaultTab(ctx context.Context, adapter capabilities.AgentSource) string {
 	return tab
 }
 
-func TestTUIRunsTabbedModelOnRequestedTabWithoutPopup(t *testing.T) {
+func TestTUIRunsTabbedModelOnRequestedTab(t *testing.T) {
 	command, ok := NewRegistry().Lookup("tui")
 	if !ok {
 		t.Fatal("tui command is not registered")
@@ -94,9 +85,6 @@ func TestTUIRunsTabbedModelOnRequestedTabWithoutPopup(t *testing.T) {
 		adapter := &tuiFakeAdapter{}
 		if err := command.Run(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter, Args: []string{tab}}); err != nil {
 			t.Fatal(err)
-		}
-		if adapter.popup != "" {
-			t.Fatalf("%s requested popup %q", tab, adapter.popup)
 		}
 	}
 	if got := strings.Join(got, ","); got != "agents,containers,projects" {
