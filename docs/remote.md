@@ -34,6 +34,73 @@ reconnect-max = "30s"
 devbox = "tmux"                 # auto (default), tmux, or herdr
 ```
 
+## Main and remote machines
+
+The main machine runs nexo. Every remote machine runs its own multiplexer and
+a copy of nexo that the main machine calls over SSH.
+
+### Main machine
+
+- nexo on `PATH`, plus the adapter for the local backend: the tmux plugin
+  (`nexo.tmux`) or the Herdr plugin (`herdr-plugin.toml`) and its key
+  bindings.
+- `paths` for project discovery.
+- An SSH alias for every remote in `~/.ssh/config`, listed in
+  `[remote].machines`.
+- `[remote.backends] MACHINE = "tmux"` or `"herdr"` when the remote runs both
+  a Herdr server and tmux. The auto probe picks Herdr whenever a Herdr server
+  is running, so agents living in tmux sessions would be missed. Set it
+  explicitly to list the multiplexer you actually use there.
+- The proxy attachment transport, `remote.transport` (SSH by default).
+
+```toml
+paths = ["~/src"]
+
+[remote]
+machines = ["devbox", "gpu1"]
+
+[remote.backends]
+devbox = "tmux"                 # remote runs Herdr and tmux; list tmux
+gpu1 = "herdr"                  # remote runs a Herdr server
+```
+
+### Remote machine
+
+- nexo must be on `PATH` for **non-interactive** SSH shells. Put the export in
+  a file those shells read, such as `~/.zshenv`, not `~/.zshrc`. Verify with
+  `ssh MACHINE 'command -v nexo'`: a working non-interactive shell prints the
+  path.
+- Its own multiplexer: a tmux server, a Herdr server, or both.
+- Its own config only needs `[agents]` when the defaults do not fit. Agent
+  processes and working patterns are evaluated on the remote, so change them
+  there. `paths` is needed only if nexo is also used on that machine directly.
+  A remote config never needs a `[remote]` section.
+- For a tmux remote, enable focus events in `~/.tmux.conf`:
+
+  ```tmux
+  set -g focus-events on
+  ```
+
+  This is required for seen-marking: the local listing reads the `seen` flag
+  that the remote focus hook writes.
+
+```toml
+# On the remote, only when the defaults do not fit.
+[agents]
+processes = ["pi", "claude"]
+idle-seconds = 3
+poll-interval = 2
+working-pattern = { pi = "⠋" }
+```
+
+Agent state is computed on demand: `nexo agents --json` on the remote already
+reports each agent as working or stopped without any background process. The
+tmux plugin is what installs the focus hook that marks stopped agents seen
+(and starts the watcher). Without it, a remote listing still shows the
+working/stopped state, but `seen` never advances. Notifications are delivered
+by the watcher where it runs, so a remote watcher notifies on the remote
+machine, not on the main machine.
+
 ## Herdr machines
 
 Herdr is native when the remote machine runs a Herdr server. On the Herdr
