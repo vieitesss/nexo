@@ -2,29 +2,15 @@ package tui
 
 import (
 	"bytes"
-	"errors"
 	"io"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
 	"github.com/muesli/termenv"
 )
-
-type themeQueryFake struct {
-	response bytes.Buffer
-	written  bytes.Buffer
-}
-
-func (f *themeQueryFake) Read(p []byte) (int, error) {
-	if f.response.Len() == 0 {
-		return 0, errors.New("timeout")
-	}
-	return f.response.Read(p)
-}
-func (f *themeQueryFake) Write(p []byte) (int, error)    { return f.written.Write(p) }
-func (*themeQueryFake) SetReadDeadline(time.Time) error  { return nil }
-func (*themeQueryFake) SetWriteDeadline(time.Time) error { return nil }
 
 func TestParseOSC11Reply(t *testing.T) {
 	for _, test := range []struct {
@@ -44,22 +30,123 @@ func TestParseOSC11Reply(t *testing.T) {
 	}
 }
 
-func TestQueryDarkBackgroundUsesDeadlineAwareTerminal(t *testing.T) {
-	fake := &themeQueryFake{}
-	fake.response.WriteString("\x1b]11;rgb:ffff/ffff/ffff\x07")
-	dark, ok := queryDarkBackground(fake, time.Millisecond)
-	if !ok || dark {
-		t.Fatalf("queryDarkBackground() = %v, %v; want false, true", dark, ok)
+func TestQueryDarkBackgroundNoAnswerTimesOut(t *testing.T) {
+	terminal, _ := openThemePTY(t)
+	restorePTYMode(t, terminal)
+
+	const timeout = 30 * time.Millisecond
+	started := time.Now()
+	dark, answered := queryDarkBackground(terminal, timeout)
+	elapsed := time.Since(started)
+	if answered || dark {
+		t.Fatalf("queryDarkBackground() = %v, %v; want false, false", dark, answered)
 	}
-	if got := fake.written.String(); got != osc11Query {
-		t.Fatalf("query wrote %q, want OSC 11 query %q", got, osc11Query)
+	if elapsed > timeout+50*time.Millisecond {
+		t.Fatalf("queryDarkBackground took %s, want no more than %s", elapsed, timeout+50*time.Millisecond)
 	}
 }
 
-func TestQueryDarkBackgroundNoReply(t *testing.T) {
-	fake := &themeQueryFake{}
-	if dark, ok := queryDarkBackground(fake, time.Millisecond); ok || dark {
-		t.Fatalf("queryDarkBackground() = %v, %v; want false, false", dark, ok)
+func TestQueryDarkBackgroundOnlyDA1FallsBack(t *testing.T) {
+	terminal, peer := openThemePTY(t)
+	restorePTYMode(t, terminal)
+	done := make(chan struct{})
+	go respondToThemeQuery(t, peer, "\x1b[?1;2c", done)
+
+	started := time.Now()
+	if dark, answered := queryDarkBackground(terminal, time.Second); answered || dark {
+		t.Fatalf("queryDarkBackground() = %v, %v; want false, false", dark, answered)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second/2 {
+		t.Fatalf("DA1 sentinel took %s, want an immediate response", elapsed)
+	}
+	<-done
+}
+
+func TestQueryDarkBackgroundConsumesOSC11AndDA1(t *testing.T) {
+	terminal, peer := openThemePTY(t)
+	restorePTYMode(t, terminal)
+	done := make(chan struct{})
+	go respondToThemeQuery(t, peer, "\x1b]11;rgb:ffff/ffff/ffff\x07\x1b[?1;2c", done)
+
+	if dark, answered := queryDarkBackground(terminal, time.Second); answered != true || dark {
+		t.Fatalf("queryDarkBackground() = %v, %v; want false, true", dark, answered)
+	}
+	<-done
+	assertThemePTYEmpty(t, terminal)
+}
+
+func TestQueryDarkBackgroundHandlesSplitReply(t *testing.T) {
+	terminal, peer := openThemePTY(t)
+	restorePTYMode(t, terminal)
+	done := make(chan struct{})
+	go respondToThemeQueryInParts(t, peer, []string{
+		"\x1b]11;rgb:ffff/",
+		"ffff/ffff\x07\x1b[?1;",
+		"2c",
+	}, done)
+
+	if dark, answered := queryDarkBackground(terminal, time.Second); answered != true || dark {
+		t.Fatalf("queryDarkBackground() = %v, %v; want false, true", dark, answered)
+	}
+	<-done
+	assertThemePTYEmpty(t, terminal)
+}
+
+func respondToThemeQuery(t *testing.T, peer io.ReadWriter, response string, done chan<- struct{}) {
+	t.Helper()
+	defer close(done)
+	request := make([]byte, len(osc11Query)+len(da1Query))
+	if _, err := io.ReadFull(peer, request); err != nil {
+		t.Errorf("read query: %v", err)
+		return
+	}
+	if string(request) != osc11Query+da1Query {
+		t.Errorf("query = %q, want %q", request, osc11Query+da1Query)
+		return
+	}
+	if _, err := io.WriteString(peer, response); err != nil {
+		t.Errorf("write response: %v", err)
+	}
+}
+
+func respondToThemeQueryInParts(t *testing.T, peer io.ReadWriter, responses []string, done chan<- struct{}) {
+	t.Helper()
+	defer close(done)
+	request := make([]byte, len(osc11Query)+len(da1Query))
+	if _, err := io.ReadFull(peer, request); err != nil {
+		t.Errorf("read query: %v", err)
+		return
+	}
+	if string(request) != osc11Query+da1Query {
+		t.Errorf("query = %q, want %q", request, osc11Query+da1Query)
+		return
+	}
+	for _, response := range responses {
+		if _, err := io.WriteString(peer, response); err != nil {
+			t.Errorf("write response: %v", err)
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func restorePTYMode(t *testing.T, terminal *os.File) {
+	t.Helper()
+	state, err := term.MakeRaw(terminal.Fd())
+	if err != nil {
+		t.Skipf("pty cannot enter raw mode: %v", err)
+	}
+	t.Cleanup(func() { _ = term.Restore(terminal.Fd(), state) })
+}
+
+func assertThemePTYEmpty(t *testing.T, terminal *os.File) {
+	t.Helper()
+	ready, err := waitForData(terminal.Fd(), time.Now())
+	if err != nil {
+		t.Fatalf("select pty: %v", err)
+	}
+	if ready {
+		t.Fatal("query left bytes unread on pty")
 	}
 }
 
@@ -98,5 +185,3 @@ func TestConfigureThemeLightUsesLightAdaptiveColours(t *testing.T) {
 		t.Fatalf("accent = %q, want #4E7A00 escape %q", accentToken, wantAccent)
 	}
 }
-
-var _ io.ReadWriter = (*themeQueryFake)(nil)

@@ -71,5 +71,7 @@ of every other colour.
 The `[tui]` `theme` setting controls how adaptive colours are selected. The
 default `"auto"` queries OSC 11 on the controlling terminal (including inside
 tmux), then falls back to `COLORFGBG` and finally dark mode when no answer is
-available. Set it to `"dark"` or `"light"` to force a variant. Semantic ANSI
-colours continue to follow the terminal in every mode.
+available. tmux versions older than 3.4 may not answer when the pane has its
+default background; set `theme = "light"` in that case. Set it to `"dark"` or
+`"light"` to force a variant. Semantic ANSI colours continue to follow the
+terminal in every mode.

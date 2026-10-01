@@ -11,16 +11,19 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
+	"golang.org/x/sys/unix"
 )
 
 const backgroundQueryTimeout = 150 * time.Millisecond
 
-const osc11Query = "\x1b]11;?\x07"
+const (
+	osc11Query = "\x1b]11;?\x07"
+	da1Query   = "\x1b[c"
+)
 
 type terminalQuery interface {
 	io.ReadWriter
-	SetReadDeadline(time.Time) error
-	SetWriteDeadline(time.Time) error
+	Fd() uintptr
 }
 
 // configureTheme selects the adaptive colour variant used by lipgloss. An
@@ -39,40 +42,42 @@ func configureTheme(theme string) {
 
 func detectDarkBackground() bool {
 	terminal, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err == nil {
-		defer func() { _ = terminal.Close() }()
-		if term.IsTerminal(terminal.Fd()) {
-			state, rawErr := term.MakeRaw(terminal.Fd())
-			if rawErr == nil {
-				defer func() { _ = term.Restore(terminal.Fd(), state) }()
-				query := terminalQuery(terminal)
-				if dark, answered := queryDarkBackground(query, backgroundQueryTimeout); answered {
-					return dark
-				}
-			}
-		}
+	if err != nil {
+		return colorFGBGIsDark(os.Getenv("COLORFGBG"))
+	}
+	defer func() { _ = terminal.Close() }()
+
+	if !term.IsTerminal(terminal.Fd()) {
+		return colorFGBGIsDark(os.Getenv("COLORFGBG"))
+	}
+	state, err := term.MakeRaw(terminal.Fd())
+	if err != nil {
+		return colorFGBGIsDark(os.Getenv("COLORFGBG"))
+	}
+	defer func() { _ = term.Restore(terminal.Fd(), state) }()
+
+	if dark, answered := queryDarkBackground(terminal, backgroundQueryTimeout); answered {
+		return dark
 	}
 	return colorFGBGIsDark(os.Getenv("COLORFGBG"))
 }
 
-// queryDarkBackground sends one OSC 11 request and consumes its complete
-// response. The terminal's deadlines make this seam safe for both real files
-// and deadline-aware fakes in tests.
+// queryDarkBackground sends one OSC 11 request followed by a DA1 request.
+// The DA1 response is a sentinel for terminals that do not answer OSC 11.
 func queryDarkBackground(terminal terminalQuery, timeout time.Duration) (dark, answered bool) {
 	if timeout <= 0 {
 		timeout = backgroundQueryTimeout
 	}
 	deadline := time.Now().Add(timeout)
-	_ = terminal.SetWriteDeadline(deadline)
-	if _, err := io.WriteString(terminal, osc11Query); err != nil {
-		clearTerminalDeadlines(terminal)
+	if _, err := io.WriteString(terminal, osc11Query+da1Query); err != nil {
 		return false, false
 	}
-	_ = terminal.SetReadDeadline(deadline)
-	defer clearTerminalDeadlines(terminal)
 
-	data, ok := readOSC11Reply(terminal, deadline)
-	if !ok {
+	data, gotDA1 := readUntilDA1(terminal, deadline)
+	if !gotDA1 {
+		// A response can become readable at the timeout boundary. Consume it
+		// without ever blocking before restoring the terminal to cooked mode.
+		drainTerminal(terminal)
 		return false, false
 	}
 	// A terminal can queue more than one status response. Once the requested
@@ -86,39 +91,76 @@ func queryDarkBackground(terminal terminalQuery, timeout time.Duration) (dark, a
 	return colorIsDark(color), true
 }
 
-func clearTerminalDeadlines(terminal terminalQuery) {
-	_ = terminal.SetReadDeadline(time.Time{})
-	_ = terminal.SetWriteDeadline(time.Time{})
-}
-
-func readOSC11Reply(terminal io.Reader, deadline time.Time) ([]byte, bool) {
+func readUntilDA1(terminal terminalQuery, deadline time.Time) ([]byte, bool) {
 	var data []byte
 	buffer := make([]byte, 256)
-	for time.Now().Before(deadline) {
-		n, err := terminal.Read(buffer)
+	for {
+		ready, err := waitForData(terminal.Fd(), deadline)
+		if err != nil || !ready {
+			return data, false
+		}
+		n, readErr := terminal.Read(buffer)
 		if n > 0 {
 			data = append(data, buffer[:n]...)
-			if _, ok := parseOSC11Reply(data); ok {
-				return data, true
+			if end, ok := da1ReplyEnd(data); ok {
+				return data[:end], true
 			}
 		}
-		if err != nil {
-			return nil, false
+		if readErr != nil || n == 0 {
+			return data, false
 		}
 	}
-	return nil, false
+}
+
+// waitForData waits until fd is readable or deadline expires. The fd is
+// selected immediately before each read because terminal files may block even
+// after their descriptor has been obtained.
+func waitForData(fd uintptr, deadline time.Time) (ready bool, err error) {
+	for {
+		remaining := time.Until(deadline)
+		if remaining < 0 {
+			remaining = 0
+		}
+		timeval := unix.NsecToTimeval(remaining.Nanoseconds())
+		var readfds unix.FdSet
+		readfds.Set(int(fd))                                                 //nolint:gosec
+		n, selectErr := unix.Select(int(fd)+1, &readfds, nil, nil, &timeval) //nolint:gosec
+		if selectErr == unix.EINTR {
+			continue
+		}
+		if selectErr != nil {
+			return false, selectErr
+		}
+		return n > 0, nil
+	}
 }
 
 func drainTerminal(terminal terminalQuery) {
-	_ = terminal.SetReadDeadline(time.Now())
-	defer func() { _ = terminal.SetReadDeadline(time.Time{}) }()
 	buffer := make([]byte, 256)
 	for i := 0; i < 32; i++ {
-		n, err := terminal.Read(buffer)
-		if n == 0 || err != nil {
+		ready, err := waitForData(terminal.Fd(), time.Now())
+		if err != nil || !ready {
+			return
+		}
+		n, readErr := terminal.Read(buffer)
+		if readErr != nil || n == 0 {
 			return
 		}
 	}
+}
+
+func da1ReplyEnd(data []byte) (int, bool) {
+	for start := 0; start+3 < len(data); start++ {
+		if data[start] != '\x1b' || data[start+1] != '[' || data[start+2] != '?' {
+			continue
+		}
+		for end := start + 3; end < len(data); end++ {
+			if data[end] == 'c' {
+				return end + 1, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // parseOSC11Reply extracts the background RGB value from an OSC 11 response.
