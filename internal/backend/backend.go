@@ -48,15 +48,6 @@ type OSEnvironment struct{}
 // LookupEnv implements Environment.
 func (OSEnvironment) LookupEnv(key string) (string, bool) { return os.LookupEnv(key) }
 
-// MapEnvironment is a deterministic environment useful in tests.
-type MapEnvironment map[string]string
-
-// LookupEnv implements Environment.
-func (m MapEnvironment) LookupEnv(key string) (string, bool) {
-	value, ok := m[key]
-	return value, ok
-}
-
 // Selection is the result of backend selection.
 type Selection struct {
 	Kind         Kind     `json:"backend"`
@@ -121,19 +112,6 @@ func Resolve(ctx context.Context, input ResolveInput) (Selection, error) {
 		return Selection{}, err
 	}
 	return Selection{Kind: selected, Source: "auto-detect", Reason: reason}, nil
-}
-
-// Detect identifies the inner multiplexer from environment markers and, when
-// nested, the TTY reported by tmux.
-func Detect(ctx context.Context, env Environment, tty string, commandRunner runner.CommandRunner) (Selection, error) {
-	if env == nil {
-		env = OSEnvironment{}
-	}
-	kind, reason, err := detect(ctx, env, tty, commandRunner)
-	if err != nil {
-		return Selection{}, err
-	}
-	return Selection{Kind: kind, Source: "auto-detect", Reason: reason}, nil
 }
 
 func detect(ctx context.Context, env Environment, tty string, commandRunner runner.CommandRunner) (Kind, string, error) {

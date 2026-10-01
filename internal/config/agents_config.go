@@ -38,8 +38,3 @@ func (c AgentsConfig) WithDefaults() AgentsConfig {
 func (c AgentsConfig) NotificationsEnabled() bool {
 	return c.Notify == nil || *c.Notify
 }
-
-// DefaultAgentProcesses returns the built-in harness allowlist.
-func DefaultAgentProcesses() []string {
-	return append([]string(nil), defaultAgentProcesses...)
-}

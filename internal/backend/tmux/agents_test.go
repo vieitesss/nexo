@@ -15,7 +15,6 @@ import (
 	"github.com/vieitesss/nexo/internal/agentstate"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
-	"github.com/vieitesss/nexo/internal/runner"
 )
 
 func TestFindHarnessMatchesProcessArgs(t *testing.T) {
@@ -79,7 +78,7 @@ func TestAgentPanesFindsHarnessInPaneDescendants(t *testing.T) {
 		"%4\t202\tvim\t$4\tnotes\tmain\t0\t0\t/tmp/notes",
 	}
 	psCalls := 0
-	r := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+	r := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "tmux":
 			return []byte(strings.Join(panes, "\n") + "\n"), nil
@@ -145,7 +144,7 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 	captureEntered := make(chan struct{})
 	releaseCapture := make(chan struct{})
 	var captureOnce sync.Once
-	r := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+	r := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "tmux":
 			joined := commandKey(args)
@@ -167,8 +166,8 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 		return nil, nil
 	})
 	source := NewAgentSource(r)
-	source.SetStateDir(t.TempDir())
-	source.SetClock(func() time.Time { return clock })
+	setStateDir(source, t.TempDir())
+	setClock(source, func() time.Time { return clock })
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 3, PollInterval: 1})
 
 	agents, err := source.ListAgents(context.Background())
@@ -205,8 +204,8 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 	// the pane seen. Block the watcher in its fake capture runner, mark seen
 	// from a second source, then release the watcher before its state update.
 	watcher := NewAgentSource(r)
-	watcher.SetStateDir(source.stateDir)
-	watcher.SetClock(func() time.Time { return clock })
+	setStateDir(watcher, source.stateDir)
+	setClock(watcher, func() time.Time { return clock })
 	watcher.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 3, PollInterval: 1})
 	blockCapture = true
 	watcherDone := make(chan struct{})
@@ -219,8 +218,8 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 	<-captureEntered
 
 	hook := NewAgentSource(r)
-	hook.SetStateDir(source.stateDir)
-	hook.SetClock(func() time.Time { return clock })
+	setStateDir(hook, source.stateDir)
+	setClock(hook, func() time.Time { return clock })
 	hook.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 3, PollInterval: 1})
 	if err := hook.MarkSeen(context.Background(), "%1"); err != nil {
 		t.Fatal(err)
@@ -237,14 +236,14 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 
 func TestMarkSeenUnknownPaneCreatesNoState(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
-	r := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+	r := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name == "tmux" {
 			return []byte("/tmp/tmux-test\n"), nil
 		}
 		return nil, nil
 	})
 	source := NewAgentSource(r)
-	source.SetStateDir(stateDir)
+	setStateDir(source, stateDir)
 	if err := source.MarkSeen(context.Background(), "%999"); err != nil {
 		t.Fatalf("MarkSeen() error = %v", err)
 	}
@@ -254,14 +253,14 @@ func TestMarkSeenUnknownPaneCreatesNoState(t *testing.T) {
 }
 
 func TestMarkSeenUnknownPaneLeavesExistingStateByteIdentical(t *testing.T) {
-	r := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+	r := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name == "tmux" {
 			return []byte("/tmp/tmux-test\n"), nil
 		}
 		return nil, nil
 	})
 	source := NewAgentSource(r)
-	source.SetStateDir(t.TempDir())
+	setStateDir(source, t.TempDir())
 	source.server = "/tmp/tmux-test"
 	if err := source.ledger().Update(func(document *agentstate.Document) error {
 		document.Agents["%1"] = agentstate.State{State: "stopped"}
@@ -286,10 +285,10 @@ func TestMarkSeenUnknownPaneLeavesExistingStateByteIdentical(t *testing.T) {
 }
 
 func TestMarkSeenMalformedStatePreservesReadError(t *testing.T) {
-	source := NewAgentSource(runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+	source := NewAgentSource(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return nil, nil
 	}))
-	source.SetStateDir(t.TempDir())
+	setStateDir(source, t.TempDir())
 	source.server = "/tmp/tmux-test"
 	if err := os.WriteFile(source.ledger().Path("json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
@@ -302,10 +301,10 @@ func TestMarkSeenMalformedStatePreservesReadError(t *testing.T) {
 }
 
 func TestMarkSeenUpdateFailurePreservesLockError(t *testing.T) {
-	source := NewAgentSource(runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+	source := NewAgentSource(funcRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return nil, nil
 	}))
-	source.SetStateDir(t.TempDir())
+	setStateDir(source, t.TempDir())
 	source.server = "/tmp/tmux-test"
 	if err := source.ledger().Update(func(document *agentstate.Document) error {
 		document.Agents["%1"] = agentstate.State{State: "stopped"}

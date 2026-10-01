@@ -7,10 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/commands"
-	"github.com/vieitesss/nexo/internal/runner"
 )
 
 func TestParseGlobalFlagsBeforeAndAfterCommand(t *testing.T) {
@@ -37,10 +35,10 @@ func TestRunWithTUIUsageErrorsExitTwo(t *testing.T) {
 	} {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			var output, errors strings.Builder
-			status := RunWith(args, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+			status := RunWith(args, &output, &errors, funcRunner(func(context.Context, string, ...string) ([]byte, error) {
 				t.Fatal("usage errors should not invoke an external program")
 				return nil, nil
-			}), backend.MapEnvironment{}, "")
+			}), mapEnvironment{}, "")
 			if status != 2 {
 				t.Fatalf("status=%d output=%q errors=%q, want 2", status, output.String(), errors.String())
 			}
@@ -50,10 +48,10 @@ func TestRunWithTUIUsageErrorsExitTwo(t *testing.T) {
 
 func TestRunWithBareCommandPrintsUsage(t *testing.T) {
 	var output, errors strings.Builder
-	status := RunWith(nil, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+	status := RunWith(nil, &output, &errors, funcRunner(func(context.Context, string, ...string) ([]byte, error) {
 		t.Fatal("bare nexo should not invoke an external program")
 		return nil, nil
-	}), backend.MapEnvironment{}, "")
+	}), mapEnvironment{}, "")
 	if status != 0 || !strings.Contains(output.String(), "Usage: nexo") || errors.Len() != 0 {
 		t.Fatalf("status=%d output=%q errors=%q", status, output.String(), errors.String())
 	}
@@ -61,10 +59,10 @@ func TestRunWithBareCommandPrintsUsage(t *testing.T) {
 
 func TestRunWithVersionDoesNotRequireCommandOrBackend(t *testing.T) {
 	var output, errors strings.Builder
-	status := RunWith([]string{"--version"}, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+	status := RunWith([]string{"--version"}, &output, &errors, funcRunner(func(context.Context, string, ...string) ([]byte, error) {
 		t.Fatal("--version should not invoke an external program")
 		return nil, nil
-	}), backend.MapEnvironment{}, "")
+	}), mapEnvironment{}, "")
 	if status != 0 {
 		t.Fatalf("status = %d, errors = %q", status, errors.String())
 	}
@@ -78,10 +76,10 @@ func TestRunWithVersionDoesNotRequireCommandOrBackend(t *testing.T) {
 
 func TestRunWithReportsBackendOutsideMultiplexerAsJSON(t *testing.T) {
 	var output, errors strings.Builder
-	status := RunWith([]string{"backend", "--json"}, &output, &errors, runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+	status := RunWith([]string{"backend", "--json"}, &output, &errors, funcRunner(func(context.Context, string, ...string) ([]byte, error) {
 		t.Fatal("backend command should not invoke an external program")
 		return nil, nil
-	}), backend.MapEnvironment{}, "")
+	}), mapEnvironment{}, "")
 	if status != 0 {
 		t.Fatalf("status = %d, errors = %q", status, errors.String())
 	}
@@ -111,12 +109,12 @@ func TestRunWithPassesConfigRunnerAndAdapter(t *testing.T) {
 	if err := registry.Register(capture); err != nil {
 		t.Fatal(err)
 	}
-	fakeRunner := runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+	fakeRunner := funcRunner(func(context.Context, string, ...string) ([]byte, error) {
 		t.Fatal("selected tmux backend should not need an external call")
 		return nil, nil
 	})
 
-	status := RunWithRegistry(registry, []string{"-c", configPath, "capture"}, &strings.Builder{}, &strings.Builder{}, fakeRunner, backend.MapEnvironment{}, "")
+	status := RunWithRegistry(registry, []string{"-c", configPath, "capture"}, &strings.Builder{}, &strings.Builder{}, fakeRunner, mapEnvironment{}, "")
 	if status != 0 {
 		t.Fatalf("status = %d", status)
 	}

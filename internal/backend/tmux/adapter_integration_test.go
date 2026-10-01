@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/vieitesss/nexo/internal/runner"
 )
 
 func TestTmuxAdapterInitIsIdempotentAndPreservesIndexedHooks(t *testing.T) {
@@ -32,7 +30,7 @@ func TestTmuxAdapterInitIsIdempotentAndPreservesIndexedHooks(t *testing.T) {
 			t.Fatalf("%v: %v\n%s", command, err, output)
 		}
 	}
-	tmuxRunner := runner.Func(func(ctx context.Context, _ string, command ...string) ([]byte, error) {
+	tmuxRunner := funcRunner(func(ctx context.Context, _ string, command ...string) ([]byte, error) {
 		return exec.CommandContext(ctx, "tmux", args(command...)...).CombinedOutput()
 	})
 	backend := New(tmuxRunner, true)

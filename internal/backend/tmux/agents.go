@@ -78,25 +78,6 @@ func (s *Source) ConfigureAgents(cfg config.AgentsConfig) {
 	s.config = cfg.WithDefaults()
 }
 
-// SetClock replaces the clock used for state transitions. It is intended for
-// deterministic tests and is harmless for production callers.
-func (s *Source) SetClock(now func() time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if now == nil {
-		s.now = time.Now
-		return
-	}
-	s.now = now
-}
-
-// SetStateDir selects where this source stores per-server state and locks.
-func (s *Source) SetStateDir(dir string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.stateDir = dir
-}
-
 // SetNotifier attaches the optional backend notifier used by the watcher.
 func (s *Source) SetNotifier(notifier capabilities.Notifier) {
 	s.mu.Lock()

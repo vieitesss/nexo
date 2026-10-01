@@ -129,12 +129,6 @@ func TestReadScreenCapturesPane(t *testing.T) {
 	}
 }
 
-func TestSessionNameUsesParentAndBaseAndIsTmuxSafe(t *testing.T) {
-	if got, want := sessionName("/work/acme/my.project:dev"), "acme_my_project_dev"; got != want {
-		t.Fatalf("sessionName() = %q, want %q", got, want)
-	}
-}
-
 func TestOpenProjectSwitchesToExistingExactSessionInsideTmux(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"display-message -p -t =acme_app: #{session_id}": []byte("$12\n"),
@@ -261,7 +255,7 @@ func TestOpenProjectReportsTypedTmuxErrorWithStderr(t *testing.T) {
 
 func seedStoppedAgent(t *testing.T, backend *Backend, paneID string) {
 	t.Helper()
-	backend.agents.SetStateDir(t.TempDir())
+	setStateDir(backend.agents, t.TempDir())
 	backend.agents.server = "test-server"
 	if err := backend.agents.ledger().Update(func(document *agentstate.Document) error {
 		document.Agents[paneID] = agentstate.State{State: "stopped"}

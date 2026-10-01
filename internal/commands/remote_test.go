@@ -8,12 +8,11 @@ import (
 
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/config"
-	"github.com/vieitesss/nexo/internal/runner"
 )
 
 func TestRemoteListJSONUsesConfiguredMachines(t *testing.T) {
 	var output strings.Builder
-	fake := runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+	fake := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name != "ssh" {
 			t.Fatalf("runner name = %q, want ssh", name)
 		}
@@ -44,7 +43,7 @@ func TestRemoteListReportsUnreachableMachineWithoutFailing(t *testing.T) {
 	err := remoteCommand{}.Run(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"offline"}}},
-		Runner: runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+		Runner: funcRunner(func(context.Context, string, ...string) ([]byte, error) {
 			return nil, context.DeadlineExceeded
 		}),
 		Stdout: &output,
@@ -63,7 +62,7 @@ func TestRemoteListShowsAgentWarningWithoutHidingContainers(t *testing.T) {
 	err := remoteCommand{}.Run(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
-		Runner: runner.Func(func(context.Context, string, ...string) ([]byte, error) {
+		Runner: funcRunner(func(context.Context, string, ...string) ([]byte, error) {
 			return []byte("$1\tapi\n__NEXO_AGENTS_START__\n\n__NEXO_AGENTS_END__\n__NEXO_AGENTS_WARNING__nexo: command not found\n"), nil
 		}),
 		Stdout: &output,

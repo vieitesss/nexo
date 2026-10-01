@@ -11,7 +11,6 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
-	"github.com/vieitesss/nexo/internal/runner"
 )
 
 type recordingRemoteProxy struct {
@@ -69,7 +68,7 @@ func TestRemoteOpenCanonicalizesTmuxContainerName(t *testing.T) {
 	}
 
 	close := invocation
-	close.Runner = runner.Func(func(_ context.Context, name string, _ ...string) ([]byte, error) {
+	close.Runner = funcRunner(func(_ context.Context, name string, _ ...string) ([]byte, error) {
 		if name == "ssh" {
 			t.Fatal("remote close must not probe the remote machine")
 		}
@@ -165,7 +164,7 @@ func TestRemoteCloseOnlyKillsLocalProxy(t *testing.T) {
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
 		Adapter:   killer,
-		Runner: runner.Func(func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		Runner: funcRunner(func(_ context.Context, name string, _ ...string) ([]byte, error) {
 			if name == "ssh" {
 				t.Fatal("remote close must not probe SSH")
 			}
@@ -187,7 +186,7 @@ func TestRemoteCloseLeavesContainerSpellingToTheAdapter(t *testing.T) {
 		Selection: backend.Selection{Kind: backend.Herdr},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
 		Adapter:   killer,
-		Runner: runner.Func(func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		Runner: funcRunner(func(_ context.Context, name string, _ ...string) ([]byte, error) {
 			if name == "ssh" {
 				t.Fatal("remote close must not probe SSH")
 			}
@@ -210,7 +209,7 @@ func TestRemoteNewQuotesRemoteContainerName(t *testing.T) {
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
 		Adapter:   proxy,
-		Runner: runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		Runner: funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 			if name != "ssh" {
 				t.Fatalf("command = %q, want ssh", name)
 			}
@@ -234,7 +233,7 @@ func TestRemoteNewQuotesRemoteContainerName(t *testing.T) {
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
 		Adapter:   proxy,
-		Runner: runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		Runner: funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 			got = append([]string{name}, args...)
 			return nil, nil
 		}),

@@ -72,9 +72,6 @@ func (b *Backend) FocusPane(ctx context.Context, paneID string) error {
 var _ capabilities.AgentSource = (*Backend)(nil)
 var _ capabilities.PaneFocuser = (*Backend)(nil)
 
-// Name identifies this backend.
-func (Backend) Name() string { return "herdr" }
-
 // Error reports a failed Herdr operation and preserves Herdr's stderr.
 type Error struct {
 	Operation string

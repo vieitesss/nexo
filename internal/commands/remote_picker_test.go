@@ -10,7 +10,6 @@ import (
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
-	"github.com/vieitesss/nexo/internal/runner"
 )
 
 func TestRemotePlaceCommandsListAgentsWithConfiguredBackend(t *testing.T) {
@@ -20,7 +19,7 @@ func TestRemotePlaceCommandsListAgentsWithConfiguredBackend(t *testing.T) {
 		Config: config.Config{Remote: config.RemoteConfig{
 			Machines: []string{"dev"}, Backends: map[string]string{"dev": "tmux"},
 		}},
-		Runner: runner.Func(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		Runner: funcRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
 			command = args[len(args)-1]
 			return []byte("__NEXO_REMOTE_KIND__tmux\n$1\tapi\n__NEXO_AGENTS_START__\n[{\"container\":\"api\",\"state\":\"working\"}]\n__NEXO_AGENTS_END__\n"), nil
 		}),
@@ -39,7 +38,7 @@ func TestRemotePlaceCommandsDeliverFastMachineWithoutWaitingForSlowMachine(t *te
 	commands := remotePlaceCommands(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"slow", "fast"}}},
-		Runner: runner.Func(func(ctx context.Context, _ string, args ...string) ([]byte, error) {
+		Runner: funcRunner(func(ctx context.Context, _ string, args ...string) ([]byte, error) {
 			machine := args[4]
 			if machine == "slow" {
 				select {

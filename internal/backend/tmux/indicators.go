@@ -44,12 +44,6 @@ func MatchesWorkingIndicator(harness, screen string, configured map[string]strin
 	return false
 }
 
-// IsWorkingIndicator is an alias kept as a concise matcher for callers that
-// only need to inspect one screen.
-func IsWorkingIndicator(harness, screen string, configured map[string]string) bool {
-	return MatchesWorkingIndicator(harness, screen, configured)
-}
-
 func containsSpinner(screen string) bool {
 	for _, line := range strings.Split(screen, "\n") {
 		if lineHasUnquotedRune(line, func(r rune) bool { return strings.ContainsRune(spinnerGlyphs, r) }) {

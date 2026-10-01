@@ -31,8 +31,8 @@ func TestSourceNotifiesOncePerWorkingToStoppedTransitionAcrossRestarts(t *testin
 	recording := &recordingNotifier{}
 
 	source := NewAgentSource(runner)
-	source.SetStateDir(stateDir)
-	source.SetClock(func() time.Time { return clock })
+	setStateDir(source, stateDir)
+	setClock(source, func() time.Time { return clock })
 	source.SetNotifier(recording)
 	enabled := true
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 3, Notify: &enabled})
@@ -59,8 +59,8 @@ func TestSourceNotifiesOncePerWorkingToStoppedTransitionAcrossRestarts(t *testin
 		t.Fatal(err)
 	}
 	restarted := NewAgentSource(runner)
-	restarted.SetStateDir(stateDir)
-	restarted.SetClock(func() time.Time { return clock.Add(time.Minute) })
+	setStateDir(restarted, stateDir)
+	setClock(restarted, func() time.Time { return clock.Add(time.Minute) })
 	restarted.SetNotifier(recording)
 	restarted.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 3, Notify: &enabled})
 	if _, err := restarted.ListAgents(context.Background()); err != nil {
@@ -96,8 +96,8 @@ func TestSourceRetriesPendingNotificationAfterNotifierFailure(t *testing.T) {
 	screen := "⠋ working"
 	notifier := &recordingNotifier{err: errors.New("desktop unavailable")}
 	source := NewAgentSource(runnerForNotificationTest(&screen))
-	source.SetStateDir(t.TempDir())
-	source.SetClock(func() time.Time { return clock })
+	setStateDir(source, t.TempDir())
+	setClock(source, func() time.Time { return clock })
 	source.SetNotifier(notifier)
 	enabled := true
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 3, Notify: &enabled})
@@ -127,8 +127,8 @@ func TestSourceDropsPendingNotificationWhenPaneWorksAgain(t *testing.T) {
 	screen := "⠋ working"
 	notifier := &recordingNotifier{}
 	source := NewAgentSource(runnerForNotificationTest(&screen))
-	source.SetStateDir(t.TempDir())
-	source.SetClock(func() time.Time { return clock })
+	setStateDir(source, t.TempDir())
+	setClock(source, func() time.Time { return clock })
 	source.SetNotifier(notifier)
 	enabled := true
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 3, Notify: &enabled})
@@ -161,8 +161,8 @@ func TestSourceDropsPendingNotificationWhenPaneDisappears(t *testing.T) {
 	runner.paneList = &paneList
 	notifier := &recordingNotifier{}
 	source := NewAgentSource(runner)
-	source.SetStateDir(t.TempDir())
-	source.SetClock(func() time.Time { return clock })
+	setStateDir(source, t.TempDir())
+	setClock(source, func() time.Time { return clock })
 	source.SetNotifier(notifier)
 	enabled := true
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 3, Notify: &enabled})
@@ -192,8 +192,8 @@ func TestSourceCoalescesPendingStopsIntoOneTrailingNotification(t *testing.T) {
 	runner := &multiNotificationSourceRunner{screens: map[string]string{"%1": "⠋ working", "%2": "⠋ working"}}
 	notifier := &recordingNotifier{}
 	source := NewAgentSource(runner)
-	source.SetStateDir(t.TempDir())
-	source.SetClock(func() time.Time { return clock })
+	setStateDir(source, t.TempDir())
+	setClock(source, func() time.Time { return clock })
 	source.SetNotifier(notifier)
 	enabled := true
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi", "claude"}, IdleSeconds: 3, Notify: &enabled})

@@ -10,7 +10,6 @@ import (
 
 	tmuxbackend "github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
-	"github.com/vieitesss/nexo/internal/runner"
 )
 
 type fakeAgentSource struct {
@@ -23,7 +22,7 @@ func (f fakeAgentSource) ListAgents(context.Context) ([]capabilities.Agent, erro
 
 func TestAgentsSeenUnknownPaneIsSilent(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	adapter := tmuxbackend.New(runner.Func(func(_ context.Context, name string, args ...string) ([]byte, error) {
+	adapter := tmuxbackend.New(funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name == "tmux" {
 			return []byte("/tmp/tmux-test\n"), nil
 		}
