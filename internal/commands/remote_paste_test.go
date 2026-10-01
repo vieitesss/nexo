@@ -12,39 +12,73 @@ import (
 
 type fakeRemotePaster struct {
 	target string
+	panes  []string
 	keys   [][]string
 	texts  []string
 }
 
-func (p *fakeRemotePaster) ProxyTarget(context.Context, string) (string, error) { return p.target, nil }
-func (p *fakeRemotePaster) SendPaneKeys(_ context.Context, _ string, keys []string) error {
+func (p *fakeRemotePaster) ProxyTarget(_ context.Context, paneID string) (string, error) {
+	p.panes = append(p.panes, paneID)
+	return p.target, nil
+}
+
+func (p *fakeRemotePaster) SendPaneKeys(_ context.Context, paneID string, keys []string) error {
+	p.panes = append(p.panes, paneID)
 	p.keys = append(p.keys, append([]string(nil), keys...))
 	return nil
 }
-func (p *fakeRemotePaster) SendPaneText(_ context.Context, _ string, text string) error {
+
+func (p *fakeRemotePaster) SendPaneText(_ context.Context, paneID, text string) error {
+	p.panes = append(p.panes, paneID)
 	p.texts = append(p.texts, text)
 	return nil
 }
 
 type pasteInputRunner struct {
-	readerOutput []byte
-	uploadOutput []byte
-	err          error
-	input        []byte
+	offers []byte
+	png    []byte
+	upload []byte
+	err    error
+	input  []byte
 }
 
-func (r *pasteInputRunner) Run(context.Context, string, ...string) ([]byte, error) {
-	return r.readerOutput, r.err
+func (r *pasteInputRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	joined := name + " " + strings.Join(args, " ")
+	if name == "wl-paste" && strings.Contains(joined, "--list-types") || strings.Contains(joined, "TARGETS") {
+		return r.offers, nil
+	}
+	return r.png, nil
 }
+
 func (r *pasteInputRunner) RunInput(_ context.Context, input []byte, _ string, _ ...string) ([]byte, error) {
 	r.input = append([]byte(nil), input...)
-	return r.uploadOutput, r.err
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.upload, nil
+}
+
+var pasteTestPNG = []byte("\x89PNG\r\n\x1a\npayload")
+
+func assertPanes(t *testing.T, paster *fakeRemotePaster, want string) {
+	t.Helper()
+	if len(paster.panes) == 0 {
+		t.Fatal("no pane was used")
+	}
+	for _, pane := range paster.panes {
+		if pane != want {
+			t.Fatalf("panes = %#v, want every call to use %q", paster.panes, want)
+		}
+	}
 }
 
 func TestRemotePastePassesKeyOutsideProxyWithoutReadingClipboard(t *testing.T) {
 	t.Setenv("TMUX_PANE", "%9")
 	paster := &fakeRemotePaster{}
-	runner := &pasteInputRunner{readerOutput: []byte("must not be read")}
+	runner := &pasteInputRunner{}
 	err := runRemotePaste(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Adapter:   paster,
@@ -57,12 +91,42 @@ func TestRemotePastePassesKeyOutsideProxyWithoutReadingClipboard(t *testing.T) {
 	if !reflect.DeepEqual(paster.keys, [][]string{{"C-v"}}) || len(paster.texts) != 0 {
 		t.Fatalf("keys = %#v, texts = %#v", paster.keys, paster.texts)
 	}
+	assertPanes(t, paster, "%9")
+}
+
+func TestRemotePasteUsesHerdrPaneEnvironment(t *testing.T) {
+	t.Setenv("HERDR_PANE_ID", "p1")
+	paster := &fakeRemotePaster{}
+	if err := runRemotePaste(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Herdr},
+		Adapter:   paster,
+		Runner:    &pasteInputRunner{},
+		Args:      []string{"paste", "ctrl+v"},
+	}); err != nil {
+		t.Fatalf("runRemotePaste() error = %v", err)
+	}
+	if !reflect.DeepEqual(paster.panes, []string{"p1", "p1"}) {
+		t.Fatalf("panes = %#v, want both calls to use HERDR_PANE_ID", paster.panes)
+	}
+}
+
+func TestRemotePasteRequiresCurrentPane(t *testing.T) {
+	t.Setenv("TMUX_PANE", "")
+	err := runRemotePaste(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Adapter:   &fakeRemotePaster{},
+		Runner:    &pasteInputRunner{},
+		Args:      []string{"paste", "C-v"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "current pane") {
+		t.Fatalf("runRemotePaste() error = %v, want current pane error", err)
+	}
 }
 
 func TestRemotePastePassesKeyWhenClipboardHasNoImage(t *testing.T) {
 	t.Setenv("TMUX_PANE", "%9")
 	paster := &fakeRemotePaster{target: "devbox/api"}
-	runner := &pasteInputRunner{readerOutput: nil, err: context.Canceled}
+	runner := &pasteInputRunner{offers: []byte("text/plain\n")}
 	if err := runRemotePaste(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Adapter:   paster,
@@ -71,8 +135,8 @@ func TestRemotePastePassesKeyWhenClipboardHasNoImage(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("runRemotePaste() error = %v", err)
 	}
-	if !reflect.DeepEqual(paster.keys, [][]string{{"C-v"}}) {
-		t.Fatalf("keys = %#v, want pass-through", paster.keys)
+	if !reflect.DeepEqual(paster.keys, [][]string{{"C-v"}}) || runner.input != nil {
+		t.Fatalf("keys = %#v, upload input = %q; want pass-through without upload", paster.keys, runner.input)
 	}
 }
 
@@ -104,7 +168,11 @@ func (*missingClipboardToolError) Error() string {
 func TestRemotePasteUploadsImageAndTypesRemotePath(t *testing.T) {
 	t.Setenv("TMUX_PANE", "%9")
 	paster := &fakeRemotePaster{target: "devbox/api"}
-	runner := &pasteInputRunner{readerOutput: []byte("png"), uploadOutput: []byte("/tmp/nexo-paste-abcd.png\n")}
+	runner := &pasteInputRunner{
+		offers: []byte("image/png\n"),
+		png:    pasteTestPNG,
+		upload: []byte("/tmp/nexo-paste-abcd/nexo-paste-image.png\n"),
+	}
 	var stderr strings.Builder
 	err := runRemotePaste(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Tmux},
@@ -117,13 +185,35 @@ func TestRemotePasteUploadsImageAndTypesRemotePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runRemotePaste() error = %v", err)
 	}
-	if got, want := string(runner.input), "png"; got != want {
+	if got, want := string(runner.input), string(pasteTestPNG); got != want {
 		t.Fatalf("uploaded input = %q, want %q", got, want)
 	}
-	if !reflect.DeepEqual(paster.texts, []string{"/tmp/nexo-paste-abcd.png"}) || len(paster.keys) != 0 {
+	if !reflect.DeepEqual(paster.texts, []string{"/tmp/nexo-paste-abcd/nexo-paste-image.png"}) || len(paster.keys) != 0 {
 		t.Fatalf("keys = %#v, texts = %#v", paster.keys, paster.texts)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want silent success", stderr.String())
+	}
+}
+
+func TestRemotePasteShellQuotesRemotePath(t *testing.T) {
+	t.Setenv("TMUX_PANE", "%9")
+	paster := &fakeRemotePaster{target: "devbox/api"}
+	runner := &pasteInputRunner{
+		offers: []byte("image/png"),
+		png:    pasteTestPNG,
+		upload: []byte("/tmp/nexo paste/nexo-paste-image.png\n"),
+	}
+	err := runRemotePaste(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Adapter:   paster,
+		Runner:    runner,
+		Args:      []string{"paste", "C-v"},
+	})
+	if err != nil {
+		t.Fatalf("runRemotePaste() error = %v", err)
+	}
+	if want := []string{"'/tmp/nexo paste/nexo-paste-image.png'"}; !reflect.DeepEqual(paster.texts, want) {
+		t.Fatalf("texts = %#v, want %#v", paster.texts, want)
 	}
 }

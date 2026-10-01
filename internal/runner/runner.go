@@ -16,7 +16,6 @@ type CommandRunner interface {
 	Run(context.Context, string, ...string) ([]byte, error)
 }
 
-// InteractiveRunner runs a command attached to the current terminal.
 // InputRunner runs a command with bytes connected to its standard input.
 // Implementations can be replaced by fakes in tests.
 type InputRunner interface {
@@ -24,6 +23,7 @@ type InputRunner interface {
 	RunInput(context.Context, []byte, string, ...string) ([]byte, error)
 }
 
+// InteractiveRunner runs a command attached to the current terminal.
 type InteractiveRunner interface {
 	CommandRunner
 	RunInteractive(context.Context, string, ...string) error

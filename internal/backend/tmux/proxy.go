@@ -142,9 +142,32 @@ func (b *Backend) SendPaneKeys(ctx context.Context, paneID string, keys []string
 	if paneID == "" {
 		return errors.New("tmux pane input requires a pane id")
 	}
-	args := append([]string{"-t", paneID}, keys...)
+	if len(keys) == 0 {
+		return nil
+	}
+	args := make([]string, 0, len(keys)+3)
+	args = append(args, "-t", paneID, "--")
+	for _, key := range keys {
+		if strings.TrimSpace(key) == "" {
+			return errors.New("tmux pane input requires a key")
+		}
+		args = append(args, tmuxParseKey(key))
+	}
 	_, err := b.run(ctx, "send-keys", args...)
 	return err
+}
+
+// tmuxParseKey makes one send-keys operand safe for tmux's command parser.
+// cmd_parse_from_arguments removes a trailing ";" from every argument and
+// unescapes one preceding backslash; an unescaped trailing ";" ends the
+// command and turns every following operand into a new tmux command. Only the
+// final character is examined, so escaping that single semicolon keeps the
+// key's literal meaning.
+func tmuxParseKey(key string) string {
+	if !strings.HasSuffix(key, ";") || strings.HasSuffix(key, `\;`) {
+		return key
+	}
+	return key[:len(key)-1] + `\;`
 }
 
 // SendPaneText types literal text into a local pane.
@@ -156,7 +179,7 @@ func (b *Backend) SendPaneText(ctx context.Context, paneID, text string) error {
 	if paneID == "" {
 		return errors.New("tmux pane input requires a pane id")
 	}
-	_, err := b.run(ctx, "send-keys", "-t", paneID, "-l", text)
+	_, err := b.run(ctx, "send-keys", "-t", paneID, "-l", "--", tmuxParseKey(text))
 	return err
 }
 

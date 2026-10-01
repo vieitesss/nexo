@@ -59,7 +59,7 @@ func (remoteCommand) Run(ctx context.Context, invocation Invocation) error {
 		return err
 	}
 	if len(invocation.Args) == 0 {
-		return errors.New("remote requires a subcommand (want list, open, new, or close)")
+		return errors.New("remote requires a subcommand (want list, open, new, close, or paste)")
 	}
 	switch invocation.Args[0] {
 	case "list":
@@ -220,7 +220,7 @@ func runRemotePaste(ctx context.Context, invocation Invocation) error {
 		paneID = strings.TrimSpace(os.Getenv("TMUX_PANE"))
 	}
 	if paneID == "" {
-		return errors.New("remote paste requires the current pane")
+		return errors.New("remote paste requires the current pane (tmux: bind with TMUX_PANE=#{pane_id})")
 	}
 	keys := append([]string(nil), invocation.Args[1:]...)
 	target, err := paster.ProxyTarget(ctx, paneID)
@@ -256,7 +256,7 @@ func runRemotePaste(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	return paster.SendPaneText(ctx, paneID, path)
+	return paster.SendPaneText(ctx, paneID, remote.ShellQuotePath(path))
 }
 
 func runRemoteAttach(ctx context.Context, invocation Invocation) error {

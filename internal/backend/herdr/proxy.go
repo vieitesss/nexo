@@ -172,7 +172,8 @@ func (b *Backend) closeWorkspace(workspaceID string) error {
 	return err
 }
 
-// SendPaneKeys sends the original user binding to a Herdr pane.
+// SendPaneKeys sends the original user binding to a Herdr pane through the
+// native key-input command so key names keep their terminal semantics.
 func (b *Backend) SendPaneKeys(ctx context.Context, paneID string, keys []string) error {
 	if b == nil || b.Runner == nil {
 		return errors.New("herdr pane input requires a command runner")
@@ -181,7 +182,18 @@ func (b *Backend) SendPaneKeys(ctx context.Context, paneID string, keys []string
 	if paneID == "" {
 		return errors.New("herdr pane input requires a pane id")
 	}
-	_, err := b.run(ctx, "pane", "send-text", paneID, strings.Join(keys, ""))
+	if len(keys) == 0 {
+		return nil
+	}
+	args := make([]string, 0, len(keys)+3)
+	args = append(args, "send-keys", paneID, "--")
+	for _, key := range keys {
+		if strings.TrimSpace(key) == "" {
+			return errors.New("herdr pane input requires a key")
+		}
+		args = append(args, key)
+	}
+	_, err := b.run(ctx, "pane", args...)
 	return err
 }
 

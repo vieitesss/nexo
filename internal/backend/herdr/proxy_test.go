@@ -2,6 +2,7 @@ package herdr
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -133,5 +134,26 @@ func TestProxyClosesWorkspaceWhenMetadataFails(t *testing.T) {
 	}
 	if len(runner.calls) != 4 || strings.Join(runner.calls[3].args, " ") != "workspace close w1" {
 		t.Fatalf("calls = %#v, want cleanup close", runner.calls)
+	}
+}
+
+func TestSendPaneKeysUsesNativeKeyInput(t *testing.T) {
+	runner := &fakeRunner{}
+	if err := New(runner).SendPaneKeys(context.Background(), "p1", []string{"ctrl+v", "alt+v", "enter", "esc"}); err != nil {
+		t.Fatalf("SendPaneKeys() error = %v", err)
+	}
+	want := []string{"pane", "send-keys", "p1", "--", "ctrl+v", "alt+v", "enter", "esc"}
+	if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0].args, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestSendPaneKeysWithoutKeysIsNoop(t *testing.T) {
+	runner := &fakeRunner{}
+	if err := New(runner).SendPaneKeys(context.Background(), "p1", nil); err != nil {
+		t.Fatalf("SendPaneKeys() error = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("calls = %#v, want no herdr invocation", runner.calls)
 	}
 }

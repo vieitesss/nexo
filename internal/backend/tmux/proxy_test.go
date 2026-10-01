@@ -320,3 +320,57 @@ func TestTransportArgsHonorSSHConfigOnlyForSSH(t *testing.T) {
 		t.Fatalf("canonical SSH transport args = %#v, want %#v", got, canonicalWant)
 	}
 }
+
+func TestSendPaneKeysUsesOptionTerminatorAndKeepsKeyBoundaries(t *testing.T) {
+	runner := &fakeRunner{}
+	if err := New(runner).SendPaneKeys(context.Background(), "%9", []string{"C-v", "M-v"}); err != nil {
+		t.Fatalf("SendPaneKeys() error = %v", err)
+	}
+	want := []string{"-u", "send-keys", "-t", "%9", "--", "C-v", "M-v"}
+	if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0].args, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestSendPaneKeysEscapesTmuxCommandSeparators(t *testing.T) {
+	cases := []struct {
+		keys []string
+		want []string
+	}{
+		{keys: []string{";", "-l"}, want: []string{`\;`, "-l"}},
+		{keys: []string{"x;"}, want: []string{`x\;`}},
+		{keys: []string{"x;;"}, want: []string{`x;\;`}},
+		{keys: []string{"a;b", `x\;`}, want: []string{"a;b", `x\;`}},
+	}
+	for _, test := range cases {
+		runner := &fakeRunner{}
+		if err := New(runner).SendPaneKeys(context.Background(), "%9", test.keys); err != nil {
+			t.Fatalf("SendPaneKeys(%#v) error = %v", test.keys, err)
+		}
+		want := append([]string{"-u", "send-keys", "-t", "%9", "--"}, test.want...)
+		if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0].args, want) {
+			t.Fatalf("keys %#v: calls = %#v, want %#v", test.keys, runner.calls, want)
+		}
+	}
+}
+
+func TestSendPaneKeysWithoutKeysIsNoop(t *testing.T) {
+	runner := &fakeRunner{}
+	if err := New(runner).SendPaneKeys(context.Background(), "%9", nil); err != nil {
+		t.Fatalf("SendPaneKeys() error = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("calls = %#v, want no tmux invocation", runner.calls)
+	}
+}
+
+func TestSendPaneTextUsesLiteralAndOptionBoundaries(t *testing.T) {
+	runner := &fakeRunner{}
+	if err := New(runner).SendPaneText(context.Background(), "%9", "-x; text;"); err != nil {
+		t.Fatalf("SendPaneText() error = %v", err)
+	}
+	want := []string{"-u", "send-keys", "-t", "%9", "-l", "--", `-x; text\;`}
+	if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0].args, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
