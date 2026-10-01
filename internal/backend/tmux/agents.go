@@ -27,6 +27,7 @@ type pane struct {
 	containerID string
 	container   string
 	window      string
+	windowID    string
 	pid         string
 	command     string
 	path        string
@@ -98,10 +99,18 @@ func (s *Source) ConfigureHookCommand(binary, configPath string) {
 func (s *Source) ListAgents(ctx context.Context) ([]capabilities.Agent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.listAgents(ctx)
+	return s.listAgents(ctx, false)
 }
 
-func (s *Source) listAgents(ctx context.Context) ([]capabilities.Agent, error) {
+// poll lists agents and reconciles the tmux window-list highlight. Only the
+// watcher applies highlights; plain listing stays read-only.
+func (s *Source) poll(ctx context.Context) ([]capabilities.Agent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listAgents(ctx, true)
+}
+
+func (s *Source) listAgents(ctx context.Context, highlight bool) ([]capabilities.Agent, error) {
 	if s.runner == nil {
 		return nil, errors.New("tmux agents requires a command runner")
 	}
@@ -152,6 +161,11 @@ func (s *Source) listAgents(ctx context.Context) ([]capabilities.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	if highlight {
+		if err := s.reconcileHighlights(ctx, unseenWindows(observed, results)); err != nil {
+			return nil, err
+		}
+	}
 	agents := make([]capabilities.Agent, 0, len(results))
 	for index, result := range results {
 		current := observed[index]
@@ -177,7 +191,7 @@ func (s *Source) runTmux(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pane, error) {
-	format := "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{session_id}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_index}\t#{pane_current_path}"
+	format := "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{session_id}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_index}\t#{window_id}\t#{pane_current_path}"
 	output, err := s.runTmux(ctx, "list-panes", "-a", "-F", format)
 	if err != nil {
 		return nil, fmt.Errorf("list tmux panes: %w", err)
@@ -193,15 +207,16 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		fields := strings.SplitN(line, "\t", 9)
-		if len(fields) != 9 {
+		fields := strings.SplitN(line, "\t", 10)
+		if len(fields) != 10 {
 			continue
 		}
 		containerField := 4
 		windowField := 5
 		windowIndexField := 6
 		paneIndexField := 7
-		pathField := 8
+		windowIDField := 8
+		pathField := 9
 		current := strings.TrimSpace(fields[2])
 		harness := findHarness(current, allow)
 		if harness == "" {
@@ -226,6 +241,7 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 			containerID: containerID,
 			container:   strings.TrimSpace(fields[containerField]),
 			window:      strings.TrimSpace(fields[windowField]),
+			windowID:    strings.TrimSpace(fields[windowIDField]),
 			target:      fmt.Sprintf("%s:%s.%s", fields[containerField], fields[windowIndexField], fields[paneIndexField]),
 			harness:     harness,
 		}
@@ -612,7 +628,7 @@ func (s *Source) Watch(ctx context.Context) error {
 	s.mu.Unlock()
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
-	if _, err := s.ListAgents(ctx); err != nil {
+	if _, err := s.poll(ctx); err != nil {
 		return err
 	}
 	if err := s.deliverPending(ctx); err != nil {
@@ -623,7 +639,7 @@ func (s *Source) Watch(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if _, err := s.ListAgents(ctx); err != nil {
+			if _, err := s.poll(ctx); err != nil {
 				return err
 			}
 			if err := s.deliverPending(ctx); err != nil {

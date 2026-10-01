@@ -81,7 +81,7 @@ func TestLoadParsesAgentSettingsAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got.Agents.Notify == nil || !*got.Agents.Notify || got.Agents.Sound || got.Agents.IdleSeconds != 3 || got.Agents.PollInterval != 2 || len(got.Agents.Processes) != 7 || got.Agents.WorkingPattern["aider"] != "…" {
+	if got.Agents.Notify == nil || !*got.Agents.Notify || got.Agents.Sound || got.Agents.IdleSeconds != 3 || got.Agents.PollInterval != 2 || len(got.Agents.Processes) != 7 || got.Agents.WorkingPattern["aider"] != "…" || got.Agents.HighlightColor != "red" {
 		t.Fatalf("Agents = %#v, want notification defaults and aider pattern", got.Agents)
 	}
 }
@@ -190,6 +190,21 @@ func TestLoadRejectsUnknownTopLevelProjectKey(t *testing.T) {
 	_, err := Load(path)
 	if err == nil || !strings.Contains(err.Error(), "project-paths") {
 		t.Fatalf("Load() error = %v, want unknown top-level key", err)
+	}
+}
+
+func TestLoadParsesAgentHighlightColor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[agents]\nhighlight-color = \"blue\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Agents.HighlightColor != "blue" {
+		t.Fatalf("HighlightColor = %q, want blue", got.Agents.HighlightColor)
 	}
 }
 

@@ -6,9 +6,14 @@ type AgentsConfig struct {
 	IdleSeconds    int               `toml:"idle-seconds"`
 	PollInterval   int               `toml:"poll-interval"`
 	WorkingPattern map[string]string `toml:"working-pattern"`
-	Notify         *bool             `toml:"notify"` // notify working-to-stopped transitions
-	Sound          bool              `toml:"sound"`  // play a short notification sound
+	Notify         *bool             `toml:"notify"`          // notify working-to-stopped transitions
+	Sound          bool              `toml:"sound"`           // play a short notification sound
+	HighlightColor string            `toml:"highlight-color"` // tmux window-list colour for unseen stopped agents
 }
+
+// defaultAgentHighlightColor is the tmux colour used to highlight a window
+// that holds an unseen stopped agent.
+const defaultAgentHighlightColor = "red"
 
 var defaultAgentProcesses = []string{"pi", "claude", "codex", "opencode", "hermes", "aider", "cursor"}
 
@@ -29,6 +34,9 @@ func (c AgentsConfig) WithDefaults() AgentsConfig {
 	if c.Notify == nil {
 		enabled := true
 		c.Notify = &enabled
+	}
+	if c.HighlightColor == "" {
+		c.HighlightColor = defaultAgentHighlightColor
 	}
 	return c
 }
