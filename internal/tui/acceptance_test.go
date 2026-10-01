@@ -547,6 +547,8 @@ func selectionDeps() Deps {
 	}
 }
 
+// contrastRatioHex returns the WCAG contrast ratio between two #RRGGBB
+// colours.
 func contrastRatioHex(foreground, background string) float64 {
 	luminance := func(value string) float64 {
 		value = strings.TrimPrefix(value, "#")
@@ -572,23 +574,16 @@ func contrastRatioHex(foreground, background string) float64 {
 	return (light + 0.05) / (dark + 0.05)
 }
 
-func TestSelectedStateColoursContrastWithSelection(t *testing.T) {
-	selection := selectionBackground()
-	states := []capabilities.Agent{{State: "stopped"}, {State: "stopped", Seen: true}, {State: "working"}}
-	for _, dark := range []bool{true, false} {
-		background := selection.Dark
-		if !dark {
-			background = selection.Light
-		}
-		for _, agent := range states {
-			foreground := selectedStateForeground(agent)
-			value := foreground.Dark
-			if !dark {
-				value = foreground.Light
-			}
-			if ratio := contrastRatioHex(value, background); ratio < 4.5 {
-				t.Fatalf("dark=%t state=%q contrast=%0.2f, want at least 4.5", dark, agent.State, ratio)
-			}
+// TestLightAccentStaysReadable pins the readability floor for the brighter
+// light-mode accent: it must keep at least 3:1 contrast on the light
+// backgrounds the TUI is used on.
+func TestLightAccentStaysReadable(t *testing.T) {
+	if palette.Accent.Light == palette.Accent.Dark {
+		t.Fatal("light accent equals the dark variant")
+	}
+	for _, background := range []string{"#FFFFFF", "#F5F5F5"} {
+		if ratio := contrastRatioHex(palette.Accent.Light, background); ratio < 3 {
+			t.Fatalf("light accent %s contrast against %s = %.2f, want at least 3", palette.Accent.Light, background, ratio)
 		}
 	}
 }
@@ -638,7 +633,7 @@ func TestSelectedRowHasOnlySelectionForeground(t *testing.T) {
 		expected := selectionForegroundToken(t)
 		stateTokens := map[string]bool{}
 		for _, agent := range selectionDeps().Agents {
-			for _, token := range foregroundTokens(selectedStateColor(agent).Render("x")) {
+			for _, token := range foregroundTokens(stateColor(agent).Render("x")) {
 				if token != "" {
 					stateTokens[token] = true
 				}
@@ -717,7 +712,7 @@ func TestPaletteMatchesTheIcon(t *testing.T) {
 		}
 	}
 	// The colours that would be unreadable on a light terminal need their own
-	// light variant: an olive accent, a darker muted grey and a near-black fg.
+	// light variant: a brighter lime-olive accent, a darker muted grey and a near-black fg.
 	for name, pair := range map[string]lipgloss.AdaptiveColor{"fg": palette.Fg, "muted": palette.Muted, "accent": palette.Accent} {
 		if pair.Light == pair.Dark {
 			t.Fatalf("%s light variant equals the dark variant %q", name, pair.Light)

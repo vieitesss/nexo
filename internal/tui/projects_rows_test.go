@@ -480,7 +480,11 @@ func TestSelectedRowPaintsTheBodyWidthForEveryRowKind(t *testing.T) {
 	for _, tab := range []Tab{AgentsTab, ContainersTab, ProjectsTab} {
 		model := NewModel(context.Background(), deps, tab)
 		model.SetSize(100, 30)
-		for _, id := range model.Rows() {
+		for _, candidate := range model.rows {
+			if !candidate.cursorable {
+				continue
+			}
+			id := candidate.id
 			model.input.cursor = id
 			styledLines := strings.Split(model.View(), "\n")
 			painted := 0

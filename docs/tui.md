@@ -8,8 +8,11 @@ refreshed.
 
 Agents and containers are grouped by machine. The local machine appears first,
 followed by remote machines; each machine header is bold with a muted agent or
-container count. Agents stay attention-ordered within their machine, and a
-remote header shows loading, warning, or error status while discovery runs.
+container count. A machine header has no action, so it is not selectable:
+keyboard navigation and clicks skip it, and an empty, loading, or failed
+section simply leaves nothing selected. Agents stay attention-ordered within
+their machine, and a remote header shows loading, warning, or error status
+while discovery runs.
 Container rows show the container name followed by one coloured state dot per
 agent. They do not repeat harness names, state words, ages, activity ages, or
 proxy labels. Agent rows show the container name without a machine prefix.
@@ -17,7 +20,8 @@ proxy labels. Agent rows show the container name without a machine prefix.
 ## Projects
 
 Projects are grouped by their containing folder. On an empty query every folder
-and every checkout with linked worktrees starts folded. Right unfolds the
+and every checkout with linked worktrees starts folded. A folder header is
+selectable because it folds; Left and Right act on it. Right unfolds the
 selected folder or checkout. Left folds the selected row when it is expanded —
 a folder header or a checkout with worktrees — and keeps the selection there;
 otherwise it folds the parent and moves the selection there, so a worktree
@@ -70,18 +74,19 @@ kill clears marks and keeps the selection by container identity when possible.
 
 The brand colours come from the icon in `assets/logo.svg`. The lime accent
 (`#B8F15A`), the foreground (`#E8EAED`) and the muted grey (`#8A919E`) are
-adaptive: on a light terminal they switch to an olive accent (`#4E7A00`), a
-darker grey (`#5F6774`) and a near-black foreground (`#1F2329`) so the text
-stays readable. The icon also defines a
+adaptive: on a light terminal they switch to a brighter lime-olive accent
+(`#669900`), a darker grey (`#5F6774`) and a near-black foreground (`#1F2329`)
+so the text stays readable while the accent stays close to the lime. The icon
+also defines a
 ground (`#0F1115`), a tile (`#171A21`) and a tile border (`#2A2F3A`); the
 interface paints no background, so those are not used on screen.
 
 Semantic colours stay as terminal ANSI codes and follow the user's theme:
 agent state is red, yellow or green, Git additions and deletions are bright
 green and bright red, and errors are red. The selected row is the only painted
-background — one blue bar with a single foreground. State dots remain explicit
-adaptive red, green, or amber variants on that background; on the Agents tab,
-the state word and stopped age retain the same state colour.
+background — one blue bar with a single foreground. Bold names and headers keep
+their weight on the selected row, and agent state dots, state words and stopped
+ages keep exactly the same terminal ANSI colour they have when unselected.
 
 The `[tui]` `theme` setting controls how adaptive colours are selected. The
 default `"auto"` queries OSC 11 on the controlling terminal (including inside

@@ -96,9 +96,9 @@ func TestMarkedNameKeepsAccentForegroundWhenUnselected(t *testing.T) {
 	model = updateModel(t, model, keyMsg(tea.KeyCtrlT))
 	model.SetQuery("one")
 	model.SetSize(80, 24)
-	// Move the cursor off the marked container: a selected row drops every
-	// per-segment colour and keeps the mark as bold weight instead.
-	model.input.cursor = "machine:" + picker.LocalMachine()
+	// Clear the selection: a selected row drops every per-segment colour and
+	// keeps the mark as bold weight instead.
+	model.input.cursor = ""
 	var line string
 	for _, candidate := range strings.Split(model.View(), "\n") {
 		if strings.Contains(shell.Plain(candidate), "◆ one") {
@@ -268,7 +268,7 @@ func TestSelectedRowHasTheOnlyBackgroundSGR(t *testing.T) {
 	}
 }
 
-func TestSelectedStateColoursSurviveBothSelectionThemes(t *testing.T) {
+func TestSelectedStateColoursMatchUnselected(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	previous := lipgloss.HasDarkBackground()
 	t.Cleanup(func() { lipgloss.SetHasDarkBackground(previous) })
@@ -299,15 +299,15 @@ func TestSelectedStateColoursSurviveBothSelectionThemes(t *testing.T) {
 					t.Fatalf("dark=%v tab=%q row=%q has no selected state line", dark, tab, row.id)
 				}
 				if tab == AgentsTab {
-					token := foregroundTokens(selectedStateColor(row.agent).Render("x"))[0]
+					token := foregroundTokens(stateColor(row.agent).Render("x"))[0]
 					if !strings.Contains(line, "\x1b["+token+"m") {
-						t.Fatalf("dark=%v tab=%q row=%q lost state colour %q: %q", dark, tab, row.id, token, line)
+						t.Fatalf("dark=%v tab=%q row=%q state colour %q differs from the unselected row: %q", dark, tab, row.id, token, line)
 					}
 				} else {
 					for _, agent := range deps.Agents {
-						token := foregroundTokens(selectedStateColor(agent).Render("x"))[0]
+						token := foregroundTokens(stateColor(agent).Render("x"))[0]
 						if !strings.Contains(line, "\x1b["+token+"m") {
-							t.Fatalf("dark=%v tab=%q row=%q lost dot colour %q: %q", dark, tab, row.id, token, line)
+							t.Fatalf("dark=%v tab=%q row=%q dot colour %q differs from the unselected row: %q", dark, tab, row.id, token, line)
 						}
 					}
 				}

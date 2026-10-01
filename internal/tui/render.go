@@ -170,7 +170,7 @@ const (
 // tileBorder are the icon frame; the TUI never paints a background, so on
 // screen only Fg, Muted and Accent are used. Every entry carries a light and a
 // dark variant, because the lime accent is unreadable on a light terminal: the
-// light variants are an olive accent and a near-black foreground.
+// light variants are a brighter lime-olive accent and a near-black foreground.
 var palette = struct {
 	Ground     lipgloss.AdaptiveColor
 	Tile       lipgloss.AdaptiveColor
@@ -184,7 +184,7 @@ var palette = struct {
 	TileBorder: lipgloss.AdaptiveColor{Light: "#2A2F3A", Dark: "#2A2F3A"},
 	Fg:         lipgloss.AdaptiveColor{Light: "#1F2329", Dark: "#E8EAED"},
 	Muted:      lipgloss.AdaptiveColor{Light: "#5F6774", Dark: "#8A919E"},
-	Accent:     lipgloss.AdaptiveColor{Light: "#4E7A00", Dark: "#B8F15A"},
+	Accent:     lipgloss.AdaptiveColor{Light: "#669900", Dark: "#B8F15A"},
 }
 
 func (m renderFrame) view() string {
@@ -316,9 +316,6 @@ func (m renderFrame) rowText(row row) (string, string) {
 	switch row.kind {
 	case machineRow:
 		labelStyle := bold()
-		if selected {
-			labelStyle = normal()
-		}
 		value := strings.Repeat("  ", row.depth) + labelStyle.Render(highlightText(sanitize(row.label), string(m.query), selected)) + muted().Render(fmt.Sprintf("  %d", row.count))
 		if row.remoteErr != "" {
 			value += muted().Render("  " + sanitize(row.remoteErr))
@@ -330,9 +327,6 @@ func (m renderFrame) rowText(row row) (string, string) {
 		return marker + value, ""
 	case groupRow:
 		labelStyle := bold()
-		if selected {
-			labelStyle = normal()
-		}
 		return marker + foldPrefixStyled(row) + labelStyle.Render(abbreviateHome(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
 	case separatorRow:
 		return "", ""
@@ -353,9 +347,6 @@ func (m renderFrame) agentText(row row, marker string, selected bool) (string, s
 	a := row.agent
 	container := a.Container
 	nameStyle := bold()
-	if selected {
-		nameStyle = normal()
-	}
 	primary := nameStyle.Render(highlightText(sanitize(a.Harness), string(m.query), selected)) + muted().Render("  "+highlightText(sanitize(container), string(m.query), selected))
 	state := strings.ToLower(strings.TrimSpace(sanitize(a.State)))
 	stateLabel := "● " + state
@@ -388,7 +379,7 @@ func stateText(agent capabilities.Agent, text string, selected bool) string {
 	if !selected {
 		return stateColor(agent).Render(text)
 	}
-	return selectedStateMarkerStart + selectedStateColor(agent).Render(text) + selectedStateMarkerEnd
+	return selectedStateMarkerStart + stateColor(agent).Render(text) + selectedStateMarkerEnd
 }
 
 func (m renderFrame) containerText(row row, marker string, selected bool) (string, string) {
@@ -881,21 +872,6 @@ func stateColor(agent capabilities.Agent) lipgloss.Style {
 	default:
 		return yellow()
 	}
-}
-
-func selectedStateForeground(agent capabilities.Agent) lipgloss.AdaptiveColor {
-	switch {
-	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && !agent.Seen:
-		return lipgloss.AdaptiveColor{Light: "#9b1c1c", Dark: "#ffb3ba"}
-	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped"):
-		return lipgloss.AdaptiveColor{Light: "#166534", Dark: "#86efac"}
-	default:
-		return lipgloss.AdaptiveColor{Light: "#8a4b08", Dark: "#fbbf24"}
-	}
-}
-
-func selectedStateColor(agent capabilities.Agent) lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(selectedStateForeground(agent))
 }
 
 func normal() lipgloss.Style { return lipgloss.NewStyle().Foreground(palette.Fg) }
