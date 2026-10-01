@@ -316,9 +316,6 @@ func (m renderFrame) rowText(row row) (string, string) {
 	switch row.kind {
 	case machineRow:
 		labelStyle := bold()
-		if selected {
-			labelStyle = normal()
-		}
 		value := strings.Repeat("  ", row.depth) + labelStyle.Render(highlightText(sanitize(row.label), string(m.query), selected)) + muted().Render(fmt.Sprintf("  %d", row.count))
 		if row.remoteErr != "" {
 			value += muted().Render("  " + sanitize(row.remoteErr))
@@ -330,9 +327,6 @@ func (m renderFrame) rowText(row row) (string, string) {
 		return marker + value, ""
 	case groupRow:
 		labelStyle := bold()
-		if selected {
-			labelStyle = normal()
-		}
 		return marker + foldPrefixStyled(row) + labelStyle.Render(abbreviateHome(row.label)) + muted().Render(fmt.Sprintf("  %d", row.count)), ""
 	case separatorRow:
 		return "", ""
@@ -353,9 +347,6 @@ func (m renderFrame) agentText(row row, marker string, selected bool) (string, s
 	a := row.agent
 	container := a.Container
 	nameStyle := bold()
-	if selected {
-		nameStyle = normal()
-	}
 	primary := nameStyle.Render(highlightText(sanitize(a.Harness), string(m.query), selected)) + muted().Render("  "+highlightText(sanitize(container), string(m.query), selected))
 	state := strings.ToLower(strings.TrimSpace(sanitize(a.State)))
 	stateLabel := "● " + state
