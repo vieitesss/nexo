@@ -82,35 +82,47 @@ for amd64 or arm64 from the
 [releases page](https://github.com/vieitesss/nexo/releases), unpack `nexo`, and
 put it on `PATH`. Tagged releases include checksums and a Homebrew formula.
 
+Whichever method you use, confirm the binary resolves before continuing:
+
+```sh
+command -v nexo
+```
+
+A Go install writes to `$(go env GOBIN)`, or `$(go env GOPATH)/bin` when
+`GOBIN` is unset; add that directory to `PATH` if the check prints nothing.
+
 ## Local setup
 
-nexo drives the multiplexer that owns the current pane. Set up the adapter for
-the backend you use, then install the watcher and the hooks. Key bindings stay
-yours: nexo installs none.
+nexo drives the multiplexer that owns the current pane. Install the adapter for
+your backend. Key bindings stay yours: nexo installs none; a tmux user also
+needs the init line and agent watcher below, while Herdr keeps its native agent
+state and notifications and needs no nexo watcher.
 
 ### tmux
 
-With [TPM](https://github.com/tmux-plugins/tpm), add the plugin to
-`~/.tmux.conf` and press `prefix` + `I`:
+Enable focus events, add the init step, and reload the file after every edit.
+Seen-marking needs focus events:
+
+```tmux
+set -g focus-events on
+```
+
+`nexo tmux init` installs the tmux focus hooks and starts the agent watcher.
+Pick one of these two ways to run it at startup.
+
+With [TPM](https://github.com/tmux-plugins/tpm), add the plugin line and press
+`prefix` + `I`:
 
 ```tmux
 set -g @plugin 'vieitesss/nexo'
 ```
 
-The committed `nexo.tmux` adapter only checks for the binary and runs
-`nexo tmux init`. Without TPM, run the adapter from a checkout, or run the
-binary's init directly:
-
-```sh
-tmux run-shell /path/to/nexo/nexo.tmux
-nexo tmux init --backend=tmux
-```
-
-`nexo tmux init` installs the tmux focus hooks and starts the agent watcher.
-Seen-marking needs focus events, so add this to `~/.tmux.conf`:
+Without TPM, add the init line directly. From a checkout, the committed
+`nexo.tmux` adapter does the same and can be run once with
+`tmux run-shell /path/to/nexo/nexo.tmux`:
 
 ```tmux
-set -g focus-events on
+if-shell 'command -v nexo >/dev/null 2>&1' 'run-shell "nexo tmux init --backend=tmux"'
 ```
 
 Add the bindings you want to `~/.tmux.conf`. `display-popup` needs tmux 3.2 or
@@ -141,6 +153,12 @@ bind-key -T root C-k run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote 
 bind-key -T root C-l run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-l || tmux select-pane -R'
 ```
 
+Apply every edit to the running server:
+
+```sh
+tmux source-file ~/.tmux.conf
+```
+
 See [docs/agents.md](docs/agents.md) for the watcher, the unseen window
 highlight, the glance row, and notification details. The full root-key
 passthrough and clipboard-paste reference is in
@@ -162,8 +180,9 @@ herdr plugin link /path/to/nexo
 
 The manifest provides four TUI actions and popup panes, plus focus hooks for
 `nexo previous`. Herdr's native agent sidebar already lists agent panes, so the
-glance row is tmux-only. Add the plugin actions to Herdr's key configuration if
-desired:
+glance row is tmux-only. To bind the actions, append or merge `[[keys.command]]`
+blocks into the existing `[keys]` configuration in
+`~/.config/herdr/config.toml`. For example:
 
 ```toml
 [[keys.command]]
@@ -177,19 +196,10 @@ key = "prefix+a"
 type = "plugin_action"
 command = "nexo.tui-agents"
 description = "open nexo agents"
-
-[[keys.command]]
-key = "prefix+c"
-type = "plugin_action"
-command = "nexo.tui-containers"
-description = "open nexo containers"
-
-[[keys.command]]
-key = "prefix+p"
-type = "plugin_action"
-command = "nexo.tui-projects"
-description = "open nexo projects"
 ```
+
+The manifest also declares `nexo.tui-containers` and `nexo.tui-projects`; see
+[docs/herdr.md](docs/herdr.md) for the full list.
 
 Reload the configuration after editing it:
 
@@ -208,48 +218,44 @@ remotes and proxy behaviour, is in [docs/remote.md](docs/remote.md).
 
 ### On the local machine
 
-- Add an SSH alias for every remote in `~/.ssh/config` and list the aliases in
-  `[remote].machines`.
+- Install nexo locally, start your own multiplexer, and add an SSH alias for
+  every remote in `~/.ssh/config`.
+- List those aliases in `[remote].machines`. The minimal config in
+  [Configuration](#configuration) shows the `[remote]` and `[remote.backends]`
+  shape.
 - If a remote runs both a Herdr server and tmux, set its kind explicitly in
   `[remote.backends]`. The auto probe picks Herdr whenever a Herdr server is
   running, so agents living in tmux sessions would be missed.
 - `remote.transport` selects the proxy attachment transport: `ssh` by default,
   plus `mosh` and `et`. Listing always uses SSH.
 
-```toml
-paths = ["~/src"]
-
-[remote]
-machines = ["devbox", "gpu1"]
-
-[remote.backends]
-devbox = "tmux"                 # remote runs Herdr and tmux; list tmux
-gpu1 = "herdr"                  # remote runs a Herdr server
-```
-
 ### On each remote machine
 
+- Install nexo using the method above and start that machine's multiplexer.
 - nexo must be on `PATH` for **non-interactive** SSH shells. Put the export in
   a file those shells read, such as `~/.zshenv`, not `~/.zshrc`. Verify with
   `ssh MACHINE 'command -v nexo'`: a working shell prints the path. Use a UTF-8
   locale for those shells too.
-- The remote runs its own multiplexer. For a tmux remote, add focus events and
-  the watcher to that machine's `~/.tmux.conf`:
+- For a tmux remote, add focus events and the init line to that machine's
+  `~/.tmux.conf`, then reload it:
 
   ```tmux
   set -g focus-events on
   if-shell 'command -v nexo >/dev/null 2>&1' 'run-shell "nexo tmux init --backend=tmux"'
   ```
 
+  ```sh
+  ssh MACHINE 'tmux source-file ~/.tmux.conf'
+  ```
+
   The focus hook is required for seen-marking: the local listing reads the
   `seen` flag the remote hook writes. Without it the working/stopped state
   still appears, but `seen` never advances.
-- The remote reads its own `$XDG_CONFIG_HOME/nexo/config.toml`, or
-  `~/.config/nexo/config.toml` when `XDG_CONFIG_HOME` is unset. The main
-  machine's `--config-file` is not forwarded. A remote config only needs
-  `[agents]`, and only when the defaults do not fit; agent processes and
-  working patterns are evaluated on the remote. A remote config never needs a
-  `[remote]` section.
+- A remote config only needs `[agents]`, and only when the defaults do not fit;
+  agent processes and working patterns are evaluated on the remote. It reads
+  its own `$XDG_CONFIG_HOME/nexo/config.toml`, or
+  `~/.config/nexo/config.toml` when `XDG_CONFIG_HOME` is unset, and never a
+  `[remote]` section. The main machine's `--config-file` is not forwarded.
 
 ```toml
 # On the remote, only when the defaults do not fit.
@@ -262,24 +268,41 @@ working-pattern = { pi = "⠋" }
 
 ## Upgrading
 
-After installing a new nexo binary, restart the agent watcher on every machine,
-local and remote. The watcher is a long-running process that keeps the binary
-and the configuration it started with. A new binary does not replace it, and
-`nexo tmux init` starts a new watcher that exits silently while the old one
-still holds the lock.
+On every machine running nexo's tmux watcher, restart it after installing a new
+nexo binary. The watcher is a long-running process that keeps the binary and
+the configuration it started with; a new binary does not replace it, and
+`nexo tmux init` starts a second watcher that exits silently while the old one
+still holds the lock. Restart it after changing `[agents] highlight-color` or
+any `[glance]` key too, because those values are read once when the watcher
+starts. Herdr keeps its native agent state and notifications, so a Herdr-only
+machine needs no nexo watcher restart.
 
-Restart the watcher after changing `[agents] highlight-color` or any `[glance]`
-key too, because those values are read once when the watcher starts.
+On a machine, run this from a shell. The `[n]` keeps `pkill` and `pgrep` from
+matching the command itself, and the loop waits for the old watcher to release
+its lock before the new one starts:
 
 ```sh
-pkill -f 'nexo --backend=tmux agents watch'
+pkill -f '[n]exo --backend=tmux agents watch'
+while pgrep -f '[n]exo --backend=tmux agents watch' >/dev/null; do sleep 0.2; done
 nexo tmux init --backend=tmux
 ```
 
-Run this on the local machine and on each remote machine, either from a shell
-on that machine or over SSH. If you started the watcher with an explicit
-`--config-file`, its command line includes that flag; use a broader pattern
-such as `pkill -f 'nexo.*agents watch'` in that case.
+Over SSH, run the same commands as one remote script:
+
+```sh
+ssh MACHINE "pkill -f '[n]exo --backend=tmux agents watch'; while pgrep -f '[n]exo --backend=tmux agents watch' >/dev/null; do sleep 0.2; done; nexo tmux init --backend=tmux"
+```
+
+If you started the watcher with an explicit `--config-file`, its command line
+includes that flag. Widen the self-non-matching pattern to
+`'[n]exo.*agents watch'` and pass the same path to init, so the restart keeps
+the explicit config:
+
+```sh
+pkill -f '[n]exo.*agents watch'
+while pgrep -f '[n]exo.*agents watch' >/dev/null; do sleep 0.2; done
+nexo --backend=tmux --config-file=/same/path tmux init
+```
 
 ## Configuration
 
@@ -311,22 +334,13 @@ default, and a complete annotated example.
 ## Usage
 
 Running `nexo` with no command prints usage. The TUI entry point accepts an
-optional starting tab; global flags can appear before or after a command:
-
-```console
-nexo
-nexo tui
-nexo tui agents
-nexo --backend=herdr -c ~/.config/nexo/config.toml tui projects
-nexo --backend=tmux --json backend
-nexo --version
-nexo --help
-```
+optional starting tab, and global flags can appear before or after a command.
+See [docs/usage.md](docs/usage.md) for the full command reference and examples.
 
 | Command | Purpose |
 | --- | --- |
 | `nexo tui [agents\|containers\|projects]` | Open the tabbed terminal UI. |
-| `nexo list [--places]` | List project candidates, optionally with open local and remote containers. |
+| `nexo list [--places]` | List project candidates; `--places` adds open local and remote containers, each local one with a screen preview. |
 | `nexo agents [watch\|seen PANE_ID]` | List agent panes, run the watcher, or mark one pane seen. |
 | `nexo previous` | Open the last non-proxy local container. |
 | `nexo remote list\|open\|new\|close\|previous\|paste\|passthrough` | List, open, create, close, and attach to remote containers. |
