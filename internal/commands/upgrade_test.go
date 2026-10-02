@@ -20,8 +20,8 @@ func TestUpgradeAndUpdateAreRegisteredAliases(t *testing.T) {
 	if !ok {
 		t.Fatal("update command is not registered")
 	}
-	if upgrade.Name() != "upgrade" || update.Name() != "update" {
-		t.Fatalf("names = %q and %q", upgrade.Name(), update.Name())
+	if upgrade.Name() != "upgrade" || update.Name() != "upgrade" {
+		t.Fatalf("names = %q and %q, want the canonical upgrade command", upgrade.Name(), update.Name())
 	}
 }
 
@@ -71,7 +71,7 @@ func TestUpgradeDryRunPrintsOneLinePerSelectedMachine(t *testing.T) {
 			return nil, errors.New("unexpected command")
 		}
 	})
-	if err := (upgradeCommand{name: "upgrade"}).Run(context.Background(), Invocation{
+	if err := (upgradeCommand{}).Run(context.Background(), Invocation{
 		Config: config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
 		Runner: fake,
 		Stdout: &output,
@@ -93,7 +93,7 @@ func TestUpgradeReportsFailedMachineAndReturnsError(t *testing.T) {
 		}
 		return nil, errors.New("offline")
 	})
-	err := (upgradeCommand{name: "update"}).Run(context.Background(), Invocation{
+	err := (upgradeCommand{}).Run(context.Background(), Invocation{
 		Config: config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
 		Runner: fake,
 		Stdout: &output,

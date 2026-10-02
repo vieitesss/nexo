@@ -14,20 +14,36 @@ import (
 	upgradeversion "github.com/vieitesss/nexo/internal/upgrade"
 )
 
-type upgradeCommand struct{ name string }
+type upgradeCommand struct{}
 
 func init() {
-	registerBuiltin(func() Command { return upgradeCommand{name: "upgrade"} })
-	registerBuiltin(func() Command { return upgradeCommand{name: "update"} })
+	registerBuiltin(func() Command { return upgradeCommand{} })
 }
 
-func (c upgradeCommand) Name() string { return c.name }
+func (upgradeCommand) Name() string { return "upgrade" }
+
+func (upgradeCommand) Help() Help {
+	return Help{
+		Summary:     "Install a release or nightly on every machine.",
+		Usage:       "nexo upgrade [flags] [VERSION]",
+		Description: "Builds the requested revision on this machine and atomically installs it here and on every configured remote. Without a version it installs the latest release.",
+		Flags: []FlagHelp{
+			{Long: "--version", Value: "VERSION", Description: "Install a specific release tag, such as v1.2.3."},
+			{Long: "--nightly", Description: "Install the current main branch instead of a release."},
+			{Long: "--machine", Value: "ALIAS", Description: "Limit the upgrade to this remote; repeat for several."},
+			{Long: "--local-only", Description: "Upgrade only this machine."},
+			{Long: "--dry-run", Description: "Show the targets and versions without installing."},
+		},
+		Examples: []string{"nexo upgrade", "nexo upgrade --nightly --dry-run", "nexo update --machine devbox v1.2.3"},
+		Aliases:  []string{"update"},
+	}
+}
 
 // upgradeMachineTimeout bounds one machine's probe, build, and copy so an
 // unreachable or stalled target cannot hold back the other result lines.
 const upgradeMachineTimeout = 15 * time.Minute
 
-func (c upgradeCommand) Run(ctx context.Context, invocation Invocation) error {
+func (upgradeCommand) Run(ctx context.Context, invocation Invocation) error {
 	if invocation.Stdout == nil {
 		return errors.New("upgrade requires stdout")
 	}
