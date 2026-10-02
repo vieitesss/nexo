@@ -48,7 +48,7 @@ type OSEnvironment struct{}
 // LookupEnv implements Environment.
 func (OSEnvironment) LookupEnv(key string) (string, bool) { return os.LookupEnv(key) }
 
-// Selection is the result of backend selection.
+// Selection is the result of backend selection and its initialized adapter.
 type Selection struct {
 	Kind         Kind     `json:"backend"`
 	Source       string   `json:"source"`
@@ -76,7 +76,7 @@ type ResolveInput struct {
 	Runner runner.CommandRunner
 }
 
-// Resolve applies flag > config > auto-detection.
+// Resolve applies flag > config > auto-detection and initializes the selected backend.
 func Resolve(ctx context.Context, input ResolveInput) (Selection, error) {
 	if input.Env == nil {
 		input.Env = OSEnvironment{}
@@ -88,13 +88,13 @@ func Resolve(ctx context.Context, input ResolveInput) (Selection, error) {
 			return Selection{}, err
 		}
 		if kind != Auto {
-			return Selection{Kind: kind, Source: "flag", Reason: fmt.Sprintf("selected by --backend=%s", kind)}, nil
+			return newSelection(kind, "flag", fmt.Sprintf("selected by --backend=%s", kind), input.Runner, input.Env), nil
 		}
 		selected, reason, err := detect(ctx, input.Env, input.TTY, input.Runner)
 		if err != nil {
 			return Selection{}, err
 		}
-		return Selection{Kind: selected, Source: "auto-detect", Reason: reason}, nil
+		return newSelection(selected, "auto-detect", reason, input.Runner, input.Env), nil
 	}
 
 	if input.Config.Backend != "" {
@@ -103,7 +103,7 @@ func Resolve(ctx context.Context, input ResolveInput) (Selection, error) {
 			return Selection{}, fmt.Errorf("config backend: %w", err)
 		}
 		if kind != Auto {
-			return Selection{Kind: kind, Source: "config", Reason: fmt.Sprintf("selected by config backend=%s", kind)}, nil
+			return newSelection(kind, "config", fmt.Sprintf("selected by config backend=%s", kind), input.Runner, input.Env), nil
 		}
 	}
 
@@ -111,7 +111,7 @@ func Resolve(ctx context.Context, input ResolveInput) (Selection, error) {
 	if err != nil {
 		return Selection{}, err
 	}
-	return Selection{Kind: selected, Source: "auto-detect", Reason: reason}, nil
+	return newSelection(selected, "auto-detect", reason, input.Runner, input.Env), nil
 }
 
 func detect(ctx context.Context, env Environment, tty string, commandRunner runner.CommandRunner) (Kind, string, error) {
@@ -191,28 +191,34 @@ func tmuxOwnsTTY(ctx context.Context, tty string, commandRunner runner.CommandRu
 	return false, nil
 }
 
-// WithCapabilities attaches the selected backend adapter and reports the
-// capabilities it implements. The adapter itself is passed to commands so a
-// feature can type-assert the small interfaces it needs.
-func (s Selection) WithCapabilities(commandRunner runner.CommandRunner, environments ...Environment) Selection {
+func newSelection(kind Kind, source, reason string, commandRunner runner.CommandRunner, environment Environment) Selection {
+	selection := Selection{
+		Kind:   kind,
+		Source: source,
+		Reason: reason,
+	}
+	return selection.withCapabilities(commandRunner, environment)
+}
+
+// withCapabilities attaches the selected backend adapter and reports its
+// capabilities. Resolution owns this step so every invocation receives one
+// fully initialized selection rather than relying on the caller to complete it.
+func (s Selection) withCapabilities(commandRunner runner.CommandRunner, environment Environment) Selection {
+	if environment == nil {
+		environment = OSEnvironment{}
+	}
 	s.Capabilities = []string{}
 	s.Adapter = nil
 	switch s.Kind {
 	case Tmux:
-		inside := os.Getenv("TMUX") != "" || os.Getenv("TMUX_PANE") != ""
-		if len(environments) > 0 && environments[0] != nil {
-			inside = false
-			if value, ok := environments[0].LookupEnv("TMUX"); ok && value != "" {
-				inside = true
-			}
-			if value, ok := environments[0].LookupEnv("TMUX_PANE"); ok && value != "" {
-				inside = true
-			}
-		}
+		inside, _ := tmuxEnvironment(environment)
 		s.Adapter = tmux.New(commandRunner, inside)
 	case Herdr:
 		s.Adapter = herdr.New(commandRunner)
 	}
 	s.Capabilities = capabilities.Names(s.Adapter)
+	if s.Capabilities == nil {
+		s.Capabilities = []string{}
+	}
 	return s
 }

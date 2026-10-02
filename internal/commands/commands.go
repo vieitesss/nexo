@@ -3,7 +3,6 @@ package commands
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -133,37 +132,4 @@ func (r *Registry) Names() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-type backendCommand struct{}
-
-func init() {
-	registerBuiltin(func() Command { return backendCommand{} })
-}
-
-func (backendCommand) Name() string { return "backend" }
-
-func (backendCommand) Run(_ context.Context, invocation Invocation) error {
-	if invocation.Stdout == nil {
-		return errors.New("backend command requires stdout")
-	}
-	if invocation.Selection.Kind == "" {
-		return errors.New("backend command requires a backend selection")
-	}
-	if invocation.Selection.Capabilities == nil {
-		invocation.Selection.Capabilities = []string{}
-	}
-	if invocation.JSON {
-		encoder := json.NewEncoder(invocation.Stdout)
-		return encoder.Encode(invocation.Selection)
-	}
-	_, err := fmt.Fprintf(invocation.Stdout, "backend: %s\nreason: %s\nsource: %s\ncapabilities: %s\n", invocation.Selection.Kind, invocation.Selection.Reason, invocation.Selection.Source, formatCapabilities(invocation.Selection.Capabilities))
-	return err
-}
-
-func formatCapabilities(names []string) string {
-	if len(names) == 0 {
-		return "none"
-	}
-	return fmt.Sprintf("%v", names)
 }

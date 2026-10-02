@@ -174,7 +174,6 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		writeError(stderr, err)
 		return 2
 	}
-	selection = selection.WithCapabilities(commandRunner, environment)
 	trace.Mark("backend-ready")
 	if configurator, ok := selection.Adapter.(interface {
 		ConfigureRemoteConfig(config.RemoteConfig, string)
