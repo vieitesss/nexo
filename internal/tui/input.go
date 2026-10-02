@@ -429,8 +429,9 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 	case tea.KeyCtrlY:
 		if s.tab == ProjectsTab {
 			if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ProjectKind && current.place.Path != "" {
-				s.form = newDeleteForm(s.deps, s.ctx, current.place.Path)
-				if cmd := s.form.startDeletePreflight(s.deps); cmd != nil {
+				delete := newDeleteForm(s.deps, s.ctx, current.place.Path)
+				s.form = delete.stagedForm
+				if cmd := s.form.startAction(s.deps); cmd != nil {
 					s.actionInFlight = true
 					s.actionGeneration = s.form.generation
 					return inputEffect{rebuild: true, cmd: cmd}

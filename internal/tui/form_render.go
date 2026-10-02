@@ -16,8 +16,8 @@ func overlayForm(lines []string, form *stagedForm, width, height int) []string {
 		return lines
 	}
 	if width <= 4 || height <= 4 {
-		if form.deletePreflightEnabled && form.stage == form.deleteStageIndex() {
-			form.deletePreflightSeen = false
+		if form.viewportHook != nil {
+			form.viewportHook(nil, 0, 0)
 		}
 		return lines
 	}
@@ -26,20 +26,25 @@ func overlayForm(lines []string, form *stagedForm, width, height int) []string {
 	maxBody := max(1, height-4)
 	form.viewportHeight = maxBody
 	form.viewportWidth = contentWidth
-	if form.deletePreflightEnabled && form.stage == form.deleteStageIndex() {
-		maxScroll := max(0, len(body)-maxBody)
-		form.deletePreflightScroll = min(maxScroll, max(0, form.deletePreflightScroll))
-		if len(body) <= maxBody || form.deletePreflightScroll >= maxScroll {
-			form.deletePreflightSeen = true
-		}
+	if form.viewportHook != nil {
+		form.viewportHook(body, maxBody, contentWidth)
 	}
 	if len(body) > maxBody {
 		start := 0
-		if form.deletePreflightEnabled && form.stage == form.deleteStageIndex() {
-			start = form.deletePreflightScroll
+		if form.scrollOffsetHook != nil {
+			if offset, ok := form.scrollOffsetHook(); ok {
+				start = offset
+			} else {
+				// Keep the active field visible on every ordinary stage.
+				for index, line := range body {
+					if strings.HasPrefix(line, "▸ ") {
+						start = max(0, index-maxBody/2)
+						break
+					}
+				}
+			}
 		} else {
-			// Keep the active field visible on every stage, including the
-			// destructive confirmation stage where labels may be long.
+			// Keep the active field visible on every stage, including long labels.
 			for index, line := range body {
 				if strings.HasPrefix(line, "▸ ") {
 					start = max(0, index-maxBody/2)

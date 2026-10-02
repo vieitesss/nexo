@@ -543,7 +543,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.input.form != nil {
-				m.input.form.finishDeletePreflight(msg.plan, msg.err)
+				m.input.form.finishAction(msg)
 			}
 			m.input.actionInFlight = false
 			m.rebuild(false)
