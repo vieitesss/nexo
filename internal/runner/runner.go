@@ -4,10 +4,12 @@ package runner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // CommandRunner runs an external program and returns its standard output.
@@ -46,6 +48,44 @@ func (e *InteractiveError) Error() string {
 
 // Unwrap preserves the process error for errors.Is and errors.As.
 func (e *InteractiveError) Unwrap() error { return e.Err }
+
+// maxDetailBytes bounds the stderr text appended by Detail.
+const maxDetailBytes = 512
+
+// detailedError appends bounded stderr to an underlying error.
+type detailedError struct {
+	err    error
+	detail string
+}
+
+func (e *detailedError) Error() string { return e.err.Error() + ": " + e.detail }
+
+func (e *detailedError) Unwrap() error { return e.err }
+
+// Detail appends a bounded, trimmed summary of the stderr captured by os/exec
+// while preserving the original error for errors.Is and errors.As. The exec
+// runner uses cmd.Output, so command diagnostics live only in
+// exec.ExitError.Stderr; without this they are reported as a bare
+// "exit status 1". A nil error stays nil, and an error without stderr is
+// returned unchanged.
+func Detail(err error) error {
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return err
+	}
+	detail := strings.TrimSpace(string(exitErr.Stderr))
+	if detail == "" {
+		return err
+	}
+	detail = strings.Join(strings.Fields(detail), " ")
+	if len(detail) > maxDetailBytes {
+		detail = detail[:maxDetailBytes] + "..."
+	}
+	return &detailedError{err: err, detail: detail}
+}
 
 // ExecRunner runs commands using os/exec.
 type ExecRunner struct{}
