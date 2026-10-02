@@ -65,6 +65,8 @@ for the settled decisions [docs/adr](docs/adr), and for startup measurements
 > plain `go install` and the other methods below apply; see
 > [docs/release.md](docs/release.md).
 
+Install nexo using one of the methods below, then run the guided setup shown after the install check.
+
 Homebrew, after the first release:
 
 ```sh
@@ -88,183 +90,64 @@ Whichever method you use, confirm the binary resolves before continuing:
 command -v nexo
 ```
 
+Then configure the local machine and its SSH remotes in one reviewed plan:
+
+```sh
+nexo setup
+```
+
 A Go install writes to `$(go env GOBIN)`, or `$(go env GOPATH)/bin` when
 `GOBIN` is unset; add that directory to `PATH` if the check prints nothing.
 
 ## Local setup
 
-nexo drives the multiplexer that owns the current pane. Install the adapter for
-your backend. Key bindings stay yours: nexo installs none; a tmux user also
-needs the init line and agent watcher below, while Herdr keeps its native agent
-state and notifications and needs no nexo watcher.
-
-### tmux
-
-Enable focus events, add the init step, and reload the file after every edit.
-Seen-marking needs focus events:
-
-```tmux
-set -g focus-events on
-```
-
-`nexo tmux init` installs the tmux focus hooks and starts the agent watcher.
-Pick one of these two ways to run it at startup.
-
-With [TPM](https://github.com/tmux-plugins/tpm), add the plugin line and press
-`prefix` + `I`:
-
-```tmux
-set -g @plugin 'vieitesss/nexo'
-```
-
-Without TPM, add the init line directly. From a checkout, the committed
-`nexo.tmux` adapter does the same and can be run once with
-`tmux run-shell /path/to/nexo/nexo.tmux`:
-
-```tmux
-if-shell 'command -v nexo >/dev/null 2>&1' 'run-shell "nexo tmux init --backend=tmux"'
-```
-
-Add the bindings you want to `~/.tmux.conf`. `display-popup` needs tmux 3.2 or
-newer. Change the keys to suit your setup:
-
-```tmux
-# TUI: all tabs on Ctrl-S, the agent navigator on prefix a.
-bind -n C-s display-popup -E -B -w 100% -h 100% "nexo tui"
-bind a display-popup -E -B -w 100% -h 100% "nexo tui agents"
-
-# Toggle the glance row that lists agent panes.
-bind -n M-g run-shell 'nexo --backend=tmux tmux glance toggle'
-
-# Last local container, and toggle between local and remote machines.
-bind-key -n M-o run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux previous'
-bind-key -n M-p run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote previous'
-
-# Paste a clipboard image into a remote proxy. run-shell does not inherit
-# TMUX_PANE, so the binding passes it explicitly.
-bind-key -T root C-v run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote paste C-v'
-
-# Forward root-table navigation keys while a proxy is attached. Outside a
-# proxy nexo exits without injecting keys, so the binding's `||` fallback runs
-# the original local action.
-bind-key -T root C-h run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-h || tmux select-pane -L'
-bind-key -T root C-j run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-j || tmux select-pane -D'
-bind-key -T root C-k run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-k || tmux select-pane -U'
-bind-key -T root C-l run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-l || tmux select-pane -R'
-```
-
-Apply every edit to the running server:
+On a fresh machine, the guided path is one command:
 
 ```sh
-tmux source-file ~/.tmux.conf
+nexo setup
 ```
 
-See [docs/agents.md](docs/agents.md) for the watcher, the unseen window
-highlight, the glance row, and notification details. The full root-key
-passthrough and clipboard-paste reference is in
-[docs/remote.md](docs/remote.md).
+It detects the multiplexer owning the current pane, writes the shared config,
+installs or reloads the selected adapter, and starts the tmux watcher. Use
+`nexo setup --check` to print the local and remote checklist. In scripts use
+`--yes`, `--dry-run`, `--local-only`, or repeat `--machine ALIAS`; setup never
+prompts when stdin is not a TTY. The hand-operated reference is in
+[docs/setup.md](docs/setup.md).
 
-### Herdr
-
-Install the binary first, then the plugin (Herdr 0.9.0 or newer):
-
-```sh
-herdr plugin install vieitesss/nexo
-```
-
-For a checkout under development, link the manifest instead:
-
-```sh
-herdr plugin link /path/to/nexo
-```
-
-The manifest provides four TUI actions and popup panes, plus focus hooks for
-`nexo previous`. Herdr's native agent sidebar already lists agent panes, so the
-glance row is tmux-only. To bind the actions, append or merge `[[keys.command]]`
-blocks into the existing `[keys]` configuration in
-`~/.config/herdr/config.toml`. For example:
-
-```toml
-[[keys.command]]
-key = "ctrl+s"
-type = "plugin_action"
-command = "nexo.tui"
-description = "open nexo TUI"
-
-[[keys.command]]
-key = "prefix+a"
-type = "plugin_action"
-command = "nexo.tui-agents"
-description = "open nexo agents"
-```
-
-The manifest also declares `nexo.tui-containers` and `nexo.tui-projects`; see
-[docs/herdr.md](docs/herdr.md) for the full list.
-
-Reload the configuration after editing it:
-
-```sh
-herdr server reload-config
-```
-
-See [docs/herdr.md](docs/herdr.md) for the complete adapter setup and
-[docs/remote.md](docs/remote.md) for native Herdr remote containers.
+The setup wizard configures the adapter owned by the current pane. It keeps
+bindings opt-in: choose them during setup or add your own later. tmux accepts
+only tmux key names such as `C-s`, `a`, `F1`, or `Enter`; the wizard rejects
+invalid names and every spelling of Ctrl-Space, which is the shared multiplexer
+prefix. Herdr uses its native agent state and notifications and needs no nexo
+watcher. See
+[docs/setup.md](docs/setup.md) for manual tmux/Herdr instructions,
+[docs/agents.md](docs/agents.md) for watcher details, and
+[docs/remote.md](docs/remote.md) for remote bindings and proxy controls.
 
 ## Remote machines
 
-Each remote machine runs its own multiplexer and a copy of nexo that the main
-machine calls over SSH. Set up both sides. The full reference, including Herdr
-remotes and proxy behaviour, is in [docs/remote.md](docs/remote.md).
+`nexo setup` also configures every selected SSH alias from one place. It probes
+machines in parallel, installs a matching binary, makes it visible to
+non-interactive shells, checks UTF-8, configures the remote multiplexer, and
+records `[remote].machines` and `[remote.backends]`. A different-platform
+remote is built from the running binary's tagged revision or commit with the
+local Go toolchain; an unversioned development binary refuses that remote.
+Select a subset with
+`nexo setup --machine devbox --machine gpu1`; use `--local-only` to skip SSH.
+The full hand-operated reference, including Herdr remotes and proxy
+behaviour, is in [docs/setup.md](docs/setup.md) and [docs/remote.md](docs/remote.md).
 
-### On the local machine
+The wizard selects SSH aliases, installs or cross-builds nexo, repairs the
+non-interactive PATH and locale, configures the chosen remote backend, and
+records it in `[remote.backends]`. If both tmux and a Herdr server are running,
+setup asks for that machine's backend in a TTY; in scripts, set the config key
+first. Use `--fix-locale` only after reviewing the offered UTF-8 locale.
 
-- Install nexo locally, start your own multiplexer, and add an SSH alias for
-  every remote in `~/.ssh/config`.
-- List those aliases in `[remote].machines`. The minimal config in
-  [Configuration](#configuration) shows the `[remote]` and `[remote.backends]`
-  shape.
-- If a remote runs both a Herdr server and tmux, set its kind explicitly in
-  `[remote.backends]`. The auto probe picks Herdr whenever a Herdr server is
-  running, so agents living in tmux sessions would be missed.
-- `remote.transport` selects the proxy attachment transport: `ssh` by default,
-  plus `mosh` and `et`. Listing always uses SSH.
-
-### On each remote machine
-
-- Install nexo using the method above and start that machine's multiplexer.
-- nexo must be on `PATH` for **non-interactive** SSH shells. Put the export in
-  a file those shells read, such as `~/.zshenv`, not `~/.zshrc`. Verify with
-  `ssh MACHINE 'command -v nexo'`: a working shell prints the path. Use a UTF-8
-  locale for those shells too.
-- For a tmux remote, add focus events and the init line to that machine's
-  `~/.tmux.conf`, then reload it:
-
-  ```tmux
-  set -g focus-events on
-  if-shell 'command -v nexo >/dev/null 2>&1' 'run-shell "nexo tmux init --backend=tmux"'
-  ```
-
-  ```sh
-  ssh MACHINE 'tmux source-file ~/.tmux.conf'
-  ```
-
-  The focus hook is required for seen-marking: the local listing reads the
-  `seen` flag the remote hook writes. Without it the working/stopped state
-  still appears, but `seen` never advances.
-- A remote config only needs `[agents]`, and only when the defaults do not fit;
-  agent processes and working patterns are evaluated on the remote. It reads
-  its own `$XDG_CONFIG_HOME/nexo/config.toml`, or
-  `~/.config/nexo/config.toml` when `XDG_CONFIG_HOME` is unset, and never a
-  `[remote]` section. The main machine's `--config-file` is not forwarded.
-
-```toml
-# On the remote, only when the defaults do not fit.
-[agents]
-processes = ["pi", "claude"]
-idle-seconds = 3
-poll-interval = 2
-working-pattern = { pi = "⠋" }
-```
+For manual provisioning, remote startup files, Herdr remotes, backend choice,
+proxy transports, and optional remote `[agents]` configuration, use
+[docs/setup.md](docs/setup.md) and [docs/remote.md](docs/remote.md). The
+wizard is the recommended path and `nexo setup --check` is the read-only
+verification command.
 
 ## Upgrading
 

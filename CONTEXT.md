@@ -176,6 +176,25 @@ by most recent backend activity. A backend without a native activity timestamp
 uses deterministic container-name order within its activity bucket; Herdr is
 currently such a backend.
 
+### Setup
+
+**Setup**:
+The reviewed first-run workflow that configures this machine and selected
+machines reachable through SSH. It plans all file changes before applying one
+confirmed plan and can run read-only in dry-run or check mode.
+
+**Managed block**:
+The portion of a user-owned startup or backend file owned by nexo. Setup
+replaces only this block and leaves surrounding user content alone; the shared
+TOML configuration is merged semantically instead of being wrapped in a
+managed block.
+
+**Remote backend choice**:
+The one backend a remote machine uses for nexo's remote operations. A persisted
+`[remote.backends]` value wins; when both tmux and Herdr are running and no
+choice is persisted, setup asks in a TTY and refuses an unprompted choice in
+non-interactive use.
+
 ### Distribution
 
 **Install method**:

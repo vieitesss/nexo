@@ -10,6 +10,7 @@ Commands:
   open                       Open a discovered project candidate.
   previous                   Open the last non-proxy local container.
   remote                     List and operate on containers on remote machines.
+  setup                      Configure nexo on this machine and its remotes.
   tmux                       Install and control the tmux adapter.
   tui                        Open the tabbed terminal UI.
   upgrade (aliases: update)  Install a release or nightly on every machine.

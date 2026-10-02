@@ -12,6 +12,7 @@ before or after a command, so `nexo --backend=herdr tui projects` and
 
 | Command | Purpose |
 | --- | --- |
+| `nexo setup` | Plan and configure this machine and selected SSH machines; use `--check`, `--dry-run`, `--local-only`, `--machine`, `--yes`, or `--fix-locale`. |
 | `nexo backend` | Print the selected backend and its capabilities; add `--json` for structured output. |
 | `nexo list` | List configured project candidates; use `--places` to include local and configured remote containers, each local container with a screen preview. |
 | `nexo tui [agents\|containers\|projects]` | Render the TUI in the terminal supplied by your binding. With no tab, open Agents for unseen-stopped agents, otherwise Containers. |
@@ -50,6 +51,8 @@ nexo --backend=herdr -c ~/.config/nexo/config.toml tui projects
 nexo --backend=tmux --json backend
 nexo --version
 nexo --help
+nexo setup --dry-run --local-only
+nexo setup --check
 
 # Discover projects as a script-friendly JSON array.
 nexo --backend=tmux --json list
@@ -101,10 +104,10 @@ nexo --backend=tmux worktree extract --return-branch main \
 
 ## Key bindings
 
-nexo installs no key bindings. The local setup in the README has copy-paste
-tmux bindings for the TUI, the glance toggle, `previous`, `remote previous`,
-`remote paste`, and root-key passthrough. The complete binding reference and
-the paste and passthrough details are in [remote.md](remote.md). The TUI's picker
+nexo installs no key bindings. The setup wizard offers optional bindings;
+tmux uses names such as `C-s` and `a`, while Herdr uses its native key syntax.
+The complete binding reference and the paste and passthrough details are in
+[remote.md](remote.md). The TUI's picker
 keys are in [tui.md](tui.md).
 
 ## Deletion safety

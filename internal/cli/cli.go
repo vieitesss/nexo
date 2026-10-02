@@ -204,6 +204,7 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		Stdout:       stdout,
 		Stderr:       stderr,
 		Stdin:        os.Stdin,
+		TTY:          tty,
 		StartupTrace: trace,
 		JSON:         options.JSON,
 		Args:         options.Args,

@@ -354,6 +354,19 @@ restoring that branch, and output failures perform the same extraction-aware
 rollback. Recovery uses a bounded context independent of caller cancellation;
 cleanup errors are returned rather than hidden.
 
+## Guided setup
+
+Use `nexo setup` for first-run configuration of the local backend and selected
+SSH machines. It plans managed startup blocks and semantic TOML merges before
+one confirmation; `--dry-run` and `--check` are read-only, and a non-TTY run
+never prompts. Use `--local-only`, repeat `--machine ALIAS`, or `--yes` to make
+scope explicit. `--fix-locale` repairs a remote only after an available UTF-8
+locale is shown. If both tmux and Herdr run on a remote, persist
+`[remote.backends].ALIAS` or answer the per-machine question in a TTY; setup
+never guesses in non-interactive mode. tmux binding suggestions are `C-s` and
+`a`, not the Ctrl-Space prefix. See [docs/setup.md](../../docs/setup.md) for
+manual backend and remote provisioning.
+
 ## Upgrade and update
 
 `nexo upgrade` and `nexo update` are identical text commands. They resolve the
