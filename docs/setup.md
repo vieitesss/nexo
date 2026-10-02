@@ -78,6 +78,54 @@ herdr plugin install vieitesss/nexo
 herdr server reload-config
 ```
 
-Keep key bindings opt-in. If you add the README examples, check for an
-existing binding first. Remote machines need a UTF-8 locale and the same
-multiplexer setup; `nexo setup --check` is the preferred verification.
+Keep key bindings opt-in. tmux key names are tokens such as `C-s` (root
+key table) and `a` (the prefix table); never use the Ctrl-Space prefix itself.
+If you add bindings, check for an existing binding first.
+
+## Manual remote provisioning
+
+When the wizard cannot be used, configure each SSH alias without an
+interactive login. The command must see nexo on the non-interactive PATH:
+
+```sh
+ssh MACHINE 'command -v nexo'
+ssh MACHINE 'locale charmap'
+```
+
+For zsh put the export in `~/.zshenv`; bash commonly uses `~/.bashrc` and
+fish uses `~/.config/fish/config.fish`:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+A remote tmux backend needs focus events and the startup adapter in
+`~/.tmux.conf`, then a reload:
+
+```tmux
+set -g focus-events on
+if-shell 'command -v nexo >/dev/null 2>&1' 'run-shell "nexo tmux init --backend=tmux"'
+```
+
+```sh
+ssh MACHINE 'tmux source-file ~/.tmux.conf'
+ssh MACHINE 'nexo tmux init --backend=tmux'
+```
+
+A Herdr backend needs Herdr 0.9.0 or newer, the plugin, and a server reload:
+
+```sh
+ssh MACHINE 'herdr plugin install vieitesss/nexo'
+ssh MACHINE 'herdr server reload-config'
+```
+
+If both backends run on one machine, persist the answer rather than relying on
+a probe:
+
+```toml
+[remote.backends]
+MACHINE = "tmux"
+```
+
+A remote nexo config contains only `[agents]`; `[remote]` is local-machine
+configuration. `docs/remote.md` covers proxy transport and remote bindings.
