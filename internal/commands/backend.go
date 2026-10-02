@@ -14,6 +14,9 @@ func init() {
 }
 
 func (backendCommand) Name() string { return "backend" }
+func (backendCommand) Help() Help {
+	return Help{Summary: "Print the selected backend and its capabilities.", Usage: "nexo backend", Examples: []string{"nexo --json backend"}}
+}
 
 func (backendCommand) Run(_ context.Context, invocation Invocation) error {
 	if invocation.Stdout == nil {

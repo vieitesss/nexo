@@ -14,10 +14,20 @@ import (
 	"github.com/vieitesss/nexo/internal/proxy"
 )
 
+func parseRemoteAttachArgs(args []string) (bool, error) {
+	if len(args) == 2 && args[1] == "--from-env" {
+		return true, nil
+	}
+	if len(args) != 3 || args[1] == "--from-env" || args[2] == "--from-env" {
+		return false, errors.New("remote attach requires MACHINE CONTAINER or --from-env")
+	}
+	return false, nil
+}
+
 func runRemoteAttach(ctx context.Context, invocation Invocation) error {
-	fromEnv := len(invocation.Args) == 2 && invocation.Args[1] == "--from-env"
-	if !fromEnv && len(invocation.Args) != 3 {
-		return errors.New("remote attach requires MACHINE CONTAINER")
+	fromEnv, err := parseRemoteAttachArgs(invocation.Args)
+	if err != nil {
+		return UsageError{Err: err}
 	}
 	if fromEnv {
 		if invocation.Selection.Kind != backend.Herdr {

@@ -1,0 +1,12 @@
+Usage: nexo tmux <subcommand>
+Install and control the tmux adapter.
+
+Subcommands:
+  glance  Show, hide, or toggle the agent glance row.
+  init    Install focus hooks and start the agent watcher.
+
+Examples:
+  nexo tmux init
+  nexo tmux glance toggle
+
+Run 'nexo tmux <subcommand> --help' for more.

@@ -314,9 +314,12 @@ default, and a complete annotated example.
 
 ## Usage
 
-Running `nexo` with no command prints usage. The TUI entry point accepts an
-optional starting tab, and global flags can appear before or after a command.
-See [docs/usage.md](docs/usage.md) for the full command reference and examples.
+Running `nexo` with no command prints usage. Use `nexo --help` for the
+command table and global flags, or `nexo <command> --help` (and
+`nexo help <command>`) for a command's subcommands, flags, and examples. The
+TUI entry point accepts an optional starting tab, and global flags can appear
+before or after a command. See [docs/usage.md](docs/usage.md) for the full
+command reference and examples.
 
 | Command | Purpose |
 | --- | --- |

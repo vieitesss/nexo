@@ -36,10 +36,16 @@ func init() {
 }
 
 func (worktreeCommand) Name() string { return "worktree" }
+func (worktreeCommand) Help() Help {
+	return Help{Summary: "Create or extract Git worktrees.", Usage: "nexo worktree <subcommand>", Subcommands: []SubcommandHelp{
+		{Name: "create", Summary: "Create and open a Git worktree.", Usage: "nexo worktree create [flags] REPO BRANCH DESTINATION", Flags: []FlagHelp{{Long: "--add-parent", Description: "Add the destination parent to project paths."}, {Long: "--new-branch", Description: "Create the branch when it does not exist."}, {Long: "--no-focus", Description: "Open without switching to the new container."}}},
+		{Name: "extract", Summary: "Move a checkout's branch into a new worktree.", Usage: "nexo worktree extract [flags] REPO DESTINATION", Flags: []FlagHelp{{Long: "--add-parent", Description: "Add the destination parent to project paths."}, {Long: "--no-focus", Description: "Open without switching to the new container."}, {Long: "--return-branch", Value: "BRANCH", Description: "Choose the branch left checked out in the original repository."}}},
+	}, Examples: []string{"nexo worktree create --new-branch ~/src/api feature/api ~/worktrees/api", "nexo worktree extract --return-branch main ~/src/api ~/worktrees/api"}}
+}
 
 func (worktreeCommand) Run(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) == 0 {
-		return errors.New("worktree requires the create or extract subcommand")
+		return UsageError{Err: errors.New("worktree requires the create or extract subcommand")}
 	}
 	switch invocation.Args[0] {
 	case "create":
@@ -47,14 +53,14 @@ func (worktreeCommand) Run(ctx context.Context, invocation Invocation) error {
 	case "extract":
 		return runWorktreeExtract(ctx, invocation)
 	default:
-		return fmt.Errorf("unknown worktree subcommand %q", invocation.Args[0])
+		return UsageError{Err: fmt.Errorf("unknown worktree subcommand %q", invocation.Args[0])}
 	}
 }
 
 func runWorktreeCreate(ctx context.Context, invocation Invocation) error {
 	parsed, err := parseWorktreeCreateArgs(invocation.Args)
 	if err != nil {
-		return err
+		return UsageError{Err: err}
 	}
 	if err := invocation.Selection.Require(); err != nil {
 		return err
@@ -91,7 +97,7 @@ func runWorktreeCreate(ctx context.Context, invocation Invocation) error {
 func runWorktreeExtract(ctx context.Context, invocation Invocation) error {
 	parsed, err := parseWorktreeExtractArgs(invocation.Args)
 	if err != nil {
-		return err
+		return UsageError{Err: err}
 	}
 	if err := invocation.Selection.Require(); err != nil {
 		return err

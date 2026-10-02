@@ -11,7 +11,7 @@ import (
 
 func runRemotePrevious(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) != 1 {
-		return errors.New("remote previous accepts no arguments")
+		return UsageError{Err: errors.New("remote previous accepts no arguments")}
 	}
 	proxy, ok := invocation.Adapter.(capabilities.RemoteProxy)
 	if !ok {

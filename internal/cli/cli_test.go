@@ -93,6 +93,9 @@ type captureCommand struct {
 }
 
 func (captureCommand) Name() string { return "capture" }
+func (captureCommand) Help() commands.Help {
+	return commands.Help{Summary: "Capture an invocation.", Usage: "nexo capture"}
+}
 
 func (c *captureCommand) Run(_ context.Context, invocation commands.Invocation) error {
 	c.invocation = invocation

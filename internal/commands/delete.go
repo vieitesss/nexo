@@ -21,6 +21,9 @@ type deleteArgs struct {
 
 func init()                        { registerBuiltin(func() Command { return deleteCommand{} }) }
 func (deleteCommand) Name() string { return "delete" }
+func (deleteCommand) Help() Help {
+	return Help{Summary: "Preflight and delete a project candidate.", Usage: "nexo delete [flags] PATH", Flags: []FlagHelp{{Long: "--dry-run", Description: "Preflight without mutating anything."}, {Long: "--force", Description: "Accept warnings that are safe to override."}, {Long: "--permanent", Description: "Delete permanently instead of moving to trash."}}, Examples: []string{"nexo delete --dry-run ~/src/repo", "nexo delete --force ~/src/repo"}}
+}
 
 func (deleteCommand) Run(ctx context.Context, invocation Invocation) error {
 	parsed, err := parseDeleteArgs(invocation.Args)

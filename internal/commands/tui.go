@@ -32,17 +32,20 @@ var runTabbedTUI = tui.Run
 
 func init()                     { registerBuiltin(func() Command { return tuiCommand{} }) }
 func (tuiCommand) Name() string { return "tui" }
+func (tuiCommand) Help() Help {
+	return Help{Summary: "Open the tabbed terminal UI.", Usage: "nexo tui [agents|containers|projects]", Examples: []string{"nexo tui", "nexo tui projects"}}
+}
 
 func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
+	tab, err := tuiTab(invocation.Args)
+	if err != nil {
+		return err
+	}
 	if err := invocation.Selection.Require(); err != nil {
 		return err
 	}
 	if configurable, ok := invocation.Adapter.(capabilities.AgentConfigurator); ok {
 		configurable.ConfigureAgents(invocation.Config.Agents)
-	}
-	tab, err := tuiTab(invocation.Args)
-	if err != nil {
-		return err
 	}
 	var traceBuffer bytes.Buffer
 	trace := invocation.StartupTrace
@@ -287,7 +290,7 @@ func tuiDependencies(ctx context.Context, invocation Invocation) (tui.Deps, erro
 // agent snapshot without a duplicate source read.
 func tuiTab(args []string) (string, error) {
 	if len(args) > 1 {
-		return "", UsageError{Err: fmt.Errorf("usage: nexo tui [agents|containers|projects]")}
+		return "", UsageError{Err: fmt.Errorf("tui accepts at most one tab (agents, containers, or projects)")}
 	}
 	if len(args) == 0 {
 		return "", nil

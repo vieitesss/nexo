@@ -64,12 +64,14 @@ func (e HandledError) Error() string { return e.Reason }
 // Command is a registered nexo subcommand.
 type Command interface {
 	Name() string
+	Help() Help
 	Run(context.Context, Invocation) error
 }
 
 // Registry maps command names to their implementations.
 type Registry struct {
 	commands map[string]Command
+	aliases  map[string]string
 }
 
 var builtinFactories []func() Command
@@ -84,11 +86,14 @@ func registerBuiltin(factory func() Command) {
 // NewRegistry returns the foundation registry. Feature tasks register their
 // own command implementation in the file that owns it.
 func NewRegistry() *Registry {
-	registry := &Registry{commands: make(map[string]Command)}
+	registry := &Registry{commands: make(map[string]Command), aliases: make(map[string]string)}
 	for _, factory := range builtinFactories {
 		if err := registry.Register(factory()); err != nil {
 			panic(fmt.Sprintf("register builtin command: %v", err))
 		}
+	}
+	if err := validateHelp(registry); err != nil {
+		panic(fmt.Sprintf("validate builtin help: %v", err))
 	}
 	return registry
 }
@@ -102,19 +107,64 @@ func (r *Registry) Register(command Command) error {
 	if name == "" {
 		return errors.New("cannot register a command without a name")
 	}
-	if r.commands == nil {
-		r.commands = make(map[string]Command)
+	metadata, ok := commandHelp(command)
+	if !ok {
+		return fmt.Errorf("command %q has no help metadata", name)
+	}
+	if err := validateCommandHelp(name, metadata); err != nil {
+		return err
 	}
 	if _, exists := r.commands[name]; exists {
 		return fmt.Errorf("command %q is already registered", name)
 	}
+	if _, exists := r.aliases[name]; exists {
+		return fmt.Errorf("command name %q conflicts with an existing alias", name)
+	}
+	seenAliases := make(map[string]struct{}, len(metadata.Aliases))
+	for _, alias := range metadata.Aliases {
+		if alias == name {
+			continue
+		}
+		if alias == "" {
+			return fmt.Errorf("command %q has an empty alias", name)
+		}
+		if _, exists := seenAliases[alias]; exists {
+			return fmt.Errorf("command alias %q is repeated", alias)
+		}
+		seenAliases[alias] = struct{}{}
+		if _, exists := r.commands[alias]; exists {
+			return fmt.Errorf("command alias %q is already registered", alias)
+		}
+		if _, exists := r.aliases[alias]; exists {
+			return fmt.Errorf("command alias %q is already registered", alias)
+		}
+	}
+	if r.commands == nil {
+		r.commands = make(map[string]Command)
+	}
+	if r.aliases == nil {
+		r.aliases = make(map[string]string)
+	}
 	r.commands[name] = command
+	for _, alias := range metadata.Aliases {
+		if alias != name {
+			r.aliases[alias] = name
+		}
+	}
 	return nil
 }
 
 // Lookup finds a command by its subcommand name.
 func (r *Registry) Lookup(name string) (Command, bool) {
 	command, ok := r.commands[name]
+	if ok {
+		return command, true
+	}
+	canonical, ok := r.aliases[name]
+	if !ok {
+		return nil, false
+	}
+	command, ok = r.commands[canonical]
 	return command, ok
 }
 

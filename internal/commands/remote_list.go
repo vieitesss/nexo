@@ -15,7 +15,7 @@ func runRemoteList(ctx context.Context, invocation Invocation) error {
 		return errors.New("remote list requires stdout")
 	}
 	if len(invocation.Args) != 1 {
-		return fmt.Errorf("remote list accepts no arguments")
+		return UsageError{Err: fmt.Errorf("remote list accepts no arguments")}
 	}
 	orchestrator := newRemoteOrchestrator(invocation, nil)
 	results := orchestrator.ListWithAgents(ctx, invocation.Config.Remote.ConfiguredMachines())

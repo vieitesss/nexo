@@ -17,27 +17,48 @@ func init() {
 }
 
 func (tmuxCommand) Name() string { return "tmux" }
+func (tmuxCommand) Help() Help {
+	return Help{Summary: "Install and control the tmux adapter.", Usage: "nexo tmux <subcommand>", Subcommands: []SubcommandHelp{
+		{Name: "glance", Summary: "Show, hide, or toggle the agent glance row.", Usage: "nexo tmux glance <action>", Subcommands: []SubcommandHelp{
+			{Name: "on", Summary: "Show the agent glance row.", Usage: "nexo tmux glance on"},
+			{Name: "off", Summary: "Hide the agent glance row.", Usage: "nexo tmux glance off"},
+			{Name: "toggle", Summary: "Toggle the agent glance row.", Usage: "nexo tmux glance toggle"},
+		}},
+		{Name: "init", Summary: "Install focus hooks and start the agent watcher.", Usage: "nexo tmux init"},
+	}, Examples: []string{"nexo tmux init", "nexo tmux glance toggle"}}
+}
 
 func (tmuxCommand) Run(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) == 0 {
-		return fmt.Errorf("usage: nexo tmux init|glance on|off|toggle")
+		return UsageError{Err: errors.New("tmux requires the init or glance subcommand")}
+	}
+	// Validate command syntax before checking the selected backend. A malformed
+	// invocation is a usage error even when the backend cannot run tmux.
+	switch invocation.Args[0] {
+	case "init":
+		if len(invocation.Args) != 1 {
+			return UsageError{Err: errors.New("tmux init accepts no arguments")}
+		}
+	case "glance":
+		if len(invocation.Args) != 2 {
+			return UsageError{Err: errors.New("tmux glance requires on, off, or toggle")}
+		}
+		if _, err := tmuxbackend.ParseGlanceAction(invocation.Args[1]); err != nil {
+			return UsageError{Err: err}
+		}
+	default:
+		return UsageError{Err: fmt.Errorf("unknown tmux command %q", invocation.Args[0])}
 	}
 	if invocation.Selection.Kind != backend.Tmux {
 		return errors.New("tmux commands require the tmux backend")
 	}
 	switch invocation.Args[0] {
 	case "init":
-		if len(invocation.Args) != 1 {
-			return fmt.Errorf("usage: nexo tmux init")
-		}
 		return runTmuxInit(ctx, invocation)
 	case "glance":
-		if len(invocation.Args) != 2 {
-			return fmt.Errorf("usage: nexo tmux glance on|off|toggle")
-		}
 		return runTmuxGlance(ctx, invocation)
 	default:
-		return fmt.Errorf("unknown tmux command %q", invocation.Args[0])
+		panic("tmux syntax validated above")
 	}
 }
 

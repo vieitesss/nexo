@@ -3,17 +3,18 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
 func runRemoteOpen(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) != 2 {
-		return errors.New("remote open requires MACHINE/CONTAINER")
+		return UsageError{Err: errors.New("remote open requires MACHINE/CONTAINER")}
 	}
 	target, err := proxyidentity.ParseTarget(invocation.Args[1])
 	if err != nil {
-		return err
+		return UsageError{Err: fmt.Errorf("remote open requires MACHINE/CONTAINER: %w", err)}
 	}
 	machine, container := target.Machine, target.Container
 	if err := invocation.Config.Remote.ValidateMachine(machine); err != nil {
