@@ -36,7 +36,7 @@ func cloneFormValidation(deps Deps) func(*stagedForm) formValidation {
 	return func(form *stagedForm) formValidation {
 		protocol := strings.ToLower(strings.TrimSpace(formValue(form, "protocol")))
 		source := formValue(form, "source")
-		prefix := formValue(form, "prefix")
+		prefix := strings.TrimSpace(formValue(form, "prefix"))
 		result := formValidation{Values: map[string]string{}}
 		if protocol != config.CloneProtocolSSH && protocol != config.CloneProtocolHTTPS {
 			result.Error = "protocol must be ssh or https"
@@ -51,8 +51,8 @@ func cloneFormValidation(deps Deps) func(*stagedForm) formValidation {
 		defaults := deps.CloneConfig.WithDefaults()
 		if prefix == "" || (protocol == config.CloneProtocolHTTPS && prefix == config.DefaultSSHPrefix) || (protocol == config.CloneProtocolSSH && prefix == config.DefaultHTTPSPrefix) {
 			prefix = defaults.Prefix(protocol)
-			result.Values["prefix"] = prefix
 		}
+		result.Values["prefix"] = prefix
 		if form.stage == 0 {
 			return result
 		}

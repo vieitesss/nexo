@@ -82,6 +82,50 @@ func TestCloneFormKeepsInlineDestinationError(t *testing.T) {
 	}
 }
 
+func TestCloneFormNormalizesWhitespacePrefixBeforeDefaultSelection(t *testing.T) {
+	form := newCloneForm(Deps{}, context.Background())
+	for stageIndex := range form.stages {
+		for fieldIndex := range form.stages[stageIndex].Fields {
+			field := &form.stages[stageIndex].Fields[fieldIndex]
+			switch field.ID {
+			case "source":
+				field.Value = "owner/repo"
+			case "prefix":
+				field.Value = "   "
+			}
+		}
+	}
+	if !form.applyValidation() {
+		t.Fatalf("validation error = %q", form.stageError)
+	}
+	if got := formValue(form, "prefix"); got != "git@github.com:" {
+		t.Fatalf("prefix = %q, want configured SSH default", got)
+	}
+}
+
+func TestCloneFormReplacesOppositeProtocolDefaultAfterWhitespace(t *testing.T) {
+	form := newCloneForm(Deps{}, context.Background())
+	for stageIndex := range form.stages {
+		for fieldIndex := range form.stages[stageIndex].Fields {
+			field := &form.stages[stageIndex].Fields[fieldIndex]
+			switch field.ID {
+			case "protocol":
+				field.Value = "https"
+			case "source":
+				field.Value = "owner/repo"
+			case "prefix":
+				field.Value = "  git@github.com:  "
+			}
+		}
+	}
+	if !form.applyValidation() {
+		t.Fatalf("validation error = %q", form.stageError)
+	}
+	if got := formValue(form, "prefix"); got != "https://github.com/" {
+		t.Fatalf("prefix = %q, want configured HTTPS default", got)
+	}
+}
+
 func mkdirForTUITest(path string) error {
 	return os.MkdirAll(path, 0o755)
 }
