@@ -62,6 +62,16 @@ func TestAllocateGlanceIndex(t *testing.T) {
 			want:         1,
 		},
 		{
+			name:         "uses tmux 3.7's built-in pane and session rows",
+			globalStatus: "on",
+			formats: map[int]glanceOption{
+				0: {Present: true, Value: "main"},
+				1: {Present: true, Value: tmuxStatusFormat1PaneListDefault},
+				2: {Present: true, Value: tmuxStatusFormat2SessionListDefault},
+			},
+			want: 1,
+		},
+		{
 			name:         "skips a hidden custom row",
 			globalStatus: "on",
 			formats:      map[int]glanceOption{0: {Present: true, Value: "main"}, 1: {Present: true, Value: "USER-ROW"}},

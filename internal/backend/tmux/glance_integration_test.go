@@ -114,6 +114,9 @@ func TestTmuxGlancePreservesACustomSecondRow(t *testing.T) {
 		t.Fatalf("set custom row: %v: %s", err, output)
 	}
 
+	// tmux 3.7 ships a default for row 2; older versions leave it unset.
+	originalRow2 := readGlanceOption(t, runTmux, "status-format[2]")
+
 	source := NewAgentSource(throwawayRunner(server))
 	setStateDir(source, t.TempDir())
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}})
@@ -139,8 +142,8 @@ func TestTmuxGlancePreservesACustomSecondRow(t *testing.T) {
 	if got := readGlanceOption(t, runTmux, "status-format[1]"); got != "USER-ROW" {
 		t.Fatalf("status-format[1] after off = %q, want the custom row", got)
 	}
-	if got := readGlanceOption(t, runTmux, "status-format[2]"); got != "" {
-		t.Fatalf("status-format[2] after off = %q, want unset", got)
+	if got := readGlanceOption(t, runTmux, "status-format[2]"); got != originalRow2 {
+		t.Fatalf("status-format[2] after off = %q, want %q", got, originalRow2)
 	}
 }
 
@@ -165,6 +168,9 @@ func TestTmuxGlanceSkipsAHiddenCustomRow(t *testing.T) {
 	if output, err := runTmux("set-option", "-g", "status-format[1]", "USER-ROW"); err != nil {
 		t.Fatalf("set hidden custom row: %v: %s", err, output)
 	}
+
+	// tmux 3.7 ships a default for row 2; older versions leave it unset.
+	originalRow2 := readGlanceOption(t, runTmux, "status-format[2]")
 
 	source := NewAgentSource(throwawayRunner(server))
 	setStateDir(source, t.TempDir())
@@ -191,8 +197,8 @@ func TestTmuxGlanceSkipsAHiddenCustomRow(t *testing.T) {
 	if got := readGlanceOption(t, runTmux, "status-format[1]"); got != "USER-ROW" {
 		t.Fatalf("status-format[1] after off = %q, want the custom row", got)
 	}
-	if got := readGlanceOption(t, runTmux, "status-format[2]"); got != "" {
-		t.Fatalf("status-format[2] after off = %q, want unset", got)
+	if got := readGlanceOption(t, runTmux, "status-format[2]"); got != originalRow2 {
+		t.Fatalf("status-format[2] after off = %q, want %q", got, originalRow2)
 	}
 }
 
