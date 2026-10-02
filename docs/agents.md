@@ -83,9 +83,14 @@ command yourself, for example
 The row starts with the label `nexo │` and then one bracketed entry per agent
 pane, for example `nexo │ [● zeta:1.0]`. Each entry renders the enabled
 `[glance] fields` in the fixed order `dot, target, harness, session, window,
-branch, age`; the defaults are `dot` and `target`. The dot is `◐` for a working
-agent, `●` for an unseen stopped agent and `○` for a seen stopped agent, and
-entries are ordered unseen stopped, working, then seen stopped. When the row is
+branch, age`; the defaults are `dot` and `target`. The dot is one `●` whose
+colour carries the state: `[glance] colors` sets `working` (default `yellow`),
+`unseen` stopped (default `red`, like the window highlight) and `seen` stopped
+(default `default`, the status foreground). Each colour is a tmux colour or a
+theme palette option such as `@thm_yellow`. For terminals without colour,
+`[glance] dots = "symbols"` draws an uncoloured `◐` for a working agent, `●`
+for an unseen stopped agent and `○` for a seen stopped agent instead. Entries
+are ordered unseen stopped, working, then seen stopped. When the row is
 narrower than its entries, whole entries are dropped and an ellipsis marks the
 omission; the label itself is never truncated. Agent text is escaped so a name
 cannot inject a tmux format or command.

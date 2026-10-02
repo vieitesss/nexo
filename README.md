@@ -374,6 +374,10 @@ highlight-color = "red"
 fields = ["dot", "target"]
 # Row tint: a tmux colour, a palette option such as @thm_surface_0, or "default".
 tint = "default"
+# State dot: "color" draws one ● coloured by state; "symbols" draws ◐ ● ○ uncoloured.
+dots = "color"
+# Dot colours: tmux colours or palette options; "default" keeps the status foreground.
+colors = { working = "yellow", unseen = "red", seen = "default" }
 
 [tui]
 # Theme selection: auto, dark, or light. A running TUI follows changes live.
@@ -419,6 +423,10 @@ machine and each remote machine need.
 | `agents.highlight-color` | `red` | tmux window-list colour for a window holding an unseen stopped agent. A value with a `=` is used as a full style (for example `bg=red,bold`); otherwise it becomes `fg=<colour>`. Read when the watcher starts, so restart `nexo agents watch` after changing it. Herdr uses its native agent state instead. |
 | `glance.fields` | `dot`, `target` | Agent fields shown in each glance entry, in the fixed order `dot, target, harness, session, window, branch, age`. Unknown or duplicate fields are rejected. |
 | `glance.tint` | none | Background tint for the tmux glance row: a tmux colour, a `@palette` option such as `@thm_surface_0`, or `default`/empty for no tint. |
+| `glance.dots` | `color` | How the glance `dot` field shows agent state: `color` draws one `●` in the state's colour; `symbols` draws an uncoloured `◐` working, `●` unseen stopped or `○` seen stopped, for terminals without colour. |
+| `glance.colors.working` | `yellow` | Glance dot colour for a working agent: a tmux colour, a `@palette` option, or `default` for the status foreground. |
+| `glance.colors.unseen` | `red` | Glance dot colour for an unseen stopped agent; the default matches `agents.highlight-color`. Same forms as `working`. |
+| `glance.colors.seen` | `default` | Glance dot colour for a seen stopped agent. The default keeps the status foreground, which stays readable on light and dark themes. Same forms as `working`. |
 | `tui.theme` | `auto` | Select `auto`, `dark`, or `light`; auto queries the terminal background and falls back to `COLORFGBG`, then dark. A running TUI polls the config and follows `dark`/`light` changes without a restart; `auto` is not re-probed mid-session. |
 | `remote.machines` | `[]` | SSH aliases to list and open. `local`, the local hostname, and aliases beginning with `-` are rejected. |
 | `remote.backends` | `{}` | Optional per-machine backend table. Each key must be in `remote.machines`; values are `auto`, `tmux`, or `herdr`. Unlisted machines use `auto`. |

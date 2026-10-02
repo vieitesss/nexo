@@ -18,13 +18,34 @@ import (
 // Label opens every glance row. It is never truncated.
 const Label = "nexo │"
 
-// Dot glyphs. The dot alone distinguishes a working agent from a stopped one
-// and, among stopped agents, the unseen one that needs attention.
+// dot is the single glyph drawn in colour mode, where the colour carries the
+// agent state.
+const dot = "●"
+
+// Symbol-mode glyphs. Without colour the glyph alone distinguishes a working
+// agent from a stopped one and, among stopped agents, the unseen one that
+// needs attention.
 const (
 	dotWorking       = "◐"
 	dotUnseenStopped = "●"
 	dotSeenStopped   = "○"
 )
+
+// agentState is the state an agent's dot shows.
+type agentState int
+
+const (
+	stateUnseenStopped agentState = iota
+	stateWorking
+	stateSeenStopped
+)
+
+// entry is one rendered agent: its visible text, used to measure the row, and
+// its tmux format, which carries the dot style and escaped agent text.
+type entry struct {
+	plain  string
+	format string
+}
 
 // unknownAge is shown for an agent that has no stopped timestamp.
 const unknownAge = "-"
@@ -37,39 +58,36 @@ func Render(agents []capabilities.Agent, cfg config.GlanceConfig, width int, now
 }
 
 func render(agents []capabilities.Agent, cfg config.GlanceConfig, width int, now time.Time) string {
+	cfg = cfg.WithDefaults()
 	ordered := append([]capabilities.Agent(nil), agents...)
 	sort.SliceStable(ordered, func(i, j int) bool { return less(ordered[i], ordered[j]) })
 
 	fields := cfg.OrderedFields()
-	plainEntries := make([]string, 0, len(ordered))
+	entries := make([]entry, 0, len(ordered))
 	for _, agent := range ordered {
-		plainEntries = append(plainEntries, renderEntry(agent, fields, now))
+		entries = append(entries, renderEntry(agent, fields, cfg, now))
 	}
 
-	plain := Label
-	if len(plainEntries) > 0 {
-		plain = truncateRow(plain, plainEntries, width)
-	}
-	return tintPrefix(cfg.Tint) + escapeFormat(plain)
+	return colourStyle("bg", cfg.Tint) + truncateRow(escapeFormat(Label), Label, entries, width)
 }
 
 // truncateRow appends whole entries while they fit and marks omitted entries
-// with an ellipsis. The label is always kept.
-func truncateRow(label string, entries []string, width int) string {
-	row := label
+// with an ellipsis. The label is always kept. Widths are measured on the
+// visible text, never on the tmux format.
+func truncateRow(row, label string, entries []entry, width int) string {
 	remaining := -1
 	if width > 0 {
 		remaining = width - shell.StringWidth(label)
 	}
 	for _, entry := range entries {
-		needed := 1 + shell.StringWidth(entry)
+		needed := 1 + shell.StringWidth(entry.plain)
 		if width > 0 && remaining < needed {
 			if remaining >= 2 {
 				row += " …"
 			}
 			return row
 		}
-		row += " " + entry
+		row += " " + entry.format
 		if width > 0 {
 			remaining -= needed
 		}
@@ -77,21 +95,31 @@ func truncateRow(label string, entries []string, width int) string {
 	return row
 }
 
-// renderEntry renders one bracketed `[field field …]` entry.
-func renderEntry(agent capabilities.Agent, fields []string, now time.Time) string {
-	values := make([]string, 0, len(fields))
+// renderEntry renders one bracketed `[field field …]` entry. Agent text is
+// escaped; only the dot carries a style.
+func renderEntry(agent capabilities.Agent, fields []string, cfg config.GlanceConfig, now time.Time) entry {
+	plain := make([]string, 0, len(fields))
+	format := make([]string, 0, len(fields))
 	for _, field := range fields {
+		if field == "dot" {
+			glyph, style := stateDot(agentStateOf(agent), cfg)
+			plain = append(plain, glyph)
+			format = append(format, style)
+			continue
+		}
 		if value := fieldValue(agent, field, now); value != "" {
-			values = append(values, value)
+			plain = append(plain, value)
+			format = append(format, escapeFormat(value))
 		}
 	}
-	return "[" + strings.Join(values, " ") + "]"
+	return entry{
+		plain:  "[" + strings.Join(plain, " ") + "]",
+		format: "[" + strings.Join(format, " ") + "]",
+	}
 }
 
 func fieldValue(agent capabilities.Agent, field string, now time.Time) string {
 	switch field {
-	case "dot":
-		return stateDot(agent)
 	case "target":
 		return strings.TrimSpace(agent.Target)
 	case "harness":
@@ -109,15 +137,39 @@ func fieldValue(agent capabilities.Agent, field string, now time.Time) string {
 	}
 }
 
-func stateDot(agent capabilities.Agent) string {
-	switch {
-	case strings.EqualFold(strings.TrimSpace(agent.State), "working"):
-		return dotWorking
-	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && !agent.Seen:
-		return dotUnseenStopped
-	default:
-		return dotSeenStopped
+// stateDot returns the dot's visible glyph and its tmux format. Colour mode
+// draws one glyph in the state's colour and restores the row foreground after
+// it; symbol mode draws an uncoloured glyph per state.
+func stateDot(state agentState, cfg config.GlanceConfig) (string, string) {
+	glyph, colour := dotSeenStopped, cfg.Colors.Seen
+	switch state {
+	case stateUnseenStopped:
+		glyph, colour = dotUnseenStopped, cfg.Colors.Unseen
+	case stateWorking:
+		glyph, colour = dotWorking, cfg.Colors.Working
 	}
+	if cfg.Dots == config.GlanceDotsSymbols {
+		return glyph, glyph
+	}
+	style := colourStyle("fg", colour)
+	if style == "" {
+		return dot, dot
+	}
+	return dot, style + dot + "#[fg=default]"
+}
+
+// agentStateOf classifies an agent. Anything that is neither working nor an
+// unseen stopped agent is drawn and sorted as seen stopped.
+func agentStateOf(agent capabilities.Agent) agentState {
+	switch strings.ToLower(strings.TrimSpace(agent.State)) {
+	case "working":
+		return stateWorking
+	case "stopped":
+		if !agent.Seen {
+			return stateUnseenStopped
+		}
+	}
+	return stateSeenStopped
 }
 
 func age(agent capabilities.Agent, now time.Time) string {
@@ -174,18 +226,18 @@ func attentionRank(agent capabilities.Agent) int {
 	}
 }
 
-// tintPrefix turns the configured tint into a tmux style prefix. A tmux colour
-// becomes a background; an @palette option is expanded by tmux at draw time;
-// an empty or "default" tint leaves the row unstyled.
-func tintPrefix(tint string) string {
-	tint = strings.TrimSpace(tint)
+// colourStyle turns a configured colour into a tmux style for attribute, fg
+// or bg. A tmux colour is used as is; an @palette option is expanded by tmux
+// at draw time; an empty or "default" colour leaves the text unstyled.
+func colourStyle(attribute, colour string) string {
+	colour = strings.TrimSpace(colour)
 	switch {
-	case tint == "" || tint == "default":
+	case colour == "" || colour == "default":
 		return ""
-	case strings.HasPrefix(tint, "@"):
-		return "#[bg=#{" + tint + "}]"
+	case strings.HasPrefix(colour, "@"):
+		return "#[" + attribute + "=#{" + colour + "}]"
 	default:
-		return "#[bg=" + tint + "]"
+		return "#[" + attribute + "=" + colour + "]"
 	}
 }
 

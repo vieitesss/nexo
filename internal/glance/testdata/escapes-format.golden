@@ -1,1 +1,1 @@
-nexo │ [◐ ##(rm -rf) pi] [○ a##b a##b]
+nexo │ [#[fg=yellow]●#[fg=default] ##(rm -rf) pi] [● a##b a##b]

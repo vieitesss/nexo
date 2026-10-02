@@ -106,3 +106,76 @@ func TestLoadRejectsUnknownGlanceKey(t *testing.T) {
 		t.Fatalf("Load() error = %v, want unknown key path glance.colour", err)
 	}
 }
+
+func TestLoadParsesGlanceDotsAndColors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	contents := "[glance]\ndots = \"symbols\"\ncolors = { working = \"@thm_yellow\", unseen = \"colour160\" }\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := GlanceColors{Working: "@thm_yellow", Unseen: "colour160", Seen: "default"}
+	if got.Glance.Dots != GlanceDotsSymbols || got.Glance.Colors != want {
+		t.Fatalf("Glance = %#v, want symbols and %#v", got.Glance, want)
+	}
+}
+
+func TestLoadDefaultsGlanceDotsAndColors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[glance]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := GlanceColors{Working: "yellow", Unseen: "red", Seen: "default"}
+	if got.Glance.Dots != GlanceDotsColor || got.Glance.Colors != want {
+		t.Fatalf("Glance = %#v, want color dots and %#v", got.Glance, want)
+	}
+}
+
+func TestLoadRejectsInvalidGlanceDots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[glance]\ndots = \"emoji\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "glance.dots") {
+		t.Fatalf("Load() error = %v, want glance.dots validation", err)
+	}
+}
+
+func TestLoadRejectsInvalidGlanceColors(t *testing.T) {
+	for _, key := range []string{"working", "unseen", "seen"} {
+		for _, value := range []string{"not-a-colour", "colour256", "@", "fg=red"} {
+			t.Run(key+"/"+value, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "config.toml")
+				contents := "[glance.colors]\n" + key + " = " + strconv.Quote(value) + "\n"
+				if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				_, err := Load(path)
+				if err == nil || !strings.Contains(err.Error(), "glance.colors."+key) {
+					t.Fatalf("Load() error = %v, want glance.colors.%s validation", err, key)
+				}
+			})
+		}
+	}
+}
+
+func TestLoadRejectsUnknownGlanceColorKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[glance.colors]\nidle = \"red\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "glance.colors.idle") {
+		t.Fatalf("Load() error = %v, want unknown key path glance.colors.idle", err)
+	}
+}

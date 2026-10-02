@@ -156,6 +156,12 @@ func parse(contents []byte, path string) (Config, error) {
 	if err := validateGlanceTint(cfg.Glance.Tint); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "glance.tint")
 	}
+	if err := validateGlanceDots(cfg.Glance.Dots); err != nil {
+		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "glance.dots")
+	}
+	if key, err := validateGlanceColors(cfg.Glance.Colors); err != nil {
+		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, key)
+	}
 	if err := validateRemote(cfg.Remote); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, remoteValidationKey(err))
 	}
