@@ -97,7 +97,7 @@ func TestExtractFormPreservesTrailingSpaceRepositoryIdentity(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("extraction did not start")
 	}
-	model = updateModel(t, model, cmd())
+	updateModel(t, model, cmd())
 	if gotRepo != repo {
 		t.Fatalf("extraction repo = %q, want %q", gotRepo, repo)
 	}
