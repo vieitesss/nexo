@@ -72,6 +72,34 @@ func TestSetupRerunPreservesBothTmuxBindings(t *testing.T) {
 	}
 }
 
+func TestSetupRejectsInvalidTmuxBindingBeforeWrites(t *testing.T) {
+	for _, key := range []string{"Return", "^^a"} {
+		home := t.TempDir()
+		configPath := filepath.Join(home, ".config", "nexo", "config.toml")
+		confPath := filepath.Join(home, ".tmux.conf")
+		original := []byte(ManagedStart + "\n" + TmuxBlock(false, key, "a") + "\n" + ManagedEnd + "\n")
+		if err := os.WriteFile(confPath, original, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runner := &statefulLocalRunner{tmuxWatcher: true}
+		notify := true
+		err := Run(context.Background(), Input{Runner: runner, Home: home, Stdout: &bytes.Buffer{}, TTY: false}, Options{Backend: "tmux", ConfigPath: configPath, LocalOnly: true, Yes: true, Notify: &notify})
+		if err == nil {
+			t.Fatalf("setup accepted tmux key %q", key)
+		}
+		got, readErr := os.ReadFile(confPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !bytes.Equal(got, original) {
+			t.Fatalf("setup rewrote .tmux.conf for invalid key %q:\n%s", key, got)
+		}
+		if _, statErr := os.Stat(configPath); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("setup wrote config for invalid key %q: %v", key, statErr)
+		}
+	}
+}
+
 func TestSetupRerunPreservesHerdrBindings(t *testing.T) {
 	home := t.TempDir()
 	configPath := filepath.Join(home, ".config", "nexo", "config.toml")

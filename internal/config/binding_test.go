@@ -16,12 +16,12 @@ func TestValidateBindingKeyRejectsCtrlSpaceSpellingsAndInjection(t *testing.T) {
 }
 
 func TestValidateBindingKeyForTmuxUsesSupportedNames(t *testing.T) {
-	for _, key := range []string{"C-s", "M-g", "S-a", "^A", "F1", "F12", "Enter", "Escape", "Tab", "Space", "BSpace", "Up", "PageUp", "PPage", "PageDown", "NPage", "IC", "DC"} {
+	for _, key := range []string{"C-s", "M-g", "S-a", "^A", "F1", "F12", "Enter", "Escape", "Tab", "Space", "BSpace", "Up", "PageUp", "PPage", "PageDown", "NPage", "IC", "DC", "^C-a", "^M-a", "M-C-S-a", "KPEnter"} {
 		if err := ValidateBindingKeyForBackend("tmux", key); err != nil {
 			t.Errorf("tmux key %q rejected: %v", key, err)
 		}
 	}
-	for _, key := range []string{"garbagekey", "C-Space", "^@", "C-@", "^Space", "C-", "M-"} {
+	for _, key := range []string{"garbagekey", "C-Space", "^@", "C-@", "^Space", "C-", "M-", "Return", "Esc", "BackSpace", "Clear", "Cancel", "Print", "Pause", "KP=", "^^a", "C-^a", "M-^a"} {
 		if err := ValidateBindingKeyForBackend("tmux", key); err == nil {
 			t.Errorf("tmux key %q accepted", key)
 		}

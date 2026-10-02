@@ -60,6 +60,11 @@ type tmuxBindingKey struct {
 func parseTmuxBindingKey(input string) (tmuxBindingKey, bool, error) {
 	remaining := input
 	parsed := tmuxBindingKey{}
+	// tmux accepts the caret form only once, as the first character.
+	if strings.HasPrefix(remaining, "^") {
+		parsed.caret = true
+		remaining = remaining[1:]
+	}
 	for len(remaining) > 0 {
 		switch {
 		case strings.HasPrefix(strings.ToUpper(remaining), "C-"):
@@ -69,9 +74,6 @@ func parseTmuxBindingKey(input string) (tmuxBindingKey, bool, error) {
 			remaining = remaining[2:]
 		case strings.HasPrefix(strings.ToUpper(remaining), "S-"):
 			remaining = remaining[2:]
-		case strings.HasPrefix(remaining, "^"):
-			parsed.caret = true
-			remaining = remaining[1:]
 		default:
 			goto parsedModifiers
 		}
@@ -96,21 +98,19 @@ func invalidTmuxKey(key string) error {
 	return fmt.Errorf("invalid tmux binding key %q; use C-s, a, F1, Enter, or leave it blank", key)
 }
 
-// Names accepted by tmux's key parser. Keep this list explicit so an invalid
+// Names accepted by tmux 3.3a's key parser. Keep this list explicit so an invalid
 // form cannot reach a live tmux server merely because it is one token.
 var tmuxKeyNames = map[string]bool{
 	"up": true, "down": true, "left": true, "right": true,
 	"home": true, "end": true, "insert": true, "delete": true,
 	"pageup": true, "pagedown": true, "ppage": true, "npage": true,
-	"ic": true, "dc": true, "enter": true, "return": true,
-	"escape": true, "esc": true, "tab": true, "btab": true,
-	"space": true, "backspace": true, "bspace": true,
-	"clear": true, "cancel": true, "print": true, "pause": true,
+	"ic": true, "dc": true, "enter": true, "escape": true,
+	"tab": true, "btab": true, "space": true, "bspace": true,
 	"f1": true, "f2": true, "f3": true, "f4": true, "f5": true,
 	"f6": true, "f7": true, "f8": true, "f9": true, "f10": true,
 	"f11": true, "f12": true,
 	"kp0": true, "kp1": true, "kp2": true, "kp3": true, "kp4": true,
 	"kp5": true, "kp6": true, "kp7": true, "kp8": true, "kp9": true,
 	"kp.": true, "kp/": true, "kp*": true, "kp-": true,
-	"kp+": true, "kpenter": true, "kp=": true,
+	"kp+": true, "kpenter": true,
 }
