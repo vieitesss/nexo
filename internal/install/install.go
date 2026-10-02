@@ -8,12 +8,15 @@ package install
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/runner"
@@ -46,6 +49,10 @@ type Target struct {
 	InputRunner runner.InputRunner
 	Machine     string
 	SSHConfig   string
+	// Launch overrides the local executable path used for detection. Upgrade
+	// sets it to the path this process was invoked as; when empty, Detect
+	// reads os.Args[0] for the local machine. It is ignored for remotes.
+	Launch string
 }
 
 // NewLocalTarget creates a target that runs commands directly.
@@ -76,9 +83,11 @@ func (t Target) run(ctx context.Context, name string, args ...string) ([]byte, e
 		return nil, errors.New("install target requires a command runner")
 	}
 	if !t.IsRemote() {
-		return t.Runner.Run(ctx, name, args...)
+		output, err := t.Runner.Run(ctx, name, args...)
+		return output, runner.Detail(err)
 	}
-	return t.Runner.Run(ctx, "ssh", t.sshArgs(remoteCommand(name, args...))...)
+	output, err := t.Runner.Run(ctx, "ssh", t.sshArgs(remoteCommand(name, args...))...)
+	return output, runner.Detail(err)
 }
 
 func (t Target) runInput(ctx context.Context, input []byte, name string, args ...string) ([]byte, error) {
@@ -86,13 +95,15 @@ func (t Target) runInput(ctx context.Context, input []byte, name string, args ..
 		return nil, errors.New("install target requires an input-capable command runner")
 	}
 	if !t.IsRemote() {
-		return t.InputRunner.RunInput(ctx, input, name, args...)
+		output, err := t.InputRunner.RunInput(ctx, input, name, args...)
+		return output, runner.Detail(err)
 	}
-	return t.InputRunner.RunInput(ctx, input, "ssh", t.sshArgs(remoteCommand(name, args...))...)
+	output, err := t.InputRunner.RunInput(ctx, input, "ssh", t.sshArgs(remoteCommand(name, args...))...)
+	return output, runner.Detail(err)
 }
 
 func (t Target) sshArgs(command string) []string {
-	args := []string{"-o", "BatchMode=yes"}
+	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=5"}
 	if t.SSHConfig != "" {
 		args = append(args, "-F", t.SSHConfig)
 	}
@@ -117,18 +128,24 @@ func shellQuote(value string) string {
 
 // Installation describes the currently resolved installation on one target.
 type Installation struct {
-	Method   Method
-	Path     string
+	Method Method
+	// Path is the launch path: the command on PATH, or the local invocation
+	// path. It may be a symlink and is what reports and version checks use.
+	Path string
+	// RealPath is the resolved executable referent. Publication renames
+	// beside and over this file so a launch symlink keeps working.
+	RealPath string
 	Platform Platform
 	Version  string
 }
 
-// Request identifies the source to install. Version is a release tag when
-// Nightly is false; Nightly installs the main branch.
+// Request identifies the source to install. Ref is a release tag or the
+// resolved commit of a nightly.
 type Request struct {
-	Version    string
-	Nightly    bool
+	Ref        string
 	Repository string
+	// Local builds the ref on the command's machine when the target cannot.
+	Local *LocalBuilder
 }
 
 func (r Request) repository() string {
@@ -138,32 +155,87 @@ func (r Request) repository() string {
 	return strings.TrimSpace(r.Repository)
 }
 
-// Detect finds the platform, installation method, and executable path on a
-// target. Homebrew, Go installs, and release binaries are considered in that
-// order, matching the supported installation methods.
+// LocalBuilder builds an authenticated source revision on the machine that
+// owns Runner.
+type LocalBuilder struct {
+	Runner runner.CommandRunner
+}
+
+// Available reports whether the local machine has a Go toolchain.
+func (b *LocalBuilder) Available(ctx context.Context) bool {
+	if b == nil || b.Runner == nil {
+		return false
+	}
+	_, err := b.Runner.Run(ctx, "go", "version")
+	return err == nil
+}
+
+// Build cross-compiles repository@ref for targetPlatform and writes the
+// executable to destination. A temporary GOPATH holds the output because Go
+// rejects a cross-installed command when GOBIN is set; the module cache is
+// reused so the build stays offline once dependencies are cached.
+func (b *LocalBuilder) Build(ctx context.Context, repository, ref string, targetPlatform Platform, destination string) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("build requires a local command runner")
+	}
+	script := fmt.Sprintf(
+		"set -eu; dest=%s; dir=$(dirname \"$dest\"); tmp=$(mktemp -d \"$dir/.nexo-build.XXXXXX\"); trap 'rm -rf \"$tmp\"' EXIT; modcache=$(go env GOMODCACHE); GOFLAGS= GOBIN= CGO_ENABLED=0 GOOS=%s GOARCH=%s GOPRIVATE=%s GOPATH=\"$tmp/gopath\" GOMODCACHE=\"$modcache\" go install %s/cmd/nexo@%s; built=\"$tmp/gopath/bin/%s_%s/nexo\"; [ -f \"$built\" ] || built=\"$tmp/gopath/bin/nexo\"; test -f \"$built\"; chmod 0755 \"$built\"; mv -f \"$built\" \"$dest\"",
+		shellQuote(destination),
+		shellQuote(targetPlatform.OS), shellQuote(targetPlatform.Arch), shellQuote(repository),
+		shellQuote(repository), shellQuote(ref),
+		targetPlatform.OS, targetPlatform.Arch,
+	)
+	if _, err := b.Runner.Run(ctx, "sh", "-c", script); err != nil {
+		return fmt.Errorf("build nexo %s for %s: %w", ref, targetPlatform, runner.Detail(err))
+	}
+	return nil
+}
+
+// Probe reports a target's platform without requiring nexo to be installed.
+func Probe(ctx context.Context, target Target) (Platform, error) {
+	return detectPlatform(ctx, target)
+}
+
+// Detect finds the platform, installation method, executable path, and
+// resolved referent on a target. The method follows the executable the user
+// actually runs: a Homebrew install is recognized only when that executable
+// belongs to the formula's keg, so another nexo earlier on PATH keeps its own
+// method.
 func Detect(ctx context.Context, target Target) (Installation, error) {
-	platform, err := detectPlatform(ctx, target)
+	platform, err := Probe(ctx, target)
 	if err != nil {
 		return Installation{}, err
 	}
-	path, pathErr := commandPath(ctx, target)
+	launch, pathErr := commandPath(ctx, target)
+	if !target.IsRemote() {
+		if explicit := strings.TrimSpace(target.Launch); explicit != "" {
+			launch, pathErr = explicit, nil
+		} else if invoked := localInvocation(); invoked != "" {
+			launch, pathErr = invoked, nil
+		}
+	}
 	brewPrefix, brewOK := homebrewPrefix(ctx, target)
-	if brewOK {
-		// Use the formula's real executable rather than the Homebrew shim on
-		// PATH. A nightly fallback can then replace it without breaking that
-		// shim, and subsequent Homebrew upgrades keep owning the symlink.
-		return Installation{Method: MethodHomebrew, Path: filepath.Join(brewPrefix, "bin", "nexo"), Platform: platform}, nil
+	if launch == "" && brewOK {
+		path := filepath.Join(brewPrefix, "bin", "nexo")
+		return Installation{Method: MethodHomebrew, Path: path, RealPath: resolvePath(ctx, target, path), Platform: platform}, nil
 	}
-	if pathErr != nil {
-		return Installation{}, pathErr
-	}
-	if path == "" {
+	if launch == "" {
+		if pathErr != nil {
+			return Installation{}, pathErr
+		}
 		return Installation{}, errors.New("nexo is not installed (command -v nexo returned no path)")
 	}
-	if goInstallPath(ctx, target, path) {
-		return Installation{Method: MethodGo, Path: path, Platform: platform}, nil
+	real := resolvePath(ctx, target, launch)
+	method := MethodBinary
+	switch {
+	case brewOK && homebrewOwns(ctx, target, real, brewPrefix):
+		method = MethodHomebrew
+	case looksHomebrew(real):
+		method = MethodHomebrew
+	case goInstallPath(ctx, target, launch, real):
+		method = MethodGo
 	}
-	return Installation{Method: MethodBinary, Path: path, Platform: platform}, nil
+	return Installation{Method: method, Path: launch, RealPath: real, Platform: platform}, nil
 }
 
 func detectPlatform(ctx context.Context, target Target) (Platform, error) {
@@ -221,22 +293,89 @@ func homebrewPrefix(ctx context.Context, target Target) (string, bool) {
 	return prefix, prefix != ""
 }
 
-func goInstallPath(ctx context.Context, target Target, path string) bool {
+func homebrewOwns(ctx context.Context, target Target, real, prefix string) bool {
+	resolved := resolvePath(ctx, target, prefix)
+	if resolved == "" {
+		return false
+	}
+	return real == resolved || strings.HasPrefix(real, resolved+string(filepath.Separator))
+}
+
+// looksHomebrew catches a Homebrew referent when brew itself is unavailable,
+// so a keg is never mistaken for a plain binary and overwritten.
+func looksHomebrew(path string) bool {
+	return strings.Contains(path, "/Cellar/") || strings.Contains(path, "/homebrew/") || strings.Contains(path, "/linuxbrew/")
+}
+
+func goInstallPath(ctx context.Context, target Target, launch, real string) bool {
 	gobinOutput, gobinErr := target.run(ctx, "go", "env", "GOBIN")
 	gopathOutput, gopathErr := target.run(ctx, "go", "env", "GOPATH")
 	if gobinErr != nil && gopathErr != nil {
 		return false
 	}
-	path = filepath.Clean(path)
-	if gobin := strings.TrimSpace(string(gobinOutput)); gobin != "" && path == filepath.Join(gobin, "nexo") {
-		return true
+	candidates := []string{filepath.Clean(launch)}
+	if real != "" && real != launch {
+		candidates = append(candidates, filepath.Clean(real))
 	}
-	for _, gopath := range filepath.SplitList(strings.TrimSpace(string(gopathOutput))) {
-		if gopath != "" && path == filepath.Join(gopath, "bin", "nexo") {
+	gobin := strings.TrimSpace(string(gobinOutput))
+	for _, candidate := range candidates {
+		if gobin != "" && candidate == filepath.Join(gobin, "nexo") {
 			return true
 		}
 	}
+	for _, gopath := range filepath.SplitList(strings.TrimSpace(string(gopathOutput))) {
+		if gopath == "" {
+			continue
+		}
+		for _, candidate := range candidates {
+			if candidate == filepath.Join(gopath, "bin", "nexo") {
+				return true
+			}
+		}
+	}
 	return false
+}
+
+// resolvePath follows symlinks on the target, returning path unchanged when it
+// cannot be resolved (for example a not-yet-installed destination).
+func resolvePath(ctx context.Context, target Target, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if !target.IsRemote() {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			return resolved
+		}
+		return path
+	}
+	script := fmt.Sprintf("p=%s; while [ -L \"$p\" ]; do t=$(readlink \"$p\"); case \"$t\" in /*) p=$t;; *) p=$(dirname \"$p\")/$t;; esac; done; printf '%%s' \"$p\"", shellQuote(path))
+	output, err := target.run(ctx, "sh", "-c", script)
+	if err != nil {
+		return path
+	}
+	if resolved := strings.TrimSpace(string(output)); resolved != "" {
+		return resolved
+	}
+	return path
+}
+
+// localInvocation returns the path this process was invoked as when it is a
+// nexo executable outside a bare PATH lookup.
+func localInvocation() string {
+	invoked := os.Args[0]
+	if invoked == "" || !strings.ContainsRune(invoked, os.PathSeparator) {
+		return ""
+	}
+	executable, err := os.Executable()
+	if err != nil || filepath.Base(executable) != "nexo" {
+		return ""
+	}
+	absolute, err := filepath.Abs(invoked)
+	if err != nil {
+		return ""
+	}
+	return absolute
 }
 
 // ReadVersion runs nexo --version at path and returns its version token.
@@ -262,32 +401,38 @@ func ReadVersion(ctx context.Context, target Target, path string) (string, error
 	return "", errors.New("nexo --version returned no version")
 }
 
-// Install detects the existing installation, installs the requested source
-// using its method, and returns the refreshed installation metadata. Every
-// source-build and binary replacement writes a temporary file beside the old
-// path before renaming it.
+// Install builds the requested revision on the local machine and atomically
+// publishes it at the existing installation's referent. The launch symlink, if
+// any, is preserved.
 func Install(ctx context.Context, target Target, request Request) (Installation, error) {
 	current, err := Detect(ctx, target)
 	if err != nil {
 		return Installation{}, err
 	}
-	if request.Nightly && current.Method == MethodHomebrew {
-		return Installation{}, errors.New("homebrew cannot install --nightly; install Go or use a release binary")
+	if current.Method == MethodHomebrew {
+		return Installation{}, fmt.Errorf("homebrew owns %s and cannot be replaced atomically; run `brew upgrade vieitesss/tap/nexo` instead", current.Path)
 	}
-	if !request.Nightly && strings.TrimSpace(request.Version) == "" {
-		return Installation{}, errors.New("a release version is required")
+	ref := strings.TrimSpace(request.Ref)
+	if ref == "" {
+		return Installation{}, errors.New("install requires a release tag or commit")
 	}
-	switch current.Method {
-	case MethodHomebrew:
-		err = installHomebrew(ctx, target)
-	case MethodGo:
-		err = installGo(ctx, target, current.Path, request)
-	case MethodBinary:
-		err = installReleaseBinary(ctx, target, current, request)
-	default:
-		err = fmt.Errorf("unsupported install method %q", current.Method)
+	if request.Local == nil || !request.Local.Available(ctx) {
+		return Installation{}, errors.New("installing nexo requires a local Go toolchain with authenticated access to the source repository")
 	}
+	staged, err := os.CreateTemp("", "nexo-stage-*")
 	if err != nil {
+		return Installation{}, fmt.Errorf("create build staging file: %w", err)
+	}
+	stagedPath := staged.Name()
+	if err := staged.Close(); err != nil {
+		_ = os.Remove(stagedPath)
+		return Installation{}, fmt.Errorf("close build staging file: %w", err)
+	}
+	defer func() { _ = os.Remove(stagedPath) }()
+	if err := request.Local.Build(ctx, request.repository(), ref, current.Platform, stagedPath); err != nil {
+		return Installation{}, err
+	}
+	if err := CopyAtomic(ctx, target, stagedPath, current.RealPath); err != nil {
 		return Installation{}, err
 	}
 	updated, err := Detect(ctx, target)
@@ -301,43 +446,9 @@ func Install(ctx context.Context, target Target, request Request) (Installation,
 	return updated, nil
 }
 
-func installHomebrew(ctx context.Context, target Target) error {
-	if _, err := target.run(ctx, "brew", "upgrade", "vieitesss/tap/nexo"); err != nil {
-		return fmt.Errorf("upgrade nexo with Homebrew: %w", err)
-	}
-	return nil
-}
-
-func installGo(ctx context.Context, target Target, path string, request Request) error {
-	ref := request.Version
-	if request.Nightly {
-		ref = "main"
-	}
-	directory := filepath.Dir(path)
-	script := fmt.Sprintf("set -eu; dir=%s; tmp=$(mktemp -d \"$dir/.nexo-install.XXXXXX\"); trap 'rm -rf \"$tmp\"' EXIT; env GOPRIVATE=%s GOBIN=\"$tmp\" go install %s/cmd/nexo@%s; chmod 0755 \"$tmp/nexo\"; mv -f \"$tmp/nexo\" %s", shellQuote(directory), shellQuote(request.repository()), shellQuote(request.repository()), shellQuote(ref), shellQuote(path))
-	if _, err := target.run(ctx, "sh", "-c", script); err != nil {
-		return fmt.Errorf("install nexo with Go: %w", err)
-	}
-	return nil
-}
-
-func installReleaseBinary(ctx context.Context, target Target, current Installation, request Request) error {
-	if request.Nightly {
-		return errors.New("nightly requires Go or a locally built binary")
-	}
-	archive := fmt.Sprintf("nexo_*_%s_%s.tar.gz", current.Platform.OS, current.Platform.Arch)
-	directory := filepath.Dir(current.Path)
-	script := fmt.Sprintf("set -eu; dir=%s; tmp=$(mktemp -d \"$dir/.nexo-install.XXXXXX\"); trap 'rm -rf \"$tmp\"' EXIT; gh release download %s --repo %s --pattern %s --dir \"$tmp\"; archive=$(find \"$tmp\" -maxdepth 1 -name %s -print -quit); test -n \"$archive\"; tar -xzf \"$archive\" -C \"$tmp\"; chmod 0755 \"$tmp/nexo\"; mv -f \"$tmp/nexo\" %s", shellQuote(directory), shellQuote(request.Version), shellQuote(strings.TrimPrefix(request.repository(), "github.com/")), shellQuote(archive), shellQuote(archive), shellQuote(current.Path))
-	if _, err := target.run(ctx, "sh", "-c", script); err != nil {
-		return fmt.Errorf("install nexo release: %w", err)
-	}
-	return nil
-}
-
-// CopyAtomic replaces destination with source on target. It is used when a
-// target has no Go toolchain: the caller builds for target.Platform locally,
-// then this method transfers the result and renames it remotely in one
-// directory.
+// CopyAtomic replaces destination with source on target. It is used to publish
+// a locally built binary: a replacement either lands whole or leaves the old
+// executable untouched.
 func CopyAtomic(ctx context.Context, target Target, source, destination string) error {
 	contents, err := os.ReadFile(source)
 	if err != nil {
@@ -346,11 +457,23 @@ func CopyAtomic(ctx context.Context, target Target, source, destination string) 
 	if !target.IsRemote() {
 		return writeAtomic(destination, contents)
 	}
-	script := fmt.Sprintf("set -eu; dir=$(dirname %s); tmp=$(mktemp \"$dir/.nexo-copy.XXXXXX\"); trap 'rm -f \"$tmp\"' EXIT; cat >\"$tmp\"; chmod 0755 \"$tmp\"; mv -f \"$tmp\" %s", shellQuote(destination), shellQuote(destination))
+	digest := sha256.Sum256(contents)
+	script := copyScript(destination, len(contents), hex.EncodeToString(digest[:]))
 	if _, err := target.runInput(ctx, contents, "sh", "-c", script); err != nil {
 		return fmt.Errorf("copy nexo binary to %s: %w", target.Machine, err)
 	}
 	return nil
+}
+
+// copyScript is the remote receiver for CopyAtomic. It refuses to publish a
+// truncated or altered transfer, so the existing executable stays intact when
+// the connection drops.
+func copyScript(destination string, size int, digest string) string {
+	count := strconv.Itoa(size)
+	return fmt.Sprintf(
+		"set -eu; dest=%s; dir=$(dirname \"$dest\"); mkdir -p \"$dir\"; tmp=$(mktemp \"$dir/.nexo-copy.XXXXXX\"); trap 'rm -f \"$tmp\"' EXIT; cat >\"$tmp\"; size=$(wc -c <\"$tmp\" | tr -d ' '); [ \"$size\" = %s ] || { echo \"nexo: transfer truncated at $size of %s bytes\" >&2; exit 1; }; if command -v sha256sum >/dev/null 2>&1; then sum=$(sha256sum \"$tmp\" | cut -d' ' -f1); else sum=$(shasum -a 256 \"$tmp\" | cut -d' ' -f1); fi; [ \"$sum\" = %s ] || { echo \"nexo: transfer checksum mismatch\" >&2; exit 1; }; chmod 0755 \"$tmp\"; mv -f \"$tmp\" \"$dest\"; trap - EXIT",
+		shellQuote(destination), shellQuote(count), shellQuote(count), shellQuote(digest),
+	)
 }
 
 func writeAtomic(path string, contents []byte) error {
@@ -381,6 +504,5 @@ func writeAtomic(path string, contents []byte) error {
 	return os.Rename(temporary, path)
 }
 
-// LocalPlatform is useful to callers that need to cross-compile a fallback
-// build without probing another target.
+// LocalPlatform is the platform of the machine running this process.
 func LocalPlatform() Platform { return Platform{OS: runtime.GOOS, Arch: runtime.GOARCH} }

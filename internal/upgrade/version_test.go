@@ -46,7 +46,7 @@ func TestResolveNightlyMain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if got != (Version{Release: "main", Ref: "main", Nightly: true}) {
+	if got != (Version{Release: "main", Ref: "abc123", Nightly: true}) {
 		t.Fatalf("version = %#v", got)
 	}
 }
@@ -56,6 +56,23 @@ func TestResolveRejectsMissingRequestedRelease(t *testing.T) {
 	_, err := Resolve(context.Background(), fake, VersionRequest{Version: "v9.0.0"})
 	if err == nil || !strings.Contains(err.Error(), "--nightly") {
 		t.Fatalf("Resolve() error = %v, want nightly guidance", err)
+	}
+}
+
+func TestResolveAcceptsOnlyStableReleases(t *testing.T) {
+	fake := &fakeRunner{output: []byte("a\trefs/tags/v1.0.0-rc.9\nb\trefs/tags/v1.0.0-rc.10\nc\trefs/tags/v1.0.0\nd\trefs/tags/v1.0.0+build.5\n")}
+	got, err := Resolve(context.Background(), fake, VersionRequest{})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got.Release != "v1.0.0" {
+		t.Fatalf("version = %#v, want v1.0.0", got)
+	}
+	if _, err := Resolve(context.Background(), fake, VersionRequest{Version: "v1.0.0-rc.9"}); err == nil {
+		t.Fatal("prerelease request was accepted")
+	}
+	if _, err := Resolve(context.Background(), fake, VersionRequest{Version: "v1.0.0+build.5"}); err == nil {
+		t.Fatal("build metadata request was accepted")
 	}
 }
 

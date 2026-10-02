@@ -25,11 +25,19 @@ type VersionRequest struct {
 }
 
 // Version is the resolved source reference. Release is the user-visible tag;
-// Ref is the source ref passed to go install or a local build.
+// Ref is the source ref: a release tag, or main's resolved commit for nightly.
 type Version struct {
 	Release string
 	Ref     string
 	Nightly bool
+}
+
+// Label renders the resolved version for dry runs and errors.
+func (v Version) Label() string {
+	if v.Nightly {
+		return "main@" + shortCommit(v.Ref)
+	}
+	return v.Release
 }
 
 func (r VersionRequest) repository() string {
@@ -39,7 +47,9 @@ func (r VersionRequest) repository() string {
 	return strings.TrimSpace(r.Repository)
 }
 
-var releasePattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)([-+][0-9A-Za-z.-]+)?$`)
+// releasePattern accepts the documented stable vX.Y.Z form. Prereleases and
+// build metadata are rejected rather than ordered by ad-hoc string rules.
+var releasePattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // Resolve authenticates through git's configured credentials and resolves a
 // request without falling back from an absent release to main.
@@ -50,17 +60,18 @@ func Resolve(ctx context.Context, commandRunner runner.CommandRunner, request Ve
 	if request.Nightly {
 		output, err := commandRunner.Run(ctx, "git", "ls-remote", request.repository(), "refs/heads/main")
 		if err != nil {
-			return Version{}, fmt.Errorf("resolve nightly main: %w", err)
+			return Version{}, fmt.Errorf("resolve nightly main: %w", runner.Detail(err))
 		}
-		if strings.TrimSpace(outputField(string(output), 0)) == "" {
+		commit := strings.TrimSpace(outputField(string(output), 0))
+		if commit == "" {
 			return Version{}, errors.New("main has no commit; check authenticated Git access")
 		}
-		return Version{Release: "main", Ref: "main", Nightly: true}, nil
+		return Version{Release: "main", Ref: commit, Nightly: true}, nil
 	}
 
 	output, err := commandRunner.Run(ctx, "git", "ls-remote", "--tags", "--refs", request.repository())
 	if err != nil {
-		return Version{}, fmt.Errorf("resolve releases: %w", err)
+		return Version{}, fmt.Errorf("resolve releases: %w", runner.Detail(err))
 	}
 	tags := releaseTags(string(output))
 	if request.Version != "" {
@@ -115,15 +126,15 @@ func compareRelease(a, b string) int {
 			return -1
 		}
 	}
-	// Stable releases sort after prereleases with the same numeric version.
-	if left[4] == "" && right[4] != "" {
-		return 1
+	return 0
+}
+
+func shortCommit(commit string) string {
+	commit = strings.TrimSpace(commit)
+	if len(commit) > 12 {
+		return commit[:12]
 	}
-	if left[4] != "" && right[4] == "" {
-		return -1
-	}
-	// A lexical tie-breaker keeps sorting deterministic for prereleases.
-	return strings.Compare(a, b)
+	return commit
 }
 
 func outputField(value string, index int) string {

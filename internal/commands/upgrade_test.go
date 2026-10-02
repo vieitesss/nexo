@@ -138,7 +138,18 @@ func TestAlreadyOnTarget(t *testing.T) {
 	if !alreadyOnTarget("v1.2.3", upgradeversion.Version{Release: "v1.2.3"}) || alreadyOnTarget("v1.2.4", upgradeversion.Version{Release: "v1.2.3"}) {
 		t.Fatal("release comparison does not match")
 	}
-	if !alreadyOnTarget("main", upgradeversion.Version{Release: "main", Ref: "main", Nightly: true}) {
-		t.Fatal("main should be recognized as nightly target")
+	current := upgradeversion.Version{Release: "main", Ref: "abcdef1234567890", Nightly: true}
+	if !alreadyOnTarget("v0.0.0-20240101120000-abcdef123456", current) {
+		t.Fatal("current nightly should be recognized by its resolved commit")
+	}
+	if alreadyOnTarget("v0.0.0-20230101000000-ffffffffffff", current) {
+		t.Fatal("a different nightly revision must not be skipped")
+	}
+}
+
+func TestNightlyLabelPinsTheResolvedCommit(t *testing.T) {
+	got := upgradeversion.Version{Release: "main", Ref: "abcdef1234567890", Nightly: true}.Label()
+	if got != "main@abcdef123456" {
+		t.Fatalf("Label() = %q", got)
 	}
 }

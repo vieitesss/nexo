@@ -4,10 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/containerstate"
@@ -23,6 +22,10 @@ func init() {
 }
 
 func (c upgradeCommand) Name() string { return c.name }
+
+// upgradeMachineTimeout bounds one machine's probe, build, and copy so an
+// unreachable or stalled target cannot hold back the other result lines.
+const upgradeMachineTimeout = 15 * time.Minute
 
 func (c upgradeCommand) Run(ctx context.Context, invocation Invocation) error {
 	if invocation.Stdout == nil {
@@ -190,7 +193,9 @@ func runUpgradeMachines(ctx context.Context, invocation Invocation, machines []u
 	return results
 }
 
-func runUpgradeMachine(ctx context.Context, invocation Invocation, machine upgradeMachine, requested upgradeversion.Version, dryRun bool) upgradeResult {
+func runUpgradeMachine(parent context.Context, invocation Invocation, machine upgradeMachine, requested upgradeversion.Version, dryRun bool) upgradeResult {
+	ctx, cancel := context.WithTimeout(parent, upgradeMachineTimeout)
+	defer cancel()
 	target := install.NewLocalTarget(invocation.Runner)
 	if machine.Remote {
 		target = install.NewRemoteTarget(invocation.Runner, machine.Name, invocation.Config.Remote.SSHConfig)
@@ -212,29 +217,19 @@ func runUpgradeMachine(ctx context.Context, invocation Invocation, machine upgra
 		return result
 	}
 	if dryRun {
-		result.new = requested.Release
+		result.new = requested.Label()
 		result.dryRun = true
 		return result
 	}
-	if requested.Nightly && (current.Method == install.MethodBinary || current.Method == install.MethodHomebrew) {
-		err = buildAndCopy(ctx, invocation, target, current)
-	} else {
-		_, err = install.Install(ctx, target, install.Request{Version: requested.Ref, Nightly: requested.Nightly})
-	}
+	updated, err := install.Install(ctx, target, install.Request{
+		Ref:   requested.Ref,
+		Local: &install.LocalBuilder{Runner: invocation.Runner},
+	})
 	if err != nil {
 		result.err = err
 		return result
 	}
-	updated, err := install.Detect(ctx, target)
-	if err != nil {
-		result.err = err
-		return result
-	}
-	result.new, err = install.ReadVersion(ctx, target, updated.Path)
-	if err != nil {
-		result.err = err
-		return result
-	}
+	result.new = updated.Version
 	if !requested.Nightly && !alreadyOnTarget(result.new, requested) {
 		result.err = fmt.Errorf("installed %s, want %s", result.new, requested.Release)
 	}
@@ -244,29 +239,26 @@ func runUpgradeMachine(ctx context.Context, invocation Invocation, machine upgra
 func alreadyOnTarget(current string, requested upgradeversion.Version) bool {
 	current = strings.TrimSpace(current)
 	if requested.Nightly {
-		return current == "main"
+		return sameRevision(current, requested.Ref)
 	}
 	return current == requested.Release || strings.TrimPrefix(current, "v") == strings.TrimPrefix(requested.Release, "v")
 }
 
-func buildAndCopy(ctx context.Context, invocation Invocation, target install.Target, current install.Installation) error {
-	if invocation.Runner == nil {
-		return errors.New("nightly fallback requires a command runner")
+// sameRevision accepts either an exact commit or the twelve-character suffix
+// Go embeds in the module pseudo-version of a `go install repo@commit` build.
+func sameRevision(current, commit string) bool {
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return false
 	}
-	directory, err := os.MkdirTemp("", ".nexo-nightly-build-*")
-	if err != nil {
-		return fmt.Errorf("create nightly build path: %w", err)
+	if current == commit {
+		return true
 	}
-	defer func() { _ = os.RemoveAll(directory) }()
-	path := filepath.Join(directory, "nexo")
-	build := fmt.Sprintf("set -eu; GOOS=%s GOARCH=%s GOPRIVATE=github.com/vieitesss/nexo GOBIN=%s go install github.com/vieitesss/nexo/cmd/nexo@main", shellQuote(current.Platform.OS), shellQuote(current.Platform.Arch), shellQuote(directory))
-	if _, err := invocation.Runner.Run(ctx, "sh", "-c", build); err != nil {
-		return fmt.Errorf("build nightly nexo for %s: %w", current.Platform, err)
+	short := commit
+	if len(short) > 12 {
+		short = short[:12]
 	}
-	if err := install.CopyAtomic(ctx, target, path, current.Path); err != nil {
-		return err
-	}
-	return nil
+	return strings.HasSuffix(current, short)
 }
 
 func (r upgradeResult) line() string {
@@ -280,11 +272,4 @@ func (r upgradeResult) line() string {
 		return fmt.Sprintf("%s: %s -> %s (dry-run)", r.machine, r.old, r.new)
 	}
 	return fmt.Sprintf("%s: %s -> %s", r.machine, r.old, r.new)
-}
-
-func shellQuote(value string) string {
-	if value == "" {
-		return "''"
-	}
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
