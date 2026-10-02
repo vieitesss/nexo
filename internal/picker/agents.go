@@ -95,7 +95,8 @@ func agentLess(left, right capabilities.Agent) bool {
 // SortAgents returns agents in the canonical urgency order used by the
 // scriptable listing and glance row. The source snapshot is not mutated.
 func SortAgents(agents []capabilities.Agent) []capabilities.Agent {
-	ordered := append([]capabilities.Agent(nil), agents...)
+	ordered := make([]capabilities.Agent, len(agents))
+	copy(ordered, agents)
 	sort.SliceStable(ordered, func(i, j int) bool { return agentLess(ordered[i], ordered[j]) })
 	return ordered
 }

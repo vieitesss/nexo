@@ -31,6 +31,24 @@ func TestAgentsWatchRejectsArguments(t *testing.T) {
 	}
 }
 
+func TestAgentsCommandJSONEmptyOutputIsArray(t *testing.T) {
+	var output strings.Builder
+	command, ok := NewRegistry().Lookup("agents")
+	if !ok {
+		t.Fatal("agents command is not registered")
+	}
+	if err := command.Run(context.Background(), Invocation{
+		Adapter: fakeAgentSource{agents: []capabilities.Agent{}},
+		Stdout:  &output,
+		JSON:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.String(); got != "[]\n" {
+		t.Fatalf("JSON output = %q, want %q", got, "[]\n")
+	}
+}
+
 func TestAgentsCommandJSONUsesAgentSchema(t *testing.T) {
 	stopped := time.Date(2025, 1, 1, 12, 0, 3, 0, time.UTC)
 	var output strings.Builder
