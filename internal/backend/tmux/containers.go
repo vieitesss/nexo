@@ -17,13 +17,17 @@ import (
 )
 
 var (
-	_ capabilities.ContainerLister     = (*Backend)(nil)
-	_ capabilities.ContainerRenamer    = (*Backend)(nil)
-	_ capabilities.ContainerKiller     = (*Backend)(nil)
-	_ capabilities.ContainerHistory    = (*Backend)(nil)
-	_ capabilities.CurrentContainer    = (*Backend)(nil)
-	_ capabilities.CurrentProxyMachine = (*Backend)(nil)
-	_ capabilities.ProjectUseChecker   = (*Backend)(nil)
+	_ capabilities.ContainerLister          = (*Backend)(nil)
+	_ capabilities.ContainerRenamer         = (*Backend)(nil)
+	_ capabilities.ContainerKiller          = (*Backend)(nil)
+	_ capabilities.ContainerHistory         = (*Backend)(nil)
+	_ capabilities.CurrentContainer         = (*Backend)(nil)
+	_ capabilities.CurrentProxyMachine      = (*Backend)(nil)
+	_ capabilities.ProjectUseChecker        = (*Backend)(nil)
+	_ capabilities.AgentConfigurator        = (*Backend)(nil)
+	_ capabilities.GlanceConfigurator       = (*Backend)(nil)
+	_ capabilities.AgentCommandConfigurator = (*Backend)(nil)
+	_ capabilities.AgentWatcher             = (*Backend)(nil)
 )
 
 // ListContainers lists tmux sessions and records each session's active pane.

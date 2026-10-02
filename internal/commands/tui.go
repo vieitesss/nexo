@@ -36,7 +36,7 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 	if err := invocation.Selection.Require(); err != nil {
 		return err
 	}
-	if configurable, ok := invocation.Adapter.(interface{ ConfigureAgents(config.AgentsConfig) }); ok {
+	if configurable, ok := invocation.Adapter.(capabilities.AgentConfigurator); ok {
 		configurable.ConfigureAgents(invocation.Config.Agents)
 	}
 	tab, err := tuiTab(invocation.Args)

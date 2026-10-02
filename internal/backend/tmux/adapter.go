@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/vieitesss/nexo/internal/capabilities"
 )
 
 // InitInput contains the tmux adapter settings for one invocation.
-type InitInput struct{ ConfigPath string }
+type InitInput = capabilities.InitInput
+
+var _ capabilities.TmuxInitializer = (*Backend)(nil)
 
 // Init installs hooks and starts the per-server agent watcher. Key bindings
 // belong to the user's tmux.conf.

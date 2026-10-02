@@ -6,6 +6,27 @@ import "sort"
 // Names reports the capabilities implemented by backend in stable order.
 func Names(backend any) []string {
 	var names []string
+	if _, ok := backend.(AgentConfigurator); ok {
+		names = append(names, "AgentConfigurator")
+	}
+	if _, ok := backend.(AgentCommandConfigurator); ok {
+		names = append(names, "AgentCommandConfigurator")
+	}
+	if _, ok := backend.(AgentWatcher); ok {
+		names = append(names, "AgentWatcher")
+	}
+	if _, ok := backend.(GlanceConfigurator); ok {
+		names = append(names, "GlanceConfigurator")
+	}
+	if _, ok := backend.(GlanceController); ok {
+		names = append(names, "GlanceController")
+	}
+	if _, ok := backend.(RemoteConfigurator); ok {
+		names = append(names, "RemoteConfigurator")
+	}
+	if _, ok := backend.(TmuxInitializer); ok {
+		names = append(names, "TmuxInitializer")
+	}
 	if _, ok := backend.(ProjectOpener); ok {
 		names = append(names, "ProjectOpener")
 	}

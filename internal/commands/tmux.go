@@ -7,7 +7,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/backend"
 	tmuxbackend "github.com/vieitesss/nexo/internal/backend/tmux"
-	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/capabilities"
 )
 
 type tmuxCommand struct{}
@@ -42,9 +42,7 @@ func (tmuxCommand) Run(ctx context.Context, invocation Invocation) error {
 }
 
 func runTmuxInit(ctx context.Context, invocation Invocation) error {
-	initializer, ok := invocation.Adapter.(interface {
-		Init(context.Context, tmuxbackend.InitInput) error
-	})
+	initializer, ok := invocation.Adapter.(capabilities.TmuxInitializer)
 	if !ok {
 		return errors.New("selected backend does not support tmux adapter initialization")
 	}
@@ -56,14 +54,10 @@ func runTmuxGlance(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return UsageError{Err: err}
 	}
-	if configurable, ok := invocation.Adapter.(interface {
-		ConfigureGlance(config.GlanceConfig)
-	}); ok {
+	if configurable, ok := invocation.Adapter.(capabilities.GlanceConfigurator); ok {
 		configurable.ConfigureGlance(invocation.Config.Glance)
 	}
-	controller, ok := invocation.Adapter.(interface {
-		Glance(context.Context, tmuxbackend.GlanceAction) error
-	})
+	controller, ok := invocation.Adapter.(capabilities.GlanceController)
 	if !ok {
 		return errors.New("selected backend does not support the glance row")
 	}

@@ -37,12 +37,12 @@ const (
 )
 
 // GlanceAction is one user-bound glance command.
-type GlanceAction string
+type GlanceAction = capabilities.GlanceAction
 
 const (
-	GlanceOn     GlanceAction = "on"
-	GlanceOff    GlanceAction = "off"
-	GlanceToggle GlanceAction = "toggle"
+	GlanceOn     = capabilities.GlanceOn
+	GlanceOff    = capabilities.GlanceOff
+	GlanceToggle = capabilities.GlanceToggle
 )
 
 // ParseGlanceAction validates the glance subcommand argument.
@@ -58,6 +58,8 @@ func ParseGlanceAction(value string) (GlanceAction, error) {
 		return "", fmt.Errorf("unknown glance action %q (want on, off or toggle)", value)
 	}
 }
+
+var _ capabilities.GlanceController = (*Backend)(nil)
 
 // ConfigureGlance applies the shared glance configuration to this server.
 func (s *Source) ConfigureGlance(cfg config.GlanceConfig) {
