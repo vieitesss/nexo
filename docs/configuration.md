@@ -77,14 +77,14 @@ devbox = "tmux"             # auto, tmux, or herdr
 | `glance.tint` | none | Background tint for the tmux glance row: a tmux colour, a `@palette` option such as `@thm_surface_0`, or `default`/empty for no tint. |
 | `glance.dots` | `color` | How the glance `dot` field shows agent state: `color` draws one `●` in the state's colour; `symbols` draws an uncoloured `◐` working, `●` unseen stopped or `○` seen stopped, for terminals without colour. |
 | `glance.colors.working` | `yellow` | Glance dot colour for a working agent: a tmux colour, a `@palette` option, or `default` for the status foreground. |
-| `glance.colors.unseen` | `red` | Glance dot colour for an unseen stopped agent; the default matches `agents.highlight-color`. Same forms as `working`. |
+| `glance.colors.unseen` | `red` | Glance dot colour for an unseen stopped agent; default red, independently of `agents.highlight-color`. Same forms as `working`. |
 | `glance.colors.seen` | `green` | Glance dot colour for a seen stopped agent. Same forms as `working`. |
 | `tui.theme` | `auto` | Select `auto`, `dark`, or `light`; auto queries the terminal background and falls back to `COLORFGBG`, then dark. A running TUI polls the config and follows `dark`/`light` changes without a restart; `auto` is not re-probed mid-session. |
 | `clone.default-protocol` | `ssh` | Protocol selected when the clone form opens: `ssh` or `https`. |
 | `clone.ssh-prefix` | `git@github.com:` | Prefix prepended to the repository path in the SSH form. |
 | `clone.https-prefix` | `https://github.com/` | Prefix prepended to the repository path in the HTTPS form. |
 | `remote.machines` | `[]` | SSH aliases to list and open. `local`, the local hostname, and aliases beginning with `-` are rejected. |
-| `remote.backends` | `{}` | Optional per-machine backend table. Each key must be in `remote.machines`; values are `auto`, `tmux`, or `herdr`. Unlisted machines use `auto`. |
+| `remote.backends` | `{}` | Optional per-machine backend table. Keys also configure machines, even when absent from `remote.machines`; values are `auto`, `tmux`, or `herdr`. Unlisted machines use `auto`. |
 | `remote.ssh-config` | `""` | Optional SSH config path for listing and SSH attachment. A leading `~`, `~/...` or `$HOME` expands to the home directory; any other value is passed through as written; empty uses the normal SSH lookup. |
 | `remote.transport` | `ssh` | Proxy attachment transport: `ssh`, `mosh`, or `et`. Listing always uses SSH. |
 | `remote.reconnect-initial` | `1s` | Initial retry delay for SSH proxy attachments; must be positive and no greater than `reconnect-max`. |
@@ -93,12 +93,9 @@ devbox = "tmux"             # auto, tmux, or herdr
 ## Changes that need a watcher restart
 
 The tmux watcher reads `[agents] highlight-color` and every `[glance]` key once
-when it starts. After changing any of them, restart it on each machine:
-
-```sh
-pkill -f 'nexo --backend=tmux agents watch'
-nexo tmux init --backend=tmux
-```
-
-`[tui] theme` is the exception: a running TUI polls the config and follows
-`dark`/`light` changes without a restart.
+when it starts. After changing any of them, restart it on each machine running
+the watcher; the [README's Upgrading section](../README.md#upgrading) has the
+canonical recipe for a default config and for a watcher started with
+`--config-file`. Herdr needs no watcher restart. `[tui] theme` is the
+exception: a running TUI polls the config and follows `dark`/`light` changes
+without a restart.
