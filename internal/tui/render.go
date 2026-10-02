@@ -352,8 +352,7 @@ func (m renderFrame) rowText(row row) (string, string) {
 func (m renderFrame) agentText(row row, marker string, selected bool) (string, string) {
 	a := row.agent
 	container := a.Container
-	nameStyle := bold()
-	primary := nameStyle.Render(highlightText(sanitize(a.Harness), string(m.query), selected)) + muted().Render("  "+highlightText(sanitize(container), string(m.query), selected))
+	primary := bold().Render(highlightText(sanitize(container), string(m.query), selected)) + muted().Render("  "+highlightText(sanitize(a.Harness), string(m.query), selected))
 	state := strings.ToLower(strings.TrimSpace(sanitize(a.State)))
 	stateLabel := "● " + state
 	if state == "stopped" && a.StoppedSince != nil {

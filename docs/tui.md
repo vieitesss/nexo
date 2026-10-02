@@ -15,7 +15,8 @@ their machine, and a remote header shows loading, warning, or error status
 while discovery runs.
 Container rows show the container name followed by one coloured state dot per
 agent. They do not repeat harness names, state words, ages, activity ages, or
-proxy labels. Agent rows show the container name without a machine prefix.
+proxy labels. Agent rows lead with the bold container name without a machine
+prefix, followed by the muted harness name.
 
 Every remote machine whose listing succeeded ends its section with a selectable
 `+ new container…` row. The row carries the multiplexer kind the listing
