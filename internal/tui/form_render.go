@@ -26,25 +26,13 @@ func overlayForm(lines []string, form *stagedForm, width, height int) []string {
 	maxBody := max(1, height-4)
 	form.viewportHeight = maxBody
 	form.viewportWidth = contentWidth
+	start, customStart := 0, false
 	if form.viewportHook != nil {
-		form.viewportHook(body, maxBody, contentWidth)
+		start, customStart = form.viewportHook(body, maxBody, contentWidth)
 	}
 	if len(body) > maxBody {
-		start := 0
-		if form.scrollOffsetHook != nil {
-			if offset, ok := form.scrollOffsetHook(); ok {
-				start = offset
-			} else {
-				// Keep the active field visible on every ordinary stage.
-				for index, line := range body {
-					if strings.HasPrefix(line, "▸ ") {
-						start = max(0, index-maxBody/2)
-						break
-					}
-				}
-			}
-		} else {
-			// Keep the active field visible on every stage, including long labels.
+		if !customStart {
+			// Keep the active field visible on every ordinary stage.
 			for index, line := range body {
 				if strings.HasPrefix(line, "▸ ") {
 					start = max(0, index-maxBody/2)

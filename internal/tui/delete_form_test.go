@@ -78,6 +78,40 @@ func TestDeletePreflightPrecedesDistinctConfirmation(t *testing.T) {
 	}
 }
 
+func TestDeletePreflightCancelReopenIgnoresLateResult(t *testing.T) {
+	deps := Deps{
+		DeleteFingerprint: func(context.Context, string) (string, error) { return "selected", nil },
+		DeletePreflight: func(_ context.Context, path, _ string) (deletion.Plan, error) {
+			return deletion.Plan{Path: path, Fingerprint: "selected", CanProceed: true}, nil
+		},
+	}
+	a := newDeleteForm(deps, context.Background(), "/tmp/a")
+	cmdA := a.startPreflight(deps)
+	generationA := a.generation
+	if cmdA == nil {
+		t.Fatal("first preflight did not start")
+	}
+	if effect := a.stagedForm.key(tea.KeyMsg{Type: tea.KeyEsc}); !effect.Canceled {
+		t.Fatal("Escape did not cancel first preflight")
+	}
+	b := newDeleteForm(deps, context.Background(), "/tmp/b")
+	cmdB := b.startPreflight(deps)
+	if cmdB == nil || generationA == b.generation {
+		t.Fatalf("reopened preflight generation = %d, first = %d", b.generation, generationA)
+	}
+
+	model := NewModel(context.Background(), deps, ProjectsTab)
+	model.input.form = b.stagedForm
+	model.input.deleteForm = b
+	model.input.actionInFlight = true
+	model.input.actionGeneration = b.generation
+	updated, _ := model.Update(cmdA())
+	model = updated.(Model)
+	if model.input.deleteForm != b || !b.preflightPending || b.plan != nil {
+		t.Fatalf("late first result changed reopened form: pending=%v plan=%#v", b.preflightPending, b.plan)
+	}
+}
+
 func TestDeleteRefreshKeepsNearestSelection(t *testing.T) {
 	places := []picker.Place{
 		{Kind: picker.ProjectKind, Path: "/tmp/a", Group: "/tmp", DisplayRemainder: "a"},

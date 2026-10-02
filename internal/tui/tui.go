@@ -542,8 +542,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.generation != 0 && msg.generation != m.input.actionGeneration {
 				return m, nil
 			}
-			if m.input.form != nil {
-				m.input.form.finishAction(msg)
+			if m.input.deleteForm != nil {
+				m.input.deleteForm.finishAction(msg)
 			}
 			m.input.actionInFlight = false
 			m.rebuild(false)
@@ -561,6 +561,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.input.form = nil
+			m.input.deleteForm = nil
 			m.input.actionInFlight = false
 			m.input.setQuery("")
 			if msg.kind == "delete" {

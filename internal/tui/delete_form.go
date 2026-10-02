@@ -11,8 +11,8 @@ import (
 )
 
 // deleteForm owns the destructive flow's identity, preflight plan, and
-// scrolling state. stagedForm only provides the generic field and stage
-// mechanics; the hooks below let this flow add its one safety-critical stage.
+// scrolling state. stagedForm provides the generic field and stage mechanics;
+// this wrapper adds the safety-critical preflight stage.
 type deleteForm struct {
 	*stagedForm
 
@@ -52,12 +52,8 @@ func newDeleteForm(deps Deps, ctx context.Context, path string) *deleteForm {
 		}},
 	}, state.validate, nil)
 	state.keyHook = state.key
-	state.advanceHook = state.advance
 	state.stageLinesHook = state.stageLines
 	state.viewportHook = state.viewport
-	state.scrollOffsetHook = state.scrollOffset
-	state.startHook = state.startPreflight
-	state.actionHook = state.finishAction
 	state.submit = deleteFormSubmit(deps, state)
 	state.busyLabel = "preflighting and deleting…"
 	return state
@@ -91,6 +87,10 @@ func (d *deleteForm) validate(form *stagedForm) formValidation {
 		return result
 	}
 	if form.stage == d.preflightStage() {
+		if !d.preflightSeen {
+			result.Error = "scroll through the complete preflight before continuing"
+			return result
+		}
 		if len(d.plan.Blockers) > 0 {
 			result.Error = "delete is blocked; cancel or fix the selected candidate"
 		}
@@ -147,29 +147,9 @@ func (d *deleteForm) key(msg tea.KeyMsg) (formEffect, bool) {
 		return d.scroll(-max(1, d.viewportHeight-1)), true
 	case tea.KeyPgDown:
 		return d.scroll(max(1, d.viewportHeight-1)), true
-	case tea.KeyEnter, tea.KeyRight, tea.KeyTab:
-		if !d.preflightSeen {
-			d.stageError = "scroll through the complete preflight before continuing"
-			return formEffect{Changed: true}, true
-		}
-		if msg.Type == tea.KeyTab {
-			return d.nextField(), true
-		}
-		effect, handled := d.advance()
-		if !handled {
-			return d.stagedForm.advance(), true
-		}
-		return effect, true
+	default:
+		return formEffect{}, false
 	}
-	return formEffect{}, false
-}
-
-func (d *deleteForm) advance() (formEffect, bool) {
-	if d.stage == d.preflightStage() && !d.preflightSeen {
-		d.stageError = "scroll through the complete preflight before continuing"
-		return formEffect{Changed: true}, true
-	}
-	return formEffect{}, false
 }
 
 func (d *deleteForm) stageLines(stage formStage) []string {
@@ -189,24 +169,18 @@ func (d *deleteForm) stageLines(stage formStage) []string {
 	return lines
 }
 
-func (d *deleteForm) viewport(body []string, maxBody, width int) {
+func (d *deleteForm) viewport(body []string, maxBody, width int) (int, bool) {
 	if d.stage != d.preflightStage() {
-		return
+		return 0, false
 	}
 	if maxBody <= 0 || width <= 0 {
 		d.preflightSeen = false
-		return
+		return 0, true
 	}
 	maxScroll := max(0, len(body)-maxBody)
 	d.preflightScroll = min(maxScroll, max(0, d.preflightScroll))
 	if len(body) <= maxBody || d.preflightScroll >= maxScroll {
 		d.preflightSeen = true
-	}
-}
-
-func (d *deleteForm) scrollOffset() (int, bool) {
-	if d.stage != d.preflightStage() {
-		return 0, false
 	}
 	return d.preflightScroll, true
 }
@@ -236,8 +210,7 @@ func (d *deleteForm) startPreflight(deps Deps) tea.Cmd {
 	}
 	d.preflightPending = true
 	d.inFlight = true
-	d.generation++
-	generation := d.generation
+	generation := d.nextGeneration()
 	ctx, cancel := context.WithCancel(d.ctx)
 	d.cancel = cancel
 	path := formValue(d.stagedForm, "path")

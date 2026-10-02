@@ -34,6 +34,7 @@ type inputState struct {
 	confirmKill      bool
 	killTargets      []picker.ContainerRef
 	form             *stagedForm
+	deleteForm       *deleteForm
 	renameMode       bool
 	renameInput      []rune
 	renameTarget     picker.ContainerRef
@@ -321,6 +322,7 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 			s.actionGeneration = s.form.generation
 		}
 		s.form = nil
+		s.deleteForm = nil
 		s.confirmKill = false
 		s.renameMode = false
 		s.killTargets = nil
@@ -331,6 +333,7 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 		if effect.Canceled {
 			s.actionGeneration = s.form.generation
 			s.form = nil
+			s.deleteForm = nil
 			s.actionInFlight = false
 			return inputEffect{rebuild: true}
 		}
@@ -430,8 +433,9 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 		if s.tab == ProjectsTab {
 			if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ProjectKind && current.place.Path != "" {
 				delete := newDeleteForm(s.deps, s.ctx, current.place.Path)
+				s.deleteForm = delete
 				s.form = delete.stagedForm
-				if cmd := s.form.startAction(s.deps); cmd != nil {
+				if cmd := delete.startPreflight(s.deps); cmd != nil {
 					s.actionInFlight = true
 					s.actionGeneration = s.form.generation
 					return inputEffect{rebuild: true, cmd: cmd}

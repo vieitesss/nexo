@@ -59,15 +59,11 @@ type stagedForm struct {
 	busyLabel  string
 	expanded   map[string]bool
 
-	keyHook          func(tea.KeyMsg) (formEffect, bool)
-	advanceHook      func() (formEffect, bool)
-	stageLinesHook   func(formStage) []string
-	viewportHook     func([]string, int, int)
-	scrollOffsetHook func() (int, bool)
-	startHook        func(Deps) tea.Cmd
-	actionHook       func(actionMsg)
-	viewportHeight   int
-	viewportWidth    int
+	keyHook        func(tea.KeyMsg) (formEffect, bool)
+	stageLinesHook func(formStage) []string
+	viewportHook   func([]string, int, int) (int, bool)
+	viewportHeight int
+	viewportWidth  int
 }
 
 func newStagedForm(ctx context.Context, stages []formStage, validate func(*stagedForm) formValidation, submit func(context.Context, map[string]string, uint64) tea.Cmd) *stagedForm {
@@ -238,11 +234,6 @@ func (f *stagedForm) key(msg tea.KeyMsg) formEffect {
 }
 
 func (f *stagedForm) advance() formEffect {
-	if f.advanceHook != nil {
-		if effect, handled := f.advanceHook(); handled {
-			return effect
-		}
-	}
 	if !f.applyValidation() {
 		return formEffect{Changed: true}
 	}
@@ -362,19 +353,6 @@ func (f stagedForm) renderLines() []string {
 		lines = append(lines, "  Enter submit  Esc cancel")
 	}
 	return lines
-}
-
-func (f *stagedForm) startAction(deps Deps) tea.Cmd {
-	if f == nil || f.startHook == nil {
-		return nil
-	}
-	return f.startHook(deps)
-}
-
-func (f *stagedForm) finishAction(msg actionMsg) {
-	if f != nil && f.actionHook != nil {
-		f.actionHook(msg)
-	}
 }
 
 func summaryJoin(parts []string) string {
