@@ -32,6 +32,7 @@ type Invocation struct {
 	Stdout            io.Writer
 	Stderr            io.Writer
 	Stdin             io.Reader
+	TTY               string
 	StartupTrace      *startup.Trace
 	JSON              bool
 	Args              []string
