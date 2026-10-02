@@ -95,6 +95,6 @@ devbox = "tmux"             # auto, tmux, or herdr
 The tmux watcher reads `[agents] highlight-color` and every `[glance]` key once
 when it starts. After changing any of them, rerun `nexo tmux init` on each
 machine running the watcher; init replaces the running watcher (see the
-[README's Upgrading section](../README.md#upgrading)). Herdr needs no watcher restart. `[tui] theme` is the
-exception: a running TUI polls the config and follows `dark`/`light` changes
-without a restart.
+[README's Upgrading section](../README.md#upgrading)). Herdr needs no watcher
+restart. `[tui] theme` is the exception: a running TUI polls the config and
+follows `dark`/`light` changes without a restart.
