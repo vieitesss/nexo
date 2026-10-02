@@ -631,6 +631,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.source.duePullRequestCommand(msg.Path)
+	case inputMsg:
+		var effect inputEffect
+		if msg.rename {
+			effect = m.input.updateRenameInput(msg.msg)
+		} else {
+			effect = m.input.updateQuery(msg.msg)
+		}
+		if effect.rebuild {
+			m.rebuild(false)
+		}
+		return m, effect.cmd
 	case tea.KeyMsg:
 		m.autoTab = false
 		m.userInteracted = true

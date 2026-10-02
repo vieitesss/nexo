@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
@@ -22,6 +23,7 @@ type renderFrame struct {
 	sized             bool
 	tab               Tab
 	query             []rune
+	queryInput        textinput.Model
 	rows              []row
 	cursor            string
 	marked            map[picker.ContainerRef]bool
@@ -33,7 +35,7 @@ type renderFrame struct {
 	projection        rowProjection
 	confirmKill       bool
 	renameMode        bool
-	renameInput       []rune
+	renameInput       textinput.Model
 	form              *stagedForm
 }
 
@@ -52,12 +54,12 @@ func (m Model) frame() renderFrame {
 	}
 	return renderFrame{
 		width: m.width, height: m.height, sized: m.sized, tab: m.input.tab,
-		query: append([]rune(nil), m.input.query...), rows: m.rows,
+		query: []rune(m.input.query.Value()), queryInput: m.input.query, rows: m.rows,
 		cursor: m.input.cursor, marked: m.input.marked,
 		markedTargetsList: projection.markedTargets(m.input.marked), now: m.now,
 		toast: m.toast, refreshErr: m.source.refreshErr, gitErrors: m.gitErrors,
 		projection: projection, confirmKill: m.input.confirmKill,
-		renameMode: m.input.renameMode, renameInput: append([]rune(nil), m.input.renameInput...), form: m.input.form,
+		renameMode: m.input.renameMode, renameInput: m.input.renameInput, form: m.input.form,
 	}
 }
 
@@ -233,7 +235,7 @@ func (m renderFrame) tabLine() string {
 
 func (m renderFrame) searchLine() string {
 	count := ""
-	if len(m.query) > 0 {
+	if m.queryInput.Value() != "" {
 		matches := m.projection.MatchCount(m.tab)
 		label := "matches"
 		if matches == 1 {
@@ -246,7 +248,7 @@ func (m renderFrame) searchLine() string {
 	if promptWidth < 1 {
 		promptWidth = 1
 	}
-	prompt := shell.PromptLine(promptWidth, accent().Render("⌕ "), string(m.query), accent().Render("▌"))
+	prompt := promptLineAtCursor(promptWidth, accent().Render("⌕ "), m.queryInput)
 	gap := m.width - shell.StringWidth(prompt) - countWidth
 	if gap < 0 {
 		count = shell.Truncate(count, max(0, m.width-shell.StringWidth(prompt)), "")
@@ -254,6 +256,39 @@ func (m renderFrame) searchLine() string {
 		gap = m.width - shell.StringWidth(prompt) - countWidth
 	}
 	return fit(prompt+strings.Repeat(" ", max(0, gap))+count, m.width)
+}
+
+func promptLineAtCursor(width int, prompt string, input textinput.Model) string {
+	if width <= 0 {
+		return ""
+	}
+	value := []rune(input.Value())
+	position := max(0, min(input.Position(), len(value)))
+	before, after := string(value[:position]), string(value[position:])
+	cursor := accent().Render("▌")
+	available := max(0, width-shell.StringWidth(prompt))
+	if available > 0 {
+		remaining := max(0, available-shell.StringWidth(cursor))
+		beforeWidth, afterWidth := shell.StringWidth(before), shell.StringWidth(after)
+		if beforeWidth+afterWidth > remaining {
+			rightWidth := min(afterWidth, remaining/2)
+			leftWidth := remaining - rightWidth
+			if beforeWidth < leftWidth {
+				rightWidth = min(afterWidth, remaining-beforeWidth)
+				leftWidth = remaining - rightWidth
+			}
+			if afterWidth < rightWidth {
+				leftWidth = min(beforeWidth, remaining-afterWidth)
+				rightWidth = remaining - leftWidth
+			}
+			before = shell.TruncateLeft(before, leftWidth, "…")
+			after = shell.Truncate(after, rightWidth, "…")
+		}
+	} else {
+		before, after = "", ""
+	}
+	line := shell.Truncate(prompt+before+cursor+after, width, "")
+	return line + strings.Repeat(" ", max(0, width-shell.StringWidth(line)))
 }
 
 func (m renderFrame) bodyLayout(height int) ([]bodyLine, int) {
@@ -715,7 +750,7 @@ func (m renderFrame) footer() string {
 		if promptWidth < 1 {
 			promptWidth = 1
 		}
-		prompt := shell.PromptLine(promptWidth, accent().Render("rename: "), string(m.renameInput), accent().Render("▌"))
+		prompt := promptLineAtCursor(promptWidth, accent().Render("rename: "), m.renameInput)
 		return fit(prompt+suffix, m.width)
 	}
 	if m.refreshErr != nil {

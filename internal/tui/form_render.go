@@ -35,14 +35,7 @@ func overlayForm(lines []string, form *stagedForm, width, height int) []string {
 	if form.viewportHook != nil {
 		start, customStart = form.viewportHook(body, maxBody, innerWidth)
 	}
-	if len(body) > maxBody {
-		if !customStart {
-			// Keep the active field visible on every ordinary stage.
-			start = max(0, activeFormLine(body)-maxBody/2)
-		}
-		start = min(start, len(body)-maxBody)
-		body = body[start : start+maxBody]
-	}
+	body = viewportFormLines(body, maxBody, start, customStart)
 	style := lipgloss.NewStyle().Width(contentWidth).Padding(0, 1).Border(lipgloss.RoundedBorder()).Foreground(palette.Fg)
 	modalLines := strings.Split(style.Render(strings.Join(body, "\n")), "\n")
 	modalWidth := 0
@@ -65,6 +58,17 @@ func overlayForm(lines []string, form *stagedForm, width, height int) []string {
 		lines[lineIndex] = strings.Repeat(" ", startX) + modalLine + strings.Repeat(" ", max(0, width-startX-modalWidth))
 	}
 	return lines
+}
+
+func viewportFormLines(lines []string, height, start int, customStart bool) []string {
+	if height <= 0 || len(lines) <= height {
+		return lines
+	}
+	if !customStart {
+		start = shell.ViewportStart(len(lines), height, activeFormLine(lines))
+	}
+	start = max(0, min(start, len(lines)-height))
+	return lines[start : start+height]
 }
 
 // activeFormLine returns the index of the line the cursor is on, preferring

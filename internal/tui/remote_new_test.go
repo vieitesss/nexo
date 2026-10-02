@@ -332,34 +332,31 @@ func TestRemoteNewFormRejectsLateSubmitFromReplacedForm(t *testing.T) {
 	}
 }
 
-// TestRemoteNewRowRejectsMultilineQueryName pins the shared one-line policy:
-// a multiline query-derived name must open the form with the error inline for
-// every resolved backend instead of quitting and letting the backend reject
-// the name after the TUI is gone.
-func TestRemoteNewRowRejectsMultilineQueryName(t *testing.T) {
-	for _, backend := range []string{"tmux", "herdr"} {
-		t.Run(backend, func(t *testing.T) {
-			model := loadRemoteMachine(t, NewModel(context.Background(), remoteNewDeps(), ContainersTab), "dev", backend)
-			model.input.cursor = "new:dev"
-			model.SetQuery("alpha\nbeta")
-			model.input.cursor = "new:dev"
-			updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			model = updated.(Model)
-			if cmd != nil {
-				t.Fatal("multiline query quit the model")
-			}
-			if model.input.selectedRemoteTarget != nil {
-				t.Fatal("multiline query selected a remote target")
-			}
-			if model.input.form == nil {
-				t.Fatal("multiline query did not open the name form")
-			}
-			if got := model.input.form.stageError; got != "name must be one line" {
-				t.Fatalf("stage error = %q, want the one-line policy", got)
-			}
-			if got := formValue(model.input.form, "name"); got != "alpha\nbeta" {
-				t.Fatalf("prefilled name = %q", got)
-			}
-		})
+// TestRemoteNewRowSanitizesMultilineQueryName follows textinput's one-line
+// contract: pasted newlines become spaces before the fast path submits.
+func TestRemoteNewRowSanitizesMultilineQueryName(t *testing.T) {
+	var gotName string
+	deps := remoteNewDeps()
+	deps.NewRemoteContainer = func(_ context.Context, _ RemoteTarget, name string) error {
+		gotName = name
+		return nil
+	}
+	model := loadRemoteMachine(t, NewModel(context.Background(), deps, ContainersTab), "dev", "tmux")
+	model.input.cursor = "new:dev"
+	model.SetQuery("alpha\nbeta")
+	model.input.cursor = "new:dev"
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.input.selectedRemoteTarget == nil {
+		t.Fatal("sanitized query did not select a remote target")
+	}
+	if got := model.input.selectedRemoteName; got != "alpha beta" {
+		t.Fatalf("selected name = %q, want %q", got, "alpha beta")
+	}
+	if err := model.execute(context.Background()); err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if gotName != "alpha beta" {
+		t.Fatalf("action name = %q, want %q", gotName, "alpha beta")
 	}
 }

@@ -219,11 +219,11 @@ func newFormTextInput(field formField, validate textinput.ValidateFunc) textinpu
 	input.Placeholder = field.Placeholder
 	input.Validate = validate
 	input.Width = 64
-	input.PromptStyle = lipgloss.NewStyle().Foreground(palette.Fg)
-	input.TextStyle = lipgloss.NewStyle().Foreground(palette.Fg)
-	input.PlaceholderStyle = lipgloss.NewStyle().Foreground(palette.Muted)
-	input.CompletionStyle = lipgloss.NewStyle().Foreground(palette.Muted)
-	input.Cursor.Style = lipgloss.NewStyle().Foreground(palette.Accent)
+	input.PromptStyle = normal()
+	input.TextStyle = normal()
+	input.PlaceholderStyle = muted()
+	input.CompletionStyle = muted()
+	input.Cursor.Style = accent()
 	input.SetValue(field.Default)
 	input.Blur()
 	return input
@@ -231,10 +231,10 @@ func newFormTextInput(field formField, validate textinput.ValidateFunc) textinpu
 
 func formHelp() help.Model {
 	model := help.New()
-	model.Styles.ShortKey = lipgloss.NewStyle().Foreground(palette.Accent)
-	model.Styles.ShortDesc = lipgloss.NewStyle().Foreground(palette.Muted)
-	model.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(palette.Muted)
-	model.Styles.Ellipsis = lipgloss.NewStyle().Foreground(palette.Muted)
+	model.Styles.ShortKey = accent()
+	model.Styles.ShortDesc = muted()
+	model.Styles.ShortSeparator = muted()
+	model.Styles.Ellipsis = muted()
 	model.Styles.FullKey = model.Styles.ShortKey
 	model.Styles.FullDesc = model.Styles.ShortDesc
 	model.Styles.FullSeparator = model.Styles.ShortSeparator
@@ -506,6 +506,7 @@ func (f *stagedForm) updateInput(msg tea.Msg) formEffect {
 	}
 	before := field.input.Value()
 	updated, cmd := field.input.Update(msg)
+	updated.Cursor.Blink = true
 	field.input = updated
 	if before != updated.Value() {
 		field.invalidDefault = ""

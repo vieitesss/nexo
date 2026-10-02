@@ -30,7 +30,7 @@ func TestStandaloneSpaceIsSearchAndRenameInput(t *testing.T) {
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlR})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	if got := string(model.input.renameInput); got != " x" {
+	if got := model.input.renameInput.Value(); got != " x" {
 		t.Fatalf("rename input = %q", got)
 	}
 }
