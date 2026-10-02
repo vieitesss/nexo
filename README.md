@@ -93,6 +93,19 @@ A Go install writes to `$(go env GOBIN)`, or `$(go env GOPATH)/bin` when
 
 ## Local setup
 
+On a fresh machine, the guided path is one command:
+
+```sh
+nexo setup
+```
+
+It detects the multiplexer owning the current pane, writes the shared config,
+installs or reloads the selected adapter, and starts the tmux watcher. Use
+`nexo setup --check` to print the local and remote checklist. In scripts use
+`--yes`, `--dry-run`, `--local-only`, or repeat `--machine ALIAS`; setup never
+prompts when stdin is not a TTY. The hand-operated reference is in
+[docs/setup.md](docs/setup.md).
+
 nexo drives the multiplexer that owns the current pane. Install the adapter for
 your backend. Key bindings stay yours: nexo installs none; a tmux user also
 needs the init line and agent watcher below, while Herdr keeps its native agent
@@ -212,9 +225,13 @@ See [docs/herdr.md](docs/herdr.md) for the complete adapter setup and
 
 ## Remote machines
 
-Each remote machine runs its own multiplexer and a copy of nexo that the main
-machine calls over SSH. Set up both sides. The full reference, including Herdr
-remotes and proxy behaviour, is in [docs/remote.md](docs/remote.md).
+`nexo setup` also configures every selected SSH alias from one place. It probes
+machines in parallel, installs a matching binary, makes it visible to
+non-interactive shells, checks UTF-8, configures the remote multiplexer, and
+records `[remote].machines` and `[remote.backends]`. Select a subset with
+`nexo setup --machine devbox --machine gpu1`; use `--local-only` to skip SSH.
+The full hand-operated reference, including Herdr remotes and proxy
+behaviour, is in [docs/setup.md](docs/setup.md) and [docs/remote.md](docs/remote.md).
 
 ### On the local machine
 
