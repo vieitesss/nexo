@@ -123,12 +123,28 @@ refreshes the Projects catalog and keeps selection near the removed row.
 
 ## Keys
 
-See the picker key table in the README for the complete list. `Ctrl-Y` opens
-project deletion; it is intentionally separate from container kill (`Ctrl-X`).
-Left/Right only fold project rows and project folders; they do not fold machine
-groups in the Agents or Containers tabs. In the search row, Ctrl-W deletes back to whitespace, Alt-Backspace
-deletes back to the previous alphanumeric word boundary, and Ctrl-U clears the
-query.
+| Key | Behavior |
+| --- | --- |
+| `Tab` / `Shift-Tab` | Switch tabs |
+| `F1` / `F2` / `F3` | Jump to Agents / Containers / Projects |
+| `↑` / `↓`, `Ctrl-N` / `Ctrl-P` | Move |
+| `Enter` | Open the selected item, focus the selected agent, or name a new remote container |
+| `←` / `→` | Fold the selected folder or checkout, step Left to its parent, or unfold with Right |
+| `Ctrl-T` | Mark the selected container |
+| `Ctrl-O` | Open the clone form for the selected Projects row |
+| `Ctrl-D` | Open the new-directory form in the Projects tab |
+| `Ctrl-E` | Open the branch-extraction form for the selected Git checkout or worktree |
+| `Ctrl-Y` | Open the delete preflight and confirmation form for the selected Projects row |
+| `Ctrl-X` | Kill marked or selected containers after confirmation |
+| `Ctrl-R` | Rename the selected container |
+| `Esc` / `Ctrl-C` | Clear search, then close / close |
+| Printable keys, `Backspace` / `Delete` | Fuzzy search, erase search |
+
+`Ctrl-Y` opens project deletion; it is intentionally separate from container
+kill (`Ctrl-X`). Left/Right only fold project rows and project folders; they do
+not fold machine groups in the Agents or Containers tabs. In the search row,
+Ctrl-W deletes back to whitespace, Alt-Backspace deletes back to the previous
+alphanumeric word boundary, and Ctrl-U clears the query.
 
 ## Mouse
 
