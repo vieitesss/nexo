@@ -22,7 +22,6 @@ type RemoteConfig struct {
 
 const (
 	DefaultRemoteTransport  = "ssh"
-	DefaultRemoteBackend    = "auto"
 	DefaultReconnectInitial = time.Second
 	DefaultReconnectMax     = 30 * time.Second
 )
@@ -79,23 +78,6 @@ func (r RemoteConfig) IsMachineConfigured(machine string) bool {
 		}
 	}
 	return false
-}
-
-// BackendFor returns the configured remote backend, defaulting to auto.
-func (r RemoteConfig) BackendFor(machine string) string {
-	machine = proxyidentity.NormalizeMachineName(machine)
-	backend := ""
-	for configured, value := range r.Backends {
-		if proxyidentity.NormalizeMachineName(configured) == machine {
-			backend = value
-			break
-		}
-	}
-	backend = strings.ToLower(strings.TrimSpace(backend))
-	if backend == "" {
-		return DefaultRemoteBackend
-	}
-	return backend
 }
 
 // ReconnectDelays returns the configured proxy retry bounds with defaults.
