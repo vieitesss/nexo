@@ -63,6 +63,12 @@ func Names(backend any) []string {
 	if _, ok := backend.(RemotePaste); ok {
 		names = append(names, "RemotePaste")
 	}
+	if _, ok := backend.(ProxySessionResolver); ok {
+		names = append(names, "ProxySessionResolver")
+	}
+	if _, ok := backend.(ProxyWorkspaceCloser); ok {
+		names = append(names, "ProxyWorkspaceCloser")
+	}
 	sort.Strings(names)
 	return names
 }

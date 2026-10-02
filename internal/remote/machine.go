@@ -136,6 +136,10 @@ func (p OperationPolicy) open(ctx context.Context, commandRunner runner.CommandR
 	if err := p.validateKind(local, machine, kind, "open"); err != nil {
 		return err
 	}
+	return p.openValidated(ctx, commandRunner, local, machine, kind, container)
+}
+
+func (p OperationPolicy) openValidated(ctx context.Context, commandRunner runner.CommandRunner, local backend.Kind, machine string, kind Kind, container string) error {
 	if kind == KindHerdr {
 		return p.openHerdr(ctx, commandRunner, machine, container)
 	}
@@ -162,13 +166,13 @@ func (p OperationPolicy) create(ctx context.Context, commandRunner runner.Comman
 		if err := createHerdrWorkspace(ctx, commandRunner, sshConfig, result.Machine, name); err != nil {
 			return err
 		}
-		return p.open(ctx, commandRunner, local, result.Machine, result.Kind, name)
+		return p.openValidated(ctx, commandRunner, local, result.Machine, result.Kind, name)
 	case KindTmux:
 		container, err := createTmuxContainer(ctx, commandRunner, sshConfig, result.Machine, name)
 		if err != nil {
 			return err
 		}
-		return p.open(ctx, commandRunner, local, result.Machine, result.Kind, container)
+		return p.openValidated(ctx, commandRunner, local, result.Machine, result.Kind, container)
 	default:
 		return fmt.Errorf("remote machine %q has an unknown multiplexer kind", result.Machine)
 	}
