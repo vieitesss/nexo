@@ -158,8 +158,8 @@ func stateDot(state agentState, cfg config.GlanceConfig) (string, string) {
 	return dot, style + dot + "#[fg=default]"
 }
 
-// agentStateOf classifies an agent. Anything that is neither working nor an
-// unseen stopped agent is drawn and sorted as seen stopped.
+// agentStateOf classifies an agent for drawing. Anything that is neither
+// working nor an unseen stopped agent is drawn as seen stopped.
 func agentStateOf(agent capabilities.Agent) agentState {
 	switch strings.ToLower(strings.TrimSpace(agent.State)) {
 	case "working":

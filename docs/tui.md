@@ -155,7 +155,8 @@ interface paints no background, so those are not used on screen.
 
 Semantic colours stay as terminal ANSI codes and follow the user's theme:
 agent state is red (unseen stopped) or yellow (working), and a seen stopped
-agent uses the muted grey, matching the glance row's dot colours. Git additions and deletions are bright
+agent uses the muted grey, following the same state hierarchy as the glance
+row's dots. Git additions and deletions are bright
 green and bright red, and errors are red. The selected row is the only painted
 background — one blue bar with a single foreground. Modal forms use a border/frame
 but do not paint their body, so the selected-row rule remains intact. Bold names
