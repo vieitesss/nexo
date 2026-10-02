@@ -16,9 +16,9 @@ import (
 // optional add-parent field. Creation is a plain filesystem action; it never
 // touches Git or a multiplexer and never opens or focuses a container.
 func newDirectoryForm(deps Deps, ctx context.Context) *stagedForm {
-	fields := []formField{{ID: "destination", Label: "path", Value: ""}}
+	fields := []formField{{ID: "destination", Label: "path", Default: "", Kind: formText, Placeholder: "project directory"}}
 	if deps.AddProjectPath != nil {
-		fields = append(fields, formField{ID: "add-parent", Label: "add parent (yes/no)", Value: "no"})
+		fields = append(fields, formField{ID: "add-parent", Label: "add parent", Default: "no", Kind: formToggle})
 	}
 	form := newStagedForm(ctx, []formStage{
 		{ID: "destination", Title: "directory", Fields: fields},
@@ -62,10 +62,10 @@ func directoryFormValidation(deps Deps) func(*stagedForm) formValidation {
 	}
 }
 
-func directoryFormSubmit(deps Deps) func(context.Context, map[string]string, uint64) tea.Cmd {
-	return func(actionCtx context.Context, values map[string]string, generation uint64) tea.Cmd {
-		target := strings.TrimSpace(values["destination"])
-		addParent := strings.EqualFold(strings.TrimSpace(values["add-parent"]), "yes")
+func directoryFormSubmit(deps Deps) func(context.Context, formValues, uint64) tea.Cmd {
+	return func(actionCtx context.Context, values formValues, generation uint64) tea.Cmd {
+		target := strings.TrimSpace(values.String("destination"))
+		addParent := strings.EqualFold(strings.TrimSpace(values.String("add-parent")), "yes")
 		createDirectory, addPath := deps.CreateDirectory, deps.AddProjectPath
 		return func() tea.Msg {
 			if createDirectory == nil {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -9,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/shell"
 )
 
 // SetupPromptDefaults seeds the guided setup form. Explicit scope selections
@@ -37,39 +39,43 @@ type SetupPromptValues struct {
 	RemoteBackends map[string]string
 }
 
+// ErrSetupCanceled distinguishes an intentional Escape from a form failure.
+// Callers can surface it as the normal "setup canceled" decline path.
+var ErrSetupCanceled = errors.New("setup canceled")
+
 type setupPromptDone struct{ values SetupPromptValues }
 type setupPromptModel struct {
-	form  *stagedForm
-	value *SetupPromptValues
-	err   error
+	form           *stagedForm
+	value          *SetupPromptValues
+	err            error
+	defaultBackend string
 }
 
 // PromptSetup runs the shared Bubble Tea staged-form stack. It is never called
 // for a non-terminal stdin.
 func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, defaults SetupPromptDefaults) (SetupPromptValues, error) {
 	stages := []formStage{
-		{ID: "backend", Title: "backend", Fields: []formField{{ID: "backend", Label: "backend (tmux or herdr)", Value: defaults.Backend}}},
-		{ID: "paths", Title: "project roots (comma-separated)", Fields: []formField{{ID: "paths", Label: "paths", Value: strings.Join(defaults.Paths, ", ")}}},
-		{ID: "notify", Title: "agents", Fields: []formField{{ID: "notify", Label: "desktop notifications", Value: boolLabel(defaults.Notify)}}},
-		{ID: "bindings", Title: bindingTitle(defaults.Backend), Fields: []formField{{ID: "tui-key", Label: "TUI key (blank keeps opt-in)", Value: defaults.TUIKey}, {ID: "agents-key", Label: "agents key (blank keeps opt-in)", Value: defaults.AgentsKey}}},
+		{ID: "backend", Title: "backend", Fields: []formField{{ID: "backend", Label: "backend", Default: defaults.Backend, Kind: formChoice, Options: []string{"tmux", "herdr"}}}},
+		{ID: "paths", Title: "project roots", Fields: []formField{{ID: "paths", Label: "paths (comma-separated)", Default: abbreviatePathList(strings.Join(defaults.Paths, ", ")), Kind: formText, Placeholder: "~/src, ~/work"}}},
+		{ID: "notify", Title: "agents", Fields: []formField{{ID: "notify", Label: "desktop notifications", Default: boolLabel(defaults.Notify), Kind: formToggle}}},
+		{ID: "bindings", Title: bindingTitle(defaults.Backend), Fields: []formField{{ID: "tui-key", Label: "TUI key (blank keeps opt-in)", Default: defaults.TUIKey, Kind: formText, Placeholder: "C-s", Validate: setupBindingValidator(defaults.Backend)}, {ID: "agents-key", Label: "agents key (blank keeps opt-in)", Default: defaults.AgentsKey, Kind: formText, Placeholder: "a", Validate: setupBindingValidator(defaults.Backend)}}},
 	}
 	if !defaults.LocalOnly {
-		hostFields := make([]formField, 0, len(defaults.Hosts)+1)
-		selected := make(map[string]bool, len(defaults.SelectedHosts))
+		selected := make([]string, 0, len(defaults.SelectedHosts))
+		selectedSet := make(map[string]bool, len(defaults.SelectedHosts))
 		for _, host := range defaults.SelectedHosts {
-			selected[strings.ToLower(strings.TrimSpace(host))] = true
+			selectedSet[strings.ToLower(strings.TrimSpace(host))] = true
 		}
 		for _, host := range defaults.Hosts {
-			if selected[strings.ToLower(strings.TrimSpace(host))] {
-				hostFields = append(hostFields, formField{ID: "host:" + host, Label: host, Value: "✓", ReadOnly: true})
-			} else {
-				hostFields = append(hostFields, formField{ID: "host:" + host, Label: host, Value: "", ReadOnly: true})
+			if selectedSet[strings.ToLower(strings.TrimSpace(host))] {
+				selected = append(selected, host)
 			}
 		}
+		hostFields := []formField{{ID: "hosts", Label: "SSH aliases", Kind: formMultiSelect, Options: append([]string(nil), defaults.Hosts...), InitialSelected: selected}}
 		if !defaults.ScopeLocked {
-			hostFields = append(hostFields, formField{ID: "extra-host", Label: "additional alias (optional)", Value: ""})
+			hostFields = append(hostFields, formField{ID: "extra-host", Label: "additional alias (optional)", Kind: formText, Default: "", Placeholder: "ssh alias"})
 		}
-		stages = append(stages, formStage{ID: "hosts", Title: "remote machines (Space toggles)", Fields: hostFields})
+		stages = append(stages, formStage{ID: "hosts", Title: "remote machines", Fields: hostFields})
 	}
 	remoteMachines := make([]string, 0, len(defaults.RemoteBackends))
 	for machine := range defaults.RemoteBackends {
@@ -77,29 +83,33 @@ func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, default
 	}
 	sort.Strings(remoteMachines)
 	for _, machine := range remoteMachines {
-		stages = append(stages, formStage{ID: "remote-backend:" + machine, Title: "backend for " + machine, Fields: []formField{{ID: "remote-backend:" + machine, Label: "tmux or herdr", Value: defaults.RemoteBackends[machine]}}})
+		stages = append(stages, formStage{ID: "remote-backend:" + machine, Title: "backend for " + machine, Fields: []formField{{ID: "remote-backend:" + machine, Label: "backend", Default: defaults.RemoteBackends[machine], Kind: formChoice, Options: []string{"tmux", "herdr"}}}})
 	}
 	form := newStagedForm(ctx, stages, func(f *stagedForm) formValidation {
 		return validateSetupForm(f, defaults.Backend)
-	}, func(_ context.Context, values map[string]string, _ uint64) tea.Cmd {
+	}, func(_ context.Context, values formValues, _ uint64) tea.Cmd {
 		return func() tea.Msg {
-			answer := SetupPromptValues{Backend: strings.ToLower(strings.TrimSpace(values["backend"])), Notify: values["notify"] == "yes"}
-			for _, raw := range strings.Split(values["paths"], ",") {
+			answer := SetupPromptValues{Backend: strings.ToLower(strings.TrimSpace(values.String("backend"))), Notify: values.String("notify") == "yes"}
+			for _, raw := range strings.Split(values.String("paths"), ",") {
 				if path := strings.TrimSpace(raw); path != "" {
 					answer.Paths = append(answer.Paths, path)
 				}
 			}
-			answer.TUIKey, answer.AgentsKey = strings.TrimSpace(values["tui-key"]), strings.TrimSpace(values["agents-key"])
+			answer.TUIKey, answer.AgentsKey = strings.TrimSpace(values.String("tui-key")), strings.TrimSpace(values.String("agents-key"))
 			answer.RemoteBackends = make(map[string]string, len(defaults.RemoteBackends))
 			for _, machine := range remoteMachines {
-				answer.RemoteBackends[machine] = strings.ToLower(strings.TrimSpace(values["remote-backend:"+machine]))
+				answer.RemoteBackends[machine] = strings.ToLower(strings.TrimSpace(values.String("remote-backend:" + machine)))
+			}
+			selectedHosts := make(map[string]bool)
+			for _, host := range values.List("hosts") {
+				selectedHosts[strings.ToLower(strings.TrimSpace(host))] = true
 			}
 			for _, host := range defaults.Hosts {
-				if values["host:"+host] == "✓" {
+				if selectedHosts[strings.ToLower(strings.TrimSpace(host))] {
 					answer.Hosts = append(answer.Hosts, host)
 				}
 			}
-			for _, raw := range strings.Fields(values["extra-host"]) {
+			for _, raw := range strings.Fields(values.String("extra-host")) {
 				if raw = strings.TrimSpace(raw); raw != "" {
 					answer.Hosts = appendUnique(answer.Hosts, raw)
 				}
@@ -107,31 +117,8 @@ func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, default
 			return setupPromptDone{values: answer}
 		}
 	})
-	form.keyHook = func(msg tea.KeyMsg) (formEffect, bool) {
-		field := form.currentField()
-		if field == nil || msg.Type != tea.KeySpace {
-			return formEffect{}, false
-		}
-		switch {
-		case strings.HasPrefix(field.ID, "host:"):
-			if field.Value == "✓" {
-				field.Value = ""
-			} else {
-				field.Value = "✓"
-			}
-			return formEffect{Changed: true}, true
-		case field.ID == "notify":
-			if field.Value == "yes" {
-				field.Value = "no"
-			} else {
-				field.Value = "yes"
-			}
-			return formEffect{Changed: true}, true
-		default:
-			return formEffect{}, false
-		}
-	}
-	model := setupPromptModel{form: form}
+	model := setupPromptModel{form: form, defaultBackend: defaults.Backend}
+	model.refreshBindingPresentation()
 	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(input), tea.WithOutput(output))
 	result, err := program.Run()
 	if err != nil {
@@ -158,15 +145,15 @@ func PromptRemoteBackends(ctx context.Context, input io.Reader, output io.Writer
 	sort.Strings(machines)
 	stages := make([]formStage, 0, len(machines))
 	for _, machine := range machines {
-		stages = append(stages, formStage{ID: "remote-backend:" + machine, Title: "backend for " + machine, Fields: []formField{{ID: "remote-backend:" + machine, Label: "tmux or herdr", Value: backends[machine]}}})
+		stages = append(stages, formStage{ID: "remote-backend:" + machine, Title: "backend for " + machine, Fields: []formField{{ID: "remote-backend:" + machine, Label: "backend", Default: backends[machine], Kind: formChoice, Options: []string{"tmux", "herdr"}}}})
 	}
 	form := newStagedForm(ctx, stages, func(f *stagedForm) formValidation {
 		return validateSetupForm(f, "")
-	}, func(_ context.Context, values map[string]string, _ uint64) tea.Cmd {
+	}, func(_ context.Context, values formValues, _ uint64) tea.Cmd {
 		return func() tea.Msg {
 			answer := SetupPromptValues{RemoteBackends: make(map[string]string, len(machines))}
 			for _, machine := range machines {
-				answer.RemoteBackends[machine] = strings.ToLower(strings.TrimSpace(values["remote-backend:"+machine]))
+				answer.RemoteBackends[machine] = strings.ToLower(strings.TrimSpace(values.String("remote-backend:" + machine)))
 			}
 			return setupPromptDone{values: answer}
 		}
@@ -187,43 +174,65 @@ func PromptRemoteBackends(ctx context.Context, input io.Reader, output io.Writer
 	return final.value.RemoteBackends, nil
 }
 
-func validateSetupForm(f *stagedForm, defaultBackend string) formValidation {
-	backend := defaultBackend
-	for _, stage := range f.stages {
-		for _, field := range stage.Fields {
-			if field.ID == "backend" {
-				backend = strings.ToLower(strings.TrimSpace(field.Value))
-			}
+func setupBindingValidator(defaultBackend string) func(string, formValues) error {
+	return func(value string, values formValues) error {
+		backend := strings.TrimSpace(values.String("backend"))
+		if backend == "" {
+			backend = defaultBackend
 		}
+		return config.ValidateBindingKeyForBackend(backend, value)
 	}
+}
+
+func validateSetupForm(f *stagedForm, defaultBackend string) formValidation {
+	values := f.values()
+	backend := strings.ToLower(strings.TrimSpace(values.String("backend")))
+	if backend == "" {
+		backend = strings.ToLower(strings.TrimSpace(defaultBackend))
+	}
+	var result formValidation
 	for stageIndex, stage := range f.stages {
 		if stageIndex > f.stage {
 			break
 		}
 		for index := range stage.Fields {
 			field := &stage.Fields[index]
-			if field.ID == "backend" {
+			switch {
+			case field.ID == "backend":
+				field.Error = ""
 				if backend != "tmux" && backend != "herdr" {
 					field.Error = "choose tmux or herdr"
-					return formValidation{Error: "backend must be tmux or herdr"}
+					if result.Error == "" {
+						result.Error = "backend must be tmux or herdr"
+					}
 				}
-			}
-			if field.ID == "tui-key" || field.ID == "agents-key" {
-				if err := config.ValidateBindingKeyForBackend(backend, field.Value); err != nil {
+			case field.ID == "tui-key" || field.ID == "agents-key":
+				// Backend changes do not edit the input. Revalidate both fields
+				// and keep bubbles/textinput.Err in lockstep with the displayed
+				// staged-form error.
+				err := config.ValidateBindingKeyForBackend(backend, values.String(field.ID))
+				field.Error = ""
+				field.input.Err = nil
+				if err != nil {
 					field.Error = err.Error()
-					return formValidation{Error: "choose a valid binding key or leave it blank"}
+					field.input.Err = err
+					if result.Error == "" {
+						result.Error = "choose a valid binding key or leave it blank"
+					}
 				}
-			}
-			if strings.HasPrefix(field.ID, "remote-backend:") {
-				remoteBackend := strings.ToLower(strings.TrimSpace(field.Value))
+			case strings.HasPrefix(field.ID, "remote-backend:"):
+				field.Error = ""
+				remoteBackend := strings.ToLower(strings.TrimSpace(values.String(field.ID)))
 				if remoteBackend != "tmux" && remoteBackend != "herdr" {
 					field.Error = "choose tmux or herdr"
-					return formValidation{Error: "each remote backend must be tmux or herdr"}
+					if result.Error == "" {
+						result.Error = "each remote backend must be tmux or herdr"
+					}
 				}
 			}
 		}
 	}
-	return formValidation{}
+	return result
 }
 
 func appendUnique(values []string, value string) []string {
@@ -242,6 +251,48 @@ func bindingTitle(backend string) string {
 	return "optional bindings (suggested Herdr keys: ctrl+s, prefix+a)"
 }
 
+func bindingPlaceholder(backend string) string {
+	if strings.EqualFold(strings.TrimSpace(backend), "tmux") {
+		return "C-s"
+	}
+	return "ctrl+s"
+}
+
+func agentsBindingPlaceholder(backend string) string {
+	if strings.EqualFold(strings.TrimSpace(backend), "tmux") {
+		return "a"
+	}
+	return "prefix+a"
+}
+
+func (m setupPromptModel) refreshBindingPresentation() {
+	if m.form == nil {
+		return
+	}
+	backend := strings.ToLower(strings.TrimSpace(m.form.values().String("backend")))
+	if backend == "" {
+		backend = strings.ToLower(strings.TrimSpace(m.defaultBackend))
+	}
+	for stageIndex := range m.form.stages {
+		stage := &m.form.stages[stageIndex]
+		if stage.ID != "bindings" {
+			continue
+		}
+		stage.Title = bindingTitle(backend)
+		for fieldIndex := range stage.Fields {
+			field := &stage.Fields[fieldIndex]
+			switch field.ID {
+			case "tui-key":
+				field.Placeholder = bindingPlaceholder(backend)
+				field.input.Placeholder = field.Placeholder
+			case "agents-key":
+				field.Placeholder = agentsBindingPlaceholder(backend)
+				field.input.Placeholder = field.Placeholder
+			}
+		}
+	}
+}
+
 func boolLabel(value bool) string {
 	if value {
 		return "yes"
@@ -249,17 +300,36 @@ func boolLabel(value bool) string {
 	return "no"
 }
 
-func (m setupPromptModel) Init() tea.Cmd { return nil }
+func (m setupPromptModel) Init() tea.Cmd {
+	m.refreshBindingPresentation()
+	if m.form == nil {
+		return nil
+	}
+	return m.form.initialFocusCmd()
+}
 func (m setupPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m.refreshBindingPresentation()
 	switch typed := msg.(type) {
+	case tea.WindowSizeMsg:
+		if m.form != nil {
+			m.form.setViewportWidth(max(1, typed.Width))
+			m.form.viewportHeight = max(1, typed.Height)
+		}
+		return m, nil
 	case tea.KeyMsg:
 		effect := m.form.key(typed)
+		m.refreshBindingPresentation()
 		if effect.Canceled {
+			m.err = ErrSetupCanceled
 			return m, tea.Quit
 		}
-		if effect.Submitted {
-			return m, effect.Cmd
+		return m, effect.Cmd
+	case stagedFormMsg:
+		if m.form == nil || typed.generation != m.form.generation {
+			return m, nil
 		}
+		effect := m.form.updateMsg(typed)
+		return m, effect.Cmd
 	case setupPromptDone:
 		m.value = &typed.values
 		return m, tea.Quit
@@ -270,5 +340,46 @@ func (m setupPromptModel) View() string {
 	if m.form == nil {
 		return ""
 	}
-	return strings.Join(m.form.renderLines(), "\n") + "\n"
+	m.refreshBindingPresentation()
+	lines := m.form.renderLines()
+	if m.form.viewportWidth > 0 {
+		lines = formLinesForWidth(lines, m.form.viewportWidth)
+	}
+	lines = setupViewportLines(lines, m.form.viewportHeight)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func setupViewportLines(lines []string, height int) []string {
+	if height <= 0 || len(lines) <= height {
+		return lines
+	}
+	// The help footer is always the last line. Scroll only the body so it
+	// remains visible even when the SSH alias checklist is long.
+	footer := lines[len(lines)-1]
+	body := lines[:len(lines)-1]
+	bodyHeight := max(0, height-1)
+	if bodyHeight == 0 {
+		return []string{footer}
+	}
+	active := -1
+	for index, line := range body {
+		if strings.HasPrefix(line, "    ▸ ") {
+			active = index
+			break
+		}
+	}
+	if active < 0 {
+		for index, line := range body {
+			if strings.HasPrefix(line, "▸ ") {
+				active = index
+				break
+			}
+		}
+	}
+	start := 0
+	if len(body) > bodyHeight {
+		start = shell.ViewportStart(len(body), bodyHeight, active)
+		body = body[start : start+bodyHeight]
+	}
+	return append(body, footer)
 }

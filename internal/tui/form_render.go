@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/vieitesss/nexo/internal/shell"
 )
@@ -22,13 +23,17 @@ func overlayForm(lines []string, form *stagedForm, width, height int) []string {
 		return lines
 	}
 	contentWidth := max(1, width-8)
-	body := formLinesForWidth(form.renderLines(), contentWidth)
+	// Lipgloss applies padding inside the declared width. Leave those two
+	// cells out of the body width so long summaries cannot be reflowed after
+	// they have been truncated.
+	innerWidth := max(1, contentWidth-2)
 	maxBody := max(1, height-4)
 	form.viewportHeight = maxBody
-	form.viewportWidth = contentWidth
+	form.setViewportWidth(innerWidth)
+	body := formLinesForWidth(form.renderLines(), innerWidth)
 	start, customStart := 0, false
 	if form.viewportHook != nil {
-		start, customStart = form.viewportHook(body, maxBody, contentWidth)
+		start, customStart = form.viewportHook(body, maxBody, innerWidth)
 	}
 	if len(body) > maxBody {
 		if !customStart {
@@ -104,26 +109,38 @@ func wrapFormText(value string, width int) []string {
 	if width <= 0 {
 		return nil
 	}
-	words := strings.Fields(value)
-	if len(words) == 0 {
-		return []string{""}
+	leadingBytes := 0
+	if strings.HasPrefix(value, "    ") {
+		leadingBytes = len(value) - len(strings.TrimLeft(value, " \t"))
 	}
-	lines := []string{}
-	current := ""
-	for _, word := range words {
-		candidate := word
-		if current != "" {
-			candidate = current + " " + word
-		}
-		if shell.StringWidth(candidate) > width && current != "" {
-			lines = append(lines, current)
-			current = word
-		} else {
-			current = candidate
+	leading := value[:leadingBytes]
+	leadingWidth := min(width, shell.StringWidth(leading))
+	if shell.StringWidth(leading) > leadingWidth {
+		leading = shell.Truncate(leading, leadingWidth, "")
+	}
+	content := strings.TrimSpace(value[leadingBytes:])
+	available := width - leadingWidth
+	if available <= 0 {
+		return []string{leading}
+	}
+	// Wordwrap keeps ordinary phrases intact; hardwrap then breaks aliases
+	// and paths that contain no whitespace. Both preserve ANSI sequences and
+	// grapheme/cell widths.
+	wordWrapped := ansi.Wordwrap(content, available, " ")
+	parts := strings.Split(wordWrapped, "\n")
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		hardWrapped := ansi.Hardwrap(part, available, false)
+		for _, hardPart := range strings.Split(hardWrapped, "\n") {
+			if hardPart == "" {
+				lines = append(lines, leading)
+				continue
+			}
+			lines = append(lines, leading+hardPart)
 		}
 	}
-	if current != "" {
-		lines = append(lines, current)
+	if len(lines) == 0 {
+		return []string{leading}
 	}
 	return lines
 }

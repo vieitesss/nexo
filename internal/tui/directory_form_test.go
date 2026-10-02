@@ -118,7 +118,7 @@ func TestDirectoryFormOffersUnconfiguredParent(t *testing.T) {
 	}
 	deps := Deps{Home: root, AddProjectPath: func(context.Context, string) error { return nil }}
 	form := newDirectoryForm(deps, context.Background())
-	form.stages[0].Fields[0].Value = filepath.Join(parent, "new-dir")
+	form.setFieldValue("destination", filepath.Join(parent, "new-dir"))
 	result := form.validate(form)
 	if result.Error != "" {
 		t.Fatalf("validation error = %q, want none", result.Error)
@@ -147,9 +147,7 @@ func TestDirectoryFormAddsParentOnDemand(t *testing.T) {
 	model := openDirectoryForm(t, deps)
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(destination)})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyBackspace})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyBackspace})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("yes")})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeySpace})
 	updated, action := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if action == nil {

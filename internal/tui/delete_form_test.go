@@ -54,10 +54,7 @@ func TestDeletePreflightPrecedesDistinctConfirmation(t *testing.T) {
 	}
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
-	for range 2 {
-		model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyBackspace})
-	}
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("yes")})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeySpace})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 	if executeCalls != 0 {
@@ -75,6 +72,16 @@ func TestDeletePreflightPrecedesDistinctConfirmation(t *testing.T) {
 	model = updateModel(t, model, actionCmd())
 	if executeCalls != 1 {
 		t.Fatalf("execute calls = %d, want one", executeCalls)
+	}
+}
+
+func TestDeleteConfirmationHidesAcceptWarningsWithoutWarnings(t *testing.T) {
+	form := newDeleteForm(Deps{}, context.Background(), "/tmp/project")
+	form.plan = &deletion.Plan{Path: "/tmp/project", CanProceed: true}
+	form.stage = form.preflightStage() + 1
+	view := strings.Join(form.renderLines(), "\n")
+	if strings.Contains(view, "accept warnings") {
+		t.Fatalf("confirmation view shows hidden warnings toggle: %q", view)
 	}
 }
 
@@ -172,10 +179,7 @@ func TestDeleteFormUsesSelectedLexicalPathAndExplicitConfirmation(t *testing.T) 
 	model = updated.(Model)
 	model = updateModel(t, model, preflight())
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	for range 5 {
-		model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyBackspace})
-	}
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("permanent")})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRight})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
 	for range 2 {

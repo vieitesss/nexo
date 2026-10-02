@@ -14,16 +14,16 @@ import (
 
 func newCloneForm(deps Deps, ctx context.Context) *stagedForm {
 	clone := deps.CloneConfig.WithDefaults()
-	destinationFields := []formField{{ID: "destination", Label: "path", Value: ""}}
+	destinationFields := []formField{{ID: "destination", Label: "path", Default: "", Kind: formText, Placeholder: "project directory"}}
 	if deps.AddProjectPath != nil {
-		destinationFields = append(destinationFields, formField{ID: "add-parent", Label: "add parent (yes/no)", Value: "no"})
+		destinationFields = append(destinationFields, formField{ID: "add-parent", Label: "add parent", Default: "no", Kind: formToggle})
 	}
 	form := newStagedForm(ctx, []formStage{
 		{
 			ID: "source", Title: "source", Fields: []formField{
-				{ID: "protocol", Label: "protocol", Value: clone.EffectiveProtocol()},
-				{ID: "source", Label: "repository or Git operand", Value: ""},
-				{ID: "prefix", Label: "prefix (editable)", Value: clone.Prefix(clone.EffectiveProtocol()), Expandable: true},
+				{ID: "protocol", Label: "protocol", Default: clone.EffectiveProtocol(), Kind: formChoice, Options: []string{config.CloneProtocolSSH, config.CloneProtocolHTTPS}},
+				{ID: "source", Label: "repository or Git operand", Default: "", Kind: formText, Placeholder: "owner/repository"},
+				{ID: "prefix", Label: "prefix (editable)", Default: clone.Prefix(clone.EffectiveProtocol()), Kind: formText, Expandable: true},
 			},
 		},
 		{ID: "destination", Title: "destination", Fields: destinationFields},
@@ -92,12 +92,12 @@ func cloneFormValidationError(err error) string {
 	return err.Error()
 }
 
-func cloneFormSubmit(deps Deps) func(context.Context, map[string]string, uint64) tea.Cmd {
-	return func(actionCtx context.Context, values map[string]string, generation uint64) tea.Cmd {
-		source := strings.TrimSpace(values["source"])
-		prefix := strings.TrimSpace(values["prefix"])
-		destinationValue := strings.TrimSpace(values["destination"])
-		addParent := strings.EqualFold(strings.TrimSpace(values["add-parent"]), "yes")
+func cloneFormSubmit(deps Deps) func(context.Context, formValues, uint64) tea.Cmd {
+	return func(actionCtx context.Context, values formValues, generation uint64) tea.Cmd {
+		source := strings.TrimSpace(values.String("source"))
+		prefix := strings.TrimSpace(values.String("prefix"))
+		destinationValue := strings.TrimSpace(values.String("destination"))
+		addParent := strings.EqualFold(strings.TrimSpace(values.String("add-parent")), "yes")
 		cloneProject := deps.CloneProject
 		return func() tea.Msg {
 			if cloneProject == nil {
@@ -117,12 +117,8 @@ func cloneFormSubmit(deps Deps) func(context.Context, map[string]string, uint64)
 }
 
 func formValue(form *stagedForm, id string) string {
-	for _, stage := range form.stages {
-		for _, field := range stage.Fields {
-			if field.ID == id {
-				return field.Value
-			}
-		}
+	if form == nil {
+		return ""
 	}
-	return ""
+	return form.values().String(id)
 }

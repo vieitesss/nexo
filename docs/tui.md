@@ -97,7 +97,7 @@ Projects tab. The tabbed view remains visible behind the border-only modal. Its
 source stage has editable protocol and repository fields; the destination stage
 validates a new path before Git runs. Enter advances from any field and submits
 from the destination stage, while Escape cancels. Completed stages collapse to a
-summary and can be reopened with Left; a failed source or destination remains
+summary and can be reopened with Shift-Tab; a failed source or destination remains
 inline. Cloning refreshes the project catalog and selects the new project without
 opening or focusing a container. The configured `[clone]` section supplies SSH
 and HTTPS prefixes.
@@ -122,7 +122,7 @@ and focuses it according to the selected backend's worktree policy.
 Press `Ctrl-Y` on a selected project row to open the delete preflight. The
 border-only staged form keeps the exact lexical path (including a symlink),
 shows that warnings are overridable but blockers are not, and offers OS trash
-by default or an explicit permanent mode. `yes` in the warning field is the
+by default or an explicit permanent mode. The `accept warnings` toggle is the
 TUI equivalent of `--force`; Git worktrees always use non-force `git worktree
 remove`. Escape cancels, and Enter submits from any field. A successful delete
 refreshes the Projects catalog and keeps selection near the removed row.
