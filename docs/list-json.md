@@ -53,9 +53,10 @@ This command writes one array of place objects. Every object has a `kind`:
 
 Project places include `path`, `group`, `git`, and `linked_worktree`.
 Container places include `machine`, `group`, `container_id`,
-`container_name`, and optionally `preview`. Search and display fields
-(`search_text` and `display_remainder`) may also be present; they are
-picker-facing values.
+`container_name`, and optionally `preview`. `preview` is the active pane's
+screen text read for a local container; it is omitted when the screen cannot be
+read. Search and display fields (`search_text` and `display_remainder`) may
+also be present; they are picker-facing values.
 
 `group` is the configured parent directory for project places and the machine
 name for container places. The place picker keeps those namespaces separate,
