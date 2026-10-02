@@ -33,6 +33,13 @@ users invoke them from backend hooks or bindings and may need to inspect them.
 The internal `remote attach` proxy entry point remains hidden from the
 subcommand table, but `nexo remote attach --help` still documents it.
 
+`nexo upgrade` resolves the source with the local Git credentials, builds the
+requested revision with the local Go toolchain, and copies the binary to every
+target, including remotes that have no Go or Git credentials of their own. A
+private repository therefore needs `GOPRIVATE` and authenticated Git access on
+this machine. A nexo owned by Homebrew is refused; run
+`brew upgrade vieitesss/tap/nexo` there.
+
 ## Examples
 
 ```console
@@ -55,8 +62,11 @@ nexo --backend=herdr agents --json
 nexo --backend=tmux tui agents
 nexo --backend=tmux agents watch
 
-# Upgrade every configured machine, or inspect a nightly without changing files.
+# Upgrade every configured machine, or preview a nightly without changing files.
 nexo upgrade --dry-run
+nexo upgrade --nightly --dry-run --machine devbox
+
+# Install the nightly on one machine.
 nexo upgrade --nightly --machine devbox
 
 # Open a project already found by `list`.

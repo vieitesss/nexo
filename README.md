@@ -274,6 +274,12 @@ the latest tagged release on this machine and every configured remote. Use
 `--dry-run` or `--machine ALIAS` to inspect or limit the targets. The default
 fails with guidance to use `--nightly` until the first release is published.
 
+Upgrade builds the requested revision on this machine with its Go toolchain
+and authenticated Git access, then copies the binary to each target, so a
+private repository needs the same `GOPRIVATE` and credentials the initial
+install used. A Homebrew-managed nexo is refused because Homebrew cannot
+publish atomically; run `brew upgrade vieitesss/tap/nexo` on that machine.
+
 The tmux watcher reloads itself when its nexo binary is replaced atomically, as
 `nexo upgrade` and `just install` do, so upgrades need no manual step. Changing
 `[agents] highlight-color` or any `[glance]` key still needs a restart, because

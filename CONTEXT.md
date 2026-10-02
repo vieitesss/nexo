@@ -179,14 +179,17 @@ currently such a backend.
 ### Distribution
 
 **Install method**:
-The machine-local method that owns a nexo executable: Homebrew, Go install, or
-release binary. Upgrade preserves this method when installing a tagged release;
-source-built nightly binaries are atomically copied when a target has no Go
-toolchain.
+The machine-local method that owns the executable nexo is launched from:
+Homebrew, Go install, or a release binary. Detection follows the actual
+invocation path, and the executable referent behind a launch symlink is the
+file upgrade replaces.
 
 **Upgrade**:
 The command that resolves an authenticated tagged release (or `main` with
 `--nightly`) and installs it on the local machine and selected configured
-machines. Every replacement writes a temporary file in the destination
-directory before renaming it. The tmux watcher re-executes its replaced binary;
-upgrade never stops or signals the watcher.
+machines. The requested revision is built on the local machine with its Go
+toolchain, then copied and renamed beside the resolved executable, so a launch
+symlink and the watcher keep working. A Homebrew-owned executable is refused
+before any change because Homebrew cannot publish atomically under this
+package's control. The tmux watcher re-executes its replaced binary; upgrade
+never stops or signals the watcher.

@@ -369,11 +369,12 @@ nexo update --dry-run --local-only
 
 `--machine` may be repeated; `--local-only` and `--dry-run` limit scope or
 avoid writes. Remote work runs in parallel, and a failed machine makes the
-process exit non-zero after all result lines are printed. Binary replacement is
-atomic. The tmux watcher re-executes the replaced binary itself; rerun
-`nexo tmux init` only after changing watcher configuration such as
-`[agents] highlight-color` or `[glance]` keys. No JSON shape is emitted by
-this command.
+process exit non-zero after all result lines are printed. The revision is built
+on this machine and the replacement is atomic, so a launch symlink and the
+tmux watcher keep working; a Homebrew-owned nexo is refused and must use
+`brew upgrade`. Rerun `nexo tmux init` only after changing watcher
+configuration such as `[agents] highlight-color` or `[glance]` keys. No JSON
+shape is emitted by this command.
 
 ## Global flags and errors
 
