@@ -179,9 +179,15 @@ Commands:
   not the current one. It skips proxies, containers that no longer exist, and
   the container that currently owns the pane, and does nothing when nothing
   else is live.
-- `nexo remote previous` switches to or opens the most recently used remote
-  proxy on a machine other than the one currently attached, skipping machines
-  that are no longer configured. It does nothing when nothing is eligible. The
+- `nexo remote previous` toggles between machines: it opens the most recently
+  used container on a machine other than the current one. The current machine
+  is the proxy's machine inside a proxy and the local machine otherwise, so
+  from a local container it opens the last remote proxy, and from that proxy it
+  returns to the last local container. With several remotes, the most recently
+  used other machine wins, local or remote. Proxies on machines that are no
+  longer configured and local containers that no longer exist are skipped.
+  When nothing is eligible it says so on the tmux status line (or on stderr
+  where the backend has no status line) instead of exiting silently. The
   proxy identity is recorded as a machine/container pair, so reconnects do not
   replace it with the local proxy label.
 

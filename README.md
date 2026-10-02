@@ -284,7 +284,12 @@ nexo --backend=tmux remote previous
 # bind-key -T root C-k run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-k || tmux select-pane -U'
 # bind-key -T root C-l run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-l || tmux select-pane -R'
 # Bind `nexo previous` and `nexo remote previous` yourself when desired;
-# `none` means there is no user binding.
+# `none` means there is no user binding. `remote previous` toggles between
+# machines: from a local container it opens the last remote proxy, and from
+# that proxy it returns to the last local container. It needs TMUX_PANE to know
+# whether the key was pressed inside a proxy, and reports on the status line
+# when there is nowhere to go.
+# bind-key -n M-o run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote previous'
 
 # Create a worktree and add its parent to project discovery.
 nexo --backend=tmux worktree create --new-branch --add-parent \
