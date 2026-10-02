@@ -1,18 +1,19 @@
 Usage: nexo [flags] <command> [args]
 
 Commands:
-  agents    List agent panes, or run the backend watcher.
-  backend   Print the selected backend and its capabilities.
-  clone     Clone a repository with Git.
-  delete    Preflight and delete a project candidate.
-  focus     Record a container focus event from the backend.
-  list      List configured project candidates.
-  open      Open a discovered project candidate.
-  previous  Open the last non-proxy local container.
-  remote    List and operate on containers on remote machines.
-  tmux      Install and control the tmux adapter.
-  tui       Open the tabbed terminal UI.
-  worktree  Create or extract Git worktrees.
+  agents                     List agent panes, or run the backend watcher.
+  backend                    Print the selected backend and its capabilities.
+  clone                      Clone a repository with Git.
+  delete                     Preflight and delete a project candidate.
+  focus                      Record a container focus event from the backend.
+  list                       List configured project candidates.
+  open                       Open a discovered project candidate.
+  previous                   Open the last non-proxy local container.
+  remote                     List and operate on containers on remote machines.
+  tmux                       Install and control the tmux adapter.
+  tui                        Open the tabbed terminal UI.
+  upgrade (aliases: update)  Install a release or nightly on every machine.
+  worktree                   Create or extract Git worktrees.
 
 Global flags:
   --backend auto|tmux|herdr  Select the backend (default: auto-detect).

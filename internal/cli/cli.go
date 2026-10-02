@@ -48,7 +48,7 @@ func Parse(args []string) (Options, error) {
 			options.JSON = true
 		case arg == "--help", arg == "-h":
 			options.Help = true
-		case arg == "--version":
+		case arg == "--version" && (options.Command == "" || (options.Command != "upgrade" && options.Command != "update")):
 			options.Version = true
 		case arg == "--backend":
 			value, next, err := nextValue(args, i, "--backend")

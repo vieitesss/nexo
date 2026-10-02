@@ -90,11 +90,12 @@ devbox = "tmux"             # auto, tmux, or herdr
 | `remote.reconnect-initial` | `1s` | Initial retry delay for SSH proxy attachments; must be positive and no greater than `reconnect-max`. |
 | `remote.reconnect-max` | `30s` | Maximum retry delay for SSH proxy attachments; must be positive. |
 
-## Changes that need a watcher restart
+## Changes that need tmux init
 
-The tmux watcher reads `[agents] highlight-color` and every `[glance]` key once
-when it starts. After changing any of them, rerun `nexo tmux init` on each
-machine running the watcher; init replaces the running watcher (see the
-[README's Upgrading section](../README.md#upgrading)). Herdr needs no watcher
-restart. `[tui] theme` is the exception: a running TUI polls the config and
-follows `dark`/`light` changes without a restart.
+The tmux watcher re-executes itself when its binary is atomically replaced, so
+`nexo upgrade` does not restart or signal it. The watcher still reads
+`[agents] highlight-color` and every `[glance]` key once when it starts. After
+changing any of them, rerun `nexo tmux init` on each machine running the
+watcher (and keep the same `--config-file` when one was used). Herdr needs no
+watcher init. `[tui] theme` is the exception: a running TUI polls the config
+and follows `dark`/`light` changes without a restart.

@@ -88,6 +88,15 @@ gpu1 = "herdr"                  # remote runs a Herdr server
   set -g focus-events on
   ```
 
+  Upgrade all configured machines with `nexo upgrade`; limit it with
+  `--machine MACHINE` or `--local-only`, and use `--nightly` before the first
+  release is published. The binary is built on the machine running the command
+  and copied to each remote, so a remote does not need its own Go toolchain or
+  Git credentials. The watcher re-executes itself after an atomic binary
+  replacement, so upgrade does not require a stop/start cycle. Changes to the
+  watcher configuration still require `nexo tmux init --backend=tmux` on that
+  machine.
+
   On a remote without the plugin, add this to `~/.tmux.conf` instead:
 
   ```tmux
