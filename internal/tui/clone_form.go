@@ -4,17 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
-	"regexp"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	cloneflow "github.com/vieitesss/nexo/internal/clone"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/destination"
 )
-
-var scpCloneOperand = regexp.MustCompile(`^[^/@\s]+@[^:\s]+:.+$`)
 
 func newCloneForm(deps Deps, ctx context.Context) *stagedForm {
 	clone := deps.CloneConfig.WithDefaults()
@@ -89,51 +86,30 @@ func cloneFormValidation(deps Deps) func(*stagedForm) formValidation {
 
 func cloneFormSubmit(deps Deps) func(context.Context, map[string]string, uint64) tea.Cmd {
 	return func(actionCtx context.Context, values map[string]string, generation uint64) tea.Cmd {
-		protocol := strings.ToLower(strings.TrimSpace(values["protocol"]))
 		source := strings.TrimSpace(values["source"])
 		clone := deps.CloneConfig.WithDefaults()
 		prefix := strings.TrimSpace(values["prefix"])
 		if prefix == "" {
-			prefix = clone.Prefix(protocol)
+			prefix = clone.Prefix(strings.ToLower(strings.TrimSpace(values["protocol"])))
 		}
-		operand := cloneSourceOperand(protocol, prefix, source, deps.Home)
 		destinationValue := strings.TrimSpace(values["destination"])
 		addParent := strings.EqualFold(strings.TrimSpace(values["add-parent"]), "yes")
-		cloneProject, addPath := deps.CloneProject, deps.AddProjectPath
+		cloneProject := deps.CloneProject
 		return func() tea.Msg {
 			if cloneProject == nil {
 				return actionMsg{kind: "clone", destination: destinationValue, generation: generation, err: errors.New("cloning is not supported")}
 			}
-			if err := cloneProject(actionCtx, operand, destinationValue); err != nil {
+			if err := cloneProject(actionCtx, cloneflow.Request{
+				Source:      source,
+				Prefix:      prefix,
+				Destination: destinationValue,
+				AddParent:   addParent,
+			}); err != nil {
 				return actionMsg{kind: "clone", destination: destinationValue, generation: generation, err: err}
-			}
-			if addParent && addPath != nil {
-				if err := addPath(actionCtx, filepath.Dir(destinationValue)); err != nil {
-					return actionMsg{kind: "clone", destination: destinationValue, generation: generation, err: fmt.Errorf("add project parent: %w", err)}
-				}
 			}
 			return actionMsg{kind: "clone", destination: destinationValue, generation: generation}
 		}
 	}
-}
-
-func cloneSourceOperand(_ string, prefix, source, home string) string {
-	if completeCloneOperand(source) {
-		return destination.ExpandHome(source, home)
-	}
-	return prefix + source
-}
-
-func completeCloneOperand(source string) bool {
-	source = strings.TrimSpace(source)
-	if strings.Contains(source, "://") || scpCloneOperand.MatchString(source) {
-		return true
-	}
-	if strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../") || strings.HasPrefix(source, "/") || strings.HasPrefix(source, "~") || strings.HasPrefix(source, "$HOME/") {
-		return true
-	}
-	// A bare .git path is a local operand, not a repository shorthand.
-	return strings.HasSuffix(source, ".git") && !strings.Contains(source, "/")
 }
 
 func formValue(form *stagedForm, id string) string {

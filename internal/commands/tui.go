@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	cloneflow "github.com/vieitesss/nexo/internal/clone"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/deletion"
 	"github.com/vieitesss/nexo/internal/destination"
@@ -142,8 +143,14 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 	}
 	deps.RemoteCommands = remotePlaceCommands(ctx, invocation)
 	deps.RemoteMachines = append([]string(nil), invocation.Config.Remote.ConfiguredMachines()...)
-	deps.CloneProject = func(cloneCtx context.Context, source, destination string) error {
-		return gitops.Clone(cloneCtx, invocation.Runner, source, destination)
+	deps.CloneProject = func(cloneCtx context.Context, request cloneflow.Request) error {
+		_, err := cloneflow.Clone(cloneCtx, cloneflow.Options{
+			Runner:     invocation.Runner,
+			Paths:      invocation.Config.Paths,
+			ConfigPath: deps.ConfigPath,
+			Home:       deps.Home,
+		}, request)
+		return err
 	}
 	deps.CreateDirectory = func(createCtx context.Context, path string) error {
 		if err := createCtx.Err(); err != nil {

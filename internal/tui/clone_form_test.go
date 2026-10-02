@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	cloneflow "github.com/vieitesss/nexo/internal/clone"
 	"github.com/vieitesss/nexo/internal/picker"
 )
 
@@ -21,8 +22,9 @@ func TestCloneFormTransitionsAndSubmitsWithoutOpening(t *testing.T) {
 	var gotSource, gotDestination string
 	deps := Deps{
 		Projects: []picker.Place{{Kind: picker.ProjectKind, Path: filepath.Join(root, "existing"), Group: root, DisplayRemainder: "existing"}},
-		CloneProject: func(_ context.Context, source, destination string) error {
-			gotSource, gotDestination = source, destination
+		CloneProject: func(_ context.Context, request cloneflow.Request) error {
+			gotSource = cloneflow.SourceOperand(request.Source, request.Prefix, root)
+			gotDestination = request.Destination
 			return nil
 		},
 		Home: root,

@@ -19,6 +19,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	cloneflow "github.com/vieitesss/nexo/internal/clone"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/deletion"
 	"github.com/vieitesss/nexo/internal/picker"
@@ -90,9 +91,9 @@ type Deps struct {
 	OpenProject   func(context.Context, picker.Place) error
 	OpenContainer func(context.Context, picker.Place) error
 	FocusAgent    func(context.Context, AgentRef) error
-	// CloneProject is the backend-neutral Git action used by the Projects-tab
-	// staged form. It must not open or focus a container.
-	CloneProject func(context.Context, string, string) error
+	// CloneProject is the backend-neutral clone transaction used by the
+	// Projects-tab staged form. It must not open or focus a container.
+	CloneProject func(context.Context, cloneflow.Request) error
 	// CreateDirectory is the backend-neutral filesystem action behind the
 	// Projects-tab directory form. It must not open or focus a container.
 	CreateDirectory func(context.Context, string) error

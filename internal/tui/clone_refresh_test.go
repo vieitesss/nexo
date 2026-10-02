@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	cloneflow "github.com/vieitesss/nexo/internal/clone"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/startup"
 )
@@ -22,7 +23,7 @@ func TestCloneSuccessRefreshesAndSelectsProject(t *testing.T) {
 		ProjectSource: func(context.Context) ([]picker.Place, error) {
 			return append(append([]picker.Place(nil), projects...), picker.Place{Kind: picker.ProjectKind, Path: destination, Group: root, DisplayRemainder: "new-repo"}), nil
 		},
-		CloneProject: func(context.Context, string, string) error { return nil },
+		CloneProject: func(context.Context, cloneflow.Request) error { return nil },
 		Home:         root,
 	}
 	model := NewModel(context.Background(), deps, ProjectsTab)
