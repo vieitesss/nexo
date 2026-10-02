@@ -59,7 +59,6 @@ func Validate(request Request, paths []string, home string) (Request, error) {
 	if err != nil {
 		return Request{}, err
 	}
-	request.Repo = strings.TrimSpace(request.Repo)
 	request.Destination = resolved.Path
 	request.ReturnBranch = strings.TrimSpace(request.ReturnBranch)
 	return request, nil
@@ -92,7 +91,7 @@ func Create(ctx context.Context, options Options, request Request) (Result, erro
 	if options.Creator == nil {
 		return Result{}, errors.New("worktree creation requires a creator")
 	}
-	request, err := Validate(request, options.Paths, options.Home)
+	request, err := validateOperation(request, options.Paths, options.Home)
 	if err != nil {
 		return Result{}, err
 	}
@@ -127,7 +126,7 @@ func Extract(ctx context.Context, options Options, request Request) (Result, err
 	if options.Extractor == nil {
 		return Result{}, errors.New("worktree extraction requires an extractor")
 	}
-	request, err := Validate(request, options.Paths, options.Home)
+	request, err := validateOperation(request, options.Paths, options.Home)
 	if err != nil {
 		return Result{}, err
 	}
@@ -151,6 +150,17 @@ func Extract(ctx context.Context, options Options, request Request) (Result, err
 		}
 		return options.ExtractionRollback.RollbackExtractWorktree(cleanupCtx, result)
 	}, restore), nil
+}
+
+func validateOperation(request Request, paths []string, home string) (Request, error) {
+	request, err := Validate(request, paths, home)
+	if err == nil {
+		return request, nil
+	}
+	if errors.Is(err, ErrDestinationRequired) {
+		return Request{}, errors.New("resolve worktree destination: destination is empty")
+	}
+	return Request{}, fmt.Errorf("resolve worktree destination: %w", err)
 }
 
 func newResult(worktree capabilities.Worktree, rollbacker func(context.Context, capabilities.Worktree) error, restore func() error) Result {

@@ -53,14 +53,22 @@ func (f *fakeExtractionRollback) RollbackExtractWorktree(_ context.Context, work
 	return nil
 }
 
-func TestValidateNormalizesDestination(t *testing.T) {
+func TestValidateNormalizesDestinationAndPreservesRepositoryIdentity(t *testing.T) {
 	root := t.TempDir()
-	request, err := Validate(Request{Repo: " /repo ", Destination: " " + root + "/created"}, nil, root)
+	repo := filepath.Join(root, "checkout ")
+	trimmedRepo := filepath.Join(root, "checkout")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(trimmedRepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	request, err := Validate(Request{Repo: repo, Destination: " " + root + "/created"}, nil, root)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	if request.Repo != "/repo" || request.Destination != filepath.Join(root, "created") {
-		t.Fatalf("Validate() request = %#v", request)
+	if request.Repo != repo || request.Destination != filepath.Join(root, "created") {
+		t.Fatalf("Validate() request = %#v, want repo %q", request, repo)
 	}
 }
 
