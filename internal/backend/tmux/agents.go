@@ -561,6 +561,73 @@ func (s *Source) watcherPID() (int, error) {
 	return pid, nil
 }
 
+// watcherLockHeld checks the lock without changing its ownership. A free lock
+// means the old watcher has already gone, so its owner record is stale.
+func watcherLockHeld(path string) (bool, error) {
+	release, err := acquireWatcherLock(path)
+	if err == nil {
+		release()
+		return false, nil
+	}
+	if errors.Is(err, errWatcherAlreadyRunning) {
+		return true, nil
+	}
+	return false, err
+}
+
+func isNexoAgentWatcher(commandLine string) bool {
+	fields := strings.Fields(commandLine)
+	hasNexo := false
+	for _, field := range fields {
+		field = strings.Trim(field, "'\"")
+		if filepath.Base(field) == "nexo" {
+			hasNexo = true
+			break
+		}
+	}
+	if !hasNexo {
+		return false
+	}
+	for index := 0; index+1 < len(fields); index++ {
+		if strings.Trim(fields[index], "'\"") == "agents" && strings.Trim(fields[index+1], "'\"") == "watch" {
+			return true
+		}
+	}
+	return false
+}
+
+// verifyWatcher confirms the owner record still names the same process, that
+// the watcher lock remains held, and that the PID is running nexo agents watch.
+// It returns false when the lock is free, treating the old watcher as gone.
+func (s *Source) verifyWatcher(ctx context.Context, lockPath string, pid int) (bool, error) {
+	held, err := watcherLockHeld(lockPath)
+	if err != nil {
+		return false, fmt.Errorf("check tmux agent watcher lock: %w", err)
+	}
+	if !held {
+		s.removeStaleWatcherPID()
+		return false, nil
+	}
+	recorded, err := s.watcherPID()
+	if err != nil {
+		return false, fmt.Errorf("verify tmux agent watcher owner: %w", err)
+	}
+	if recorded != pid {
+		return false, fmt.Errorf("verify tmux agent watcher owner: owner record changed from %d to %d", pid, recorded)
+	}
+	if s.runner == nil {
+		return false, errors.New("verify tmux agent watcher owner: command runner is unavailable")
+	}
+	output, err := s.runner.Run(ctx, "ps", "-o", "args=", "-p", strconv.Itoa(pid))
+	if err != nil {
+		return false, fmt.Errorf("verify tmux agent watcher owner %d: %w", pid, err)
+	}
+	if !isNexoAgentWatcher(string(output)) {
+		return false, fmt.Errorf("verify tmux agent watcher owner %d: process is not nexo agents watch", pid)
+	}
+	return true, nil
+}
+
 // ReplaceWatcher stops the existing watcher for this tmux server, if any.
 // Init calls this before launching the current binary so upgrading nexo never
 // leaves an old watcher holding the server lock and silently losing the new
@@ -592,6 +659,13 @@ func (s *Source) ReplaceWatcher(ctx context.Context) error {
 	if pid == os.Getpid() {
 		return errors.New("replace tmux agent watcher: refusing to stop this process")
 	}
+	verified, err := s.verifyWatcher(ctx, lockPath, pid)
+	if err != nil {
+		return fmt.Errorf("replace tmux agent watcher: %w", err)
+	}
+	if !verified {
+		return nil
+	}
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return fmt.Errorf("replace tmux agent watcher: find owner %d: %w", pid, err)
@@ -602,9 +676,15 @@ func (s *Source) ReplaceWatcher(ctx context.Context) error {
 	if err := waitForWatcherLock(lockPath, watcherShutdownTimeout); err == nil {
 		return nil
 	}
-	// A watcher from an older binary may not handle SIGTERM. It is safe to
-	// force-stop it now: the kernel releases the lock and the next watcher
-	// reconciles any highlights or glance row it left behind.
+	// A watcher from an older binary may not handle SIGTERM. Verify both the
+	// process identity and lock ownership again before escalating.
+	verified, err = s.verifyWatcher(ctx, lockPath, pid)
+	if err != nil {
+		return fmt.Errorf("replace tmux agent watcher: %w", err)
+	}
+	if !verified {
+		return nil
+	}
 	if err := process.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return fmt.Errorf("replace tmux agent watcher: force-stop owner %d: %w", pid, err)
 	}

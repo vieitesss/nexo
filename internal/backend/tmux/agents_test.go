@@ -5,10 +5,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -158,6 +161,91 @@ func TestWatchReportsExistingWatcher(t *testing.T) {
 	second.server = first.server
 	if err := second.Watch(context.Background()); !errors.Is(err, errWatcherAlreadyRunning) {
 		t.Fatalf("Watch() error = %v, want already-running", err)
+	}
+}
+
+func TestReplaceWatcherDoesNotSignalUnrelatedPID(t *testing.T) {
+	lockDir := t.TempDir()
+	unrelated := exec.Command("sleep", "30")
+	if err := unrelated.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = unrelated.Process.Kill()
+		_ = unrelated.Wait()
+	}()
+
+	source := NewAgentSource(funcRunner(func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "ps" {
+			return []byte("sleep 30\n"), nil
+		}
+		return nil, nil
+	}))
+	source.server = "/tmp/tmux-test"
+	setStateDir(source, lockDir)
+	lockPath := source.statePath("lock")
+	release, err := acquireWatcherLock(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := os.WriteFile(source.watcherPIDPath(), []byte(strconv.Itoa(unrelated.Process.Pid)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := source.ReplaceWatcher(context.Background()); err == nil {
+		t.Fatal("ReplaceWatcher() succeeded for an unrelated process")
+	}
+	if err := unrelated.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("unrelated process was signaled: %v", err)
+	}
+}
+
+func TestReplaceWatcherStopsExistingWatcher(t *testing.T) {
+	lockDir := t.TempDir()
+	probe := NewAgentSource(funcRunner(func(context.Context, string, ...string) ([]byte, error) { return nil, nil }))
+	probe.server = "/tmp/tmux-test"
+	setStateDir(probe, lockDir)
+	lockPath := probe.statePath("lock")
+	watcher := exec.Command(os.Args[0], "-test.run=TestWatcherHelperProcess")
+	watcher.Env = append(os.Environ(), "NEXO_TEST_WATCHER_HELPER=1", "NEXO_TEST_WATCHER_LOCK="+lockPath)
+	if err := watcher.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = watcher.Process.Kill()
+		_ = watcher.Wait()
+	}()
+	for attempts := 0; attempts < 100; attempts++ {
+		release, err := acquireWatcherLock(lockPath)
+		if errors.Is(err, errWatcherAlreadyRunning) {
+			break
+		}
+		if err == nil {
+			release()
+		}
+		if attempts == 99 {
+			t.Fatal("watcher helper did not acquire lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	source := NewAgentSource(funcRunner(func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "ps" {
+			return []byte("/usr/local/bin/nexo --backend=tmux agents watch\n"), nil
+		}
+		return nil, nil
+	}))
+	source.server = "/tmp/tmux-test"
+	setStateDir(source, lockDir)
+	if err := os.WriteFile(source.watcherPIDPath(), []byte(strconv.Itoa(watcher.Process.Pid)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.ReplaceWatcher(context.Background()); err != nil {
+		t.Fatalf("ReplaceWatcher() error = %v", err)
+	}
+	if err := watcher.Wait(); err != nil {
+		t.Fatalf("watcher helper exit = %v", err)
 	}
 }
 
