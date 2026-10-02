@@ -21,6 +21,18 @@ func Names(backend any) []string {
 	if _, ok := backend.(ContainerOpener); ok {
 		names = append(names, "ContainerOpener")
 	}
+	if _, ok := backend.(ContainerHistory); ok {
+		names = append(names, "ContainerHistory")
+	}
+	if _, ok := backend.(CurrentContainer); ok {
+		names = append(names, "CurrentContainer")
+	}
+	if _, ok := backend.(CurrentProxyMachine); ok {
+		names = append(names, "CurrentProxyMachine")
+	}
+	if _, ok := backend.(FocusEventRecorder); ok {
+		names = append(names, "FocusEventRecorder")
+	}
 	if _, ok := backend.(ContainerLister); ok {
 		names = append(names, "ContainerLister")
 	}

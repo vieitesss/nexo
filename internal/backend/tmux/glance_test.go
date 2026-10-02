@@ -560,27 +560,6 @@ func TestGlanceOffWaitsForAConcurrentWatcherPoll(t *testing.T) {
 	}
 }
 
-func TestGlanceRendersAgentsAtClientWidth(t *testing.T) {
-	fake := newFakeTmuxServer()
-	fake.widths = []int{40, 24}
-	source := glanceSource(t, fake)
-	agents := []capabilities.Agent{{PaneID: "%1", Target: "zeta:1.0", Harness: "pi", State: "stopped", Seen: false}}
-	if err := source.setGlanceRow(context.Background(), 1, agents); err != nil {
-		t.Fatalf("setGlanceRow() error = %v", err)
-	}
-	if got := fake.option("status-format[1]"); got != "nexo │ [#[fg=red]●#[fg=default] zeta:1.0]" {
-		t.Fatalf("status-format[1] = %q, want the agent entry", got)
-	}
-
-	fake.widths = []int{15}
-	if err := source.setGlanceRow(context.Background(), 1, agents); err != nil {
-		t.Fatalf("setGlanceRow() narrow error = %v", err)
-	}
-	if got := fake.option("status-format[1]"); got != "nexo │ …" {
-		t.Fatalf("status-format[1] narrow = %q, want the label and an ellipsis", got)
-	}
-}
-
 // fakeTmuxServer models the global and per-session options, sessions and
 // clients a glance command reads and writes, so the behavior is testable
 // without a live server.

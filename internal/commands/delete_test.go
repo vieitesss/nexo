@@ -191,16 +191,18 @@ func TestDeleteRejectsReplacementAfterSelectionEvenWithForce(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(candidate, "replacement"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	command, _ := NewRegistry().Lookup("delete")
-	err = command.Run(context.Background(), Invocation{
-		Runner:         &deleteRunner{err: errors.New("not a git repository")},
-		Adapter:        deleteUseChecker{},
-		DeleteIdentity: identity,
-		Config:         config.Config{ProjectsConfig: config.ProjectsConfig{Paths: []string{root}}},
-		Args:           []string{"--permanent", "--force", candidate},
+	transaction := deletion.New(deletion.Options{
+		Projects:      config.ProjectsConfig{Paths: []string{root}},
+		Home:          os.Getenv("HOME"),
+		Runner:        &deleteRunner{err: errors.New("not a git repository")},
+		ActiveChecker: deleteUseChecker{},
 	})
-	if err == nil || !strings.Contains(err.Error(), "changed after preflight") {
-		t.Fatalf("Run() = %v, want replacement blocker", err)
+	plan, err := transaction.Preflight(context.Background(), candidate, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Execute(context.Background(), plan, true, true); err == nil || !strings.Contains(err.Error(), "changed after preflight") {
+		t.Fatalf("Execute() = %v, want replacement blocker", err)
 	}
 	if _, err := os.Lstat(filepath.Join(candidate, "replacement")); err != nil {
 		t.Fatalf("replacement was removed: %v", err)
@@ -261,12 +263,18 @@ func TestDeleteRechecksActiveUseBeforeMutation(t *testing.T) {
 		Adapter: checker,
 		Config:  config.Config{ProjectsConfig: config.ProjectsConfig{Paths: []string{root}}},
 	}
-	plan, err := preflightDelete(context.Background(), invocation, candidate, "")
+	transaction := deletion.New(deletion.Options{
+		Projects:      invocation.Config.ProjectsConfig,
+		Home:          os.Getenv("HOME"),
+		Runner:        invocation.Runner,
+		ActiveChecker: checker,
+	})
+	plan, err := transaction.Preflight(context.Background(), candidate, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := executeDelete(context.Background(), invocation, plan, true, true); err == nil || !strings.Contains(err.Error(), "safety facts changed") {
-		t.Fatalf("executeDelete() = %v, want stale active-use refusal", err)
+	if err := transaction.Execute(context.Background(), plan, true, true); err == nil || !strings.Contains(err.Error(), "safety facts changed") {
+		t.Fatalf("Execute() = %v, want stale active-use refusal", err)
 	}
 	if _, err := os.Lstat(candidate); err != nil {
 		t.Fatalf("candidate changed after stale active-use refusal: %v", err)
@@ -289,14 +297,20 @@ func TestDeleteRechecksDependentWorktreeBeforeMutation(t *testing.T) {
 	gitTestCommand(t, repo, "add", "tracked")
 	gitTestCommand(t, repo, "commit", "-qm", "initial")
 	invocation := Invocation{Runner: runner.ExecRunner{}, Adapter: deleteUseChecker{}, Config: config.Config{ProjectsConfig: config.ProjectsConfig{Paths: []string{root}}}}
-	plan, err := preflightDelete(context.Background(), invocation, repo, "")
+	transaction := deletion.New(deletion.Options{
+		Projects:      invocation.Config.ProjectsConfig,
+		Home:          os.Getenv("HOME"),
+		Runner:        invocation.Runner,
+		ActiveChecker: deleteUseChecker{},
+	})
+	plan, err := transaction.Preflight(context.Background(), repo, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	linked := filepath.Join(root, "linked")
 	gitTestCommand(t, repo, "worktree", "add", "-q", linked)
-	if err := executeDelete(context.Background(), invocation, plan, true, true); err == nil || !strings.Contains(err.Error(), "safety facts changed") {
-		t.Fatalf("executeDelete() = %v, want stale dependent-worktree refusal", err)
+	if err := transaction.Execute(context.Background(), plan, true, true); err == nil || !strings.Contains(err.Error(), "safety facts changed") {
+		t.Fatalf("Execute() = %v, want stale dependent-worktree refusal", err)
 	}
 	if _, err := os.Lstat(repo); err != nil {
 		t.Fatalf("primary checkout changed after stale dependent-worktree refusal: %v", err)

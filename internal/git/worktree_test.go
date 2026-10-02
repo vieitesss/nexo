@@ -75,18 +75,18 @@ func TestBranchOwnersParsesPorcelain(t *testing.T) {
 	}
 }
 
-func TestPreviousBranchTreatsDetachedAndFailureAsEmpty(t *testing.T) {
+func TestPreviousBranchPropagatesCurrentBranchFailure(t *testing.T) {
 	runner := &fakeRunner{
 		errors: map[string]error{
-			"git -C /repo branch --show-current":        errors.New("boom"),
-			"git -C /repo rev-parse --abbrev-ref @{-1}": errors.New("boom"),
+			"git -C /repo branch --show-current": errors.New("boom"),
 		},
 	}
-	// Errors take precedence in the fake, so exercise the detached handling
-	// through a separate runner.
-	if got, err := New(runner).PreviousBranch(context.Background(), "/repo"); err != nil || got != "" {
-		t.Fatalf("PreviousBranch() on failure = %q, %v, want empty", got, err)
+	if got, err := New(runner).PreviousBranch(context.Background(), "/repo"); err == nil || got != "" {
+		t.Fatalf("PreviousBranch() on failure = %q, %v, want error", got, err)
 	}
+}
+
+func TestPreviousBranchTreatsDetachedHistoryAsEmpty(t *testing.T) {
 	detached := &fakeRunner{outputs: map[string][]byte{
 		"git -C /repo branch --show-current":        []byte("feature\n"),
 		"git -C /repo rev-parse --abbrev-ref @{-1}": []byte("HEAD\n"),

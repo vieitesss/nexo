@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"github.com/vieitesss/nexo/internal/capabilities"
 )
 
 type focusCommand struct{}
@@ -25,9 +27,7 @@ func (focusCommand) Run(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) != 0 {
 		return errors.New("focus accepts no arguments")
 	}
-	recorder, ok := invocation.Adapter.(interface {
-		RecordFocusEvent(context.Context, []byte) error
-	})
+	recorder, ok := invocation.Adapter.(capabilities.FocusEventRecorder)
 	if !ok {
 		return fmt.Errorf("backend %q does not support focus events", invocation.Selection.Kind)
 	}

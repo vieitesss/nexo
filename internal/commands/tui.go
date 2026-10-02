@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	cloneflow "github.com/vieitesss/nexo/internal/clone"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/deletion"
 	"github.com/vieitesss/nexo/internal/destination"
@@ -21,6 +22,7 @@ import (
 	"github.com/vieitesss/nexo/internal/remote"
 	"github.com/vieitesss/nexo/internal/startup"
 	"github.com/vieitesss/nexo/internal/tui"
+	worktreeflow "github.com/vieitesss/nexo/internal/worktree"
 )
 
 type tuiCommand struct{}
@@ -37,18 +39,7 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 	if configurable, ok := invocation.Adapter.(interface{ ConfigureAgents(config.AgentsConfig) }); ok {
 		configurable.ConfigureAgents(invocation.Config.Agents)
 	}
-	var initial []capabilities.Agent
-	var initialErr error
-	var tab string
-	var err error
-	if len(invocation.Args) == 0 {
-		// The initial agent snapshot is a background source. Passing an invalid
-		// tab lets the TUI paint Containers immediately, then apply the
-		// no-argument Agents rule when that snapshot arrives.
-		tab = ""
-	} else {
-		tab, err = tuiTab(ctx, invocation)
-	}
+	tab, err := tuiTab(invocation.Args)
 	if err != nil {
 		return err
 	}
@@ -62,7 +53,7 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 		trace = startup.New("tui", traceOutput)
 	}
 	trace.Mark("command-start")
-	deps, err := tuiDependencies(ctx, invocation, tab, initial, initialErr, true)
+	deps, err := tuiDependencies(ctx, invocation)
 	if err != nil {
 		return err
 	}
@@ -75,8 +66,8 @@ func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 	return runErr
 }
 
-func tuiDependencies(ctx context.Context, invocation Invocation, tab string, initial []capabilities.Agent, initialErr error, initialRead ...bool) (tui.Deps, error) {
-	deps := tui.Deps{AgentError: initialErr, Backend: string(invocation.Selection.Kind), Theme: invocation.Config.TUI.EffectiveTheme(), Agents: append([]capabilities.Agent(nil), initial...), Input: invocation.Stdin, Output: invocation.Stdout, CloneConfig: invocation.Config.Clone, ProjectPaths: invocation.Config.Paths, Home: os.Getenv("HOME")}
+func tuiDependencies(ctx context.Context, invocation Invocation) (tui.Deps, error) {
+	deps := tui.Deps{Theme: invocation.Config.TUI.EffectiveTheme(), Input: invocation.Stdin, Output: invocation.Stdout, CloneConfig: invocation.Config.Clone, ProjectPaths: invocation.Config.Paths, Home: os.Getenv("HOME")}
 	deps.ConfigPath = invocation.ConfigPath
 	if deps.ConfigPath == "" {
 		deps.ConfigPath = config.DefaultPath()
@@ -122,17 +113,6 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 	}
 	if source, ok := invocation.Adapter.(capabilities.AgentSource); ok {
 		deps.AgentSource = source
-		readInitial := len(initialRead) > 0 && initialRead[0]
-		if !readInitial {
-			// Kept for embedders that explicitly request a synchronous snapshot;
-			// the command path always passes true and refreshes asynchronously.
-			agents, listErr := source.ListAgents(ctx)
-			if listErr != nil {
-				deps.AgentError = listErr
-			} else {
-				deps.Agents = agents
-			}
-		}
 		cfg := invocation.Config.Agents.WithDefaults()
 		deps.AgentRefreshInterval = time.Duration(cfg.PollInterval) * time.Second
 	}
@@ -142,8 +122,14 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 	}
 	deps.RemoteCommands = remotePlaceCommands(ctx, invocation)
 	deps.RemoteMachines = append([]string(nil), invocation.Config.Remote.ConfiguredMachines()...)
-	deps.CloneProject = func(cloneCtx context.Context, source, destination string) error {
-		return gitops.Clone(cloneCtx, invocation.Runner, source, destination)
+	deps.CloneProject = func(cloneCtx context.Context, request cloneflow.Request) error {
+		_, err := cloneflow.Clone(cloneCtx, cloneflow.Options{
+			Runner:     invocation.Runner,
+			Paths:      invocation.Config.Paths,
+			ConfigPath: deps.ConfigPath,
+			Home:       deps.Home,
+		}, request)
+		return err
 	}
 	deps.CreateDirectory = func(createCtx context.Context, path string) error {
 		if err := createCtx.Err(); err != nil {
@@ -162,24 +148,25 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 		if !ok {
 			return capabilities.Worktree{}, fmt.Errorf("backend %q does not support extracting worktrees", invocation.Selection.Kind)
 		}
-		return extractor.ExtractWorktree(extractCtx, capabilities.WorktreeExtractOptions{
-			Repo: repo, Destination: destination, ReturnBranch: returnBranch,
+		operation, err := worktreeflow.Extract(extractCtx, worktreeflow.Options{Extractor: extractor}, worktreeflow.Request{
+			Repo:         repo,
+			Destination:  destination,
+			ReturnBranch: returnBranch,
 		})
+		if err != nil {
+			return capabilities.Worktree{}, err
+		}
+		return operation.Worktree, nil
 	}
+	deleteTransaction := newDeleteTransaction(invocation)
 	deps.DeleteFingerprint = func(_ context.Context, path string) (string, error) {
 		return deletion.Fingerprint(deletion.OSFileSystem{}, path)
 	}
 	deps.DeletePreflight = func(deleteCtx context.Context, path, identity string) (deletion.Plan, error) {
-		return preflightDelete(deleteCtx, invocation, lexicalAbs(path), identity)
+		return deleteTransaction.Preflight(deleteCtx, path, identity)
 	}
 	deps.DeleteProjectPlan = func(deleteCtx context.Context, plan deletion.Plan, permanent, force bool) error {
-		if len(plan.Blockers) > 0 {
-			return fmt.Errorf("delete blocked: %s", findingText(plan.Blockers))
-		}
-		if plan.HasWarnings() && !force {
-			return fmt.Errorf("delete requires --force: %s", findingText(plan.Warnings))
-		}
-		return executeDelete(deleteCtx, invocation, plan, force, permanent)
+		return deleteTransaction.Execute(deleteCtx, plan, force, permanent)
 	}
 
 	deps.OpenProject = func(openCtx context.Context, place picker.Place) error {
@@ -290,25 +277,20 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 	return deps, nil
 }
 
-// tuiTab validates the explicit opening tab and applies the no-argument rule.
-func tuiTab(ctx context.Context, invocation Invocation) (string, error) {
-	if len(invocation.Args) > 1 {
+// tuiTab validates the optional opening tab. The model owns the no-argument
+// default because only it can apply the rule to the asynchronously refreshed
+// agent snapshot without a duplicate source read.
+func tuiTab(args []string) (string, error) {
+	if len(args) > 1 {
 		return "", UsageError{Err: fmt.Errorf("usage: nexo tui [agents|containers|projects]")}
 	}
-	if len(invocation.Args) == 1 {
-		switch invocation.Args[0] {
-		case "agents", "containers", "projects":
-			return invocation.Args[0], nil
-		default:
-			return "", UsageError{Err: fmt.Errorf("unknown tui tab %q", invocation.Args[0])}
-		}
+	if len(args) == 0 {
+		return "", nil
 	}
-	if source, ok := invocation.Adapter.(capabilities.AgentSource); ok {
-		agents, err := source.ListAgents(ctx)
-		if err != nil {
-			return "", fmt.Errorf("choose default tui tab: %w", err)
-		}
-		return string(tui.DefaultTab(agents)), nil
+	switch args[0] {
+	case "agents", "containers", "projects":
+		return args[0], nil
+	default:
+		return "", UsageError{Err: fmt.Errorf("unknown tui tab %q", args[0])}
 	}
-	return string(tui.ContainersTab), nil
 }

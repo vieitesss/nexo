@@ -34,21 +34,16 @@ func (listCommand) Run(ctx context.Context, invocation Invocation) error {
 	if invocation.Stdout == nil {
 		return errors.New("list command requires stdout")
 	}
-	placesOnly, err := parseListArgs(invocation.Args)
+	includePlaces, err := parseListArgs(invocation.Args)
 	if err != nil {
-		return err
+		return UsageError{Err: err}
 	}
-	if placesOnly {
+	if includePlaces {
 		return listPlaces(ctx, invocation, trace)
 	}
-	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
-	trace.Mark("projects-discovered")
-	for _, warning := range discovery.Warnings {
-		if invocation.Stderr != nil {
-			if _, err := fmt.Fprintf(invocation.Stderr, "nexo: warning: %s\n", warning); err != nil {
-				return err
-			}
-		}
+	discovery, err := discoverProjects(invocation, trace)
+	if err != nil {
+		return err
 	}
 	if invocation.JSON {
 		err := json.NewEncoder(invocation.Stdout).Encode(discovery.Candidates)
@@ -91,14 +86,9 @@ func listPlaces(ctx context.Context, invocation Invocation, trace *startup.Trace
 		remoteResultsCh <- newRemoteOrchestrator(invocation, nil).List(listCtx, invocation.Config.Remote.ConfiguredMachines())
 		trace.Mark("remote-done")
 	}()
-	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
-	trace.Mark("projects-discovered")
-	for _, warning := range discovery.Warnings {
-		if invocation.Stderr != nil {
-			if _, err := fmt.Fprintf(invocation.Stderr, "nexo: warning: %s\n", warning); err != nil {
-				return err
-			}
-		}
+	discovery, err := discoverProjects(invocation, trace)
+	if err != nil {
+		return err
 	}
 	containers, err := lister.ListContainers(listCtx)
 	if err != nil {
@@ -124,14 +114,11 @@ func listPlaces(ctx context.Context, invocation Invocation, trace *startup.Trace
 		trace.Mark("screens-read")
 	}
 	catalog := picker.NewCatalog(picker.ProjectPlaces(discovery.Candidates), containers, nil)
-	catalog.SetRemoteMachines(invocation.Config.Remote.ConfiguredMachines())
 	remoteResults := <-remoteResultsCh
 	for _, result := range remoteResults {
 		if result.Error != "" {
-			if invocation.Stderr != nil {
-				if _, err := fmt.Fprintf(invocation.Stderr, "nexo: warning: %s: %s\n", result.Machine, result.Error); err != nil {
-					return err
-				}
+			if err := writeListWarning(invocation.Stderr, "nexo: warning: %s: %s\n", result.Machine, result.Error); err != nil {
+				return err
 			}
 			continue
 		}
@@ -163,8 +150,10 @@ func writePlaces(stdout io.Writer, places []picker.Place) error {
 		}
 		for _, place := range byGroup[group] {
 			line := "  " + place.DisplayRemainder
-			if place.Kind == picker.ContainerKind && place.Preview != "" {
-				line += "  " + previewLine(place.Preview)
+			if place.Kind == picker.ContainerKind {
+				if preview := previewLine(place.Preview); preview != "" {
+					line += "  " + preview
+				}
 			}
 			if _, err := fmt.Fprintln(stdout, line); err != nil {
 				return err
@@ -181,6 +170,25 @@ func previewLine(preview string) string {
 		}
 	}
 	return ""
+}
+
+func discoverProjects(invocation Invocation, trace *startup.Trace) (projects.Discovery, error) {
+	discovery := projects.Discover(invocation.Config.ProjectsConfig, os.Getenv("HOME"))
+	trace.Mark("projects-discovered")
+	for _, warning := range discovery.Warnings {
+		if err := writeListWarning(invocation.Stderr, "nexo: warning: %s\n", warning); err != nil {
+			return projects.Discovery{}, err
+		}
+	}
+	return discovery, nil
+}
+
+func writeListWarning(stderr io.Writer, format string, args ...any) error {
+	if stderr == nil {
+		return nil
+	}
+	_, err := fmt.Fprintf(stderr, format, args...)
+	return err
 }
 
 func writeCandidates(stdout io.Writer, candidates []projects.Candidate) error {

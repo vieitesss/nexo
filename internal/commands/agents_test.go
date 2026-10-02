@@ -3,12 +3,11 @@ package commands
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
-	tmuxbackend "github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
 )
 
@@ -20,41 +19,59 @@ func (f fakeAgentSource) ListAgents(context.Context) ([]capabilities.Agent, erro
 	return f.agents, nil
 }
 
-func TestAgentsSeenUnknownPaneIsSilent(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	adapter := tmuxbackend.New(funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name == "tmux" {
-			return []byte("/tmp/tmux-test\n"), nil
-		}
-		return nil, nil
-	}), false)
+func TestAgentsWatchRejectsArguments(t *testing.T) {
 	command, ok := NewRegistry().Lookup("agents")
 	if !ok {
 		t.Fatal("agents command is not registered")
 	}
-	var stdout, stderr strings.Builder
-	err := command.Run(context.Background(), Invocation{
-		Adapter: adapter,
-		Args:    []string{"seen", "%999"},
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	})
-	if err != nil {
-		t.Fatalf("Run() error = %v, want silent success", err)
-	}
-	if stdout.Len() != 0 || stderr.Len() != 0 {
-		t.Fatalf("output = %q / %q, want none", stdout.String(), stderr.String())
+	err := command.Run(context.Background(), Invocation{Args: []string{"watch", "extra"}, Adapter: fakeAgentSource{}})
+	var usage UsageError
+	if !errors.As(err, &usage) || usage.Error() != "usage: nexo agents watch" {
+		t.Fatalf("Run() error = %v, want usage error", err)
 	}
 }
 
-func TestAgentsPickIsRemoved(t *testing.T) {
+func TestAgentsCommandJSONEmptyOutputIsArray(t *testing.T) {
+	var output strings.Builder
 	command, ok := NewRegistry().Lookup("agents")
 	if !ok {
 		t.Fatal("agents command is not registered")
 	}
-	err := command.Run(context.Background(), Invocation{Args: []string{"pick"}, Adapter: fakeAgentSource{}, Stdout: io.Discard})
-	if err == nil || !strings.Contains(err.Error(), `unknown agents command "pick"`) {
-		t.Fatalf("Run() error = %v, want removed entry point error", err)
+	if err := command.Run(context.Background(), Invocation{
+		Adapter: fakeAgentSource{agents: []capabilities.Agent{}},
+		Stdout:  &output,
+		JSON:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.String(); got != "[]\n" {
+		t.Fatalf("JSON output = %q, want %q", got, "[]\n")
+	}
+}
+
+func TestAgentsCommandKeepsStoppedAgentsBeforeWorking(t *testing.T) {
+	var output strings.Builder
+	command, ok := NewRegistry().Lookup("agents")
+	if !ok {
+		t.Fatal("agents command is not registered")
+	}
+	if err := command.Run(context.Background(), Invocation{
+		Adapter: fakeAgentSource{agents: []capabilities.Agent{
+			{PaneID: "%working", Target: "work:1.3", State: "working"},
+			{PaneID: "%seen", Target: "work:1.2", State: "stopped", Seen: true},
+			{PaneID: "%unseen", Target: "work:1.1", State: "stopped"},
+		}},
+		Stdout: &output,
+		JSON:   true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var got []capabilities.Agent
+	if err := json.Unmarshal([]byte(output.String()), &got); err != nil {
+		t.Fatalf("JSON output = %q: %v", output.String(), err)
+	}
+	if len(got) != 3 || got[0].PaneID != "%unseen" || got[1].PaneID != "%seen" || got[2].PaneID != "%working" {
+		t.Fatalf("ordered pane IDs = %#v, want unseen, seen, working", got)
 	}
 }
 

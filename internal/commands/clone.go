@@ -8,8 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/vieitesss/nexo/internal/destination"
-	gitops "github.com/vieitesss/nexo/internal/git"
+	cloneflow "github.com/vieitesss/nexo/internal/clone"
 )
 
 type cloneCommand struct{}
@@ -34,51 +33,30 @@ func (cloneCommand) Run(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	if invocation.Runner == nil {
-		return errors.New("clone requires a command runner")
-	}
-
-	home := os.Getenv("HOME")
-	requested := parsed.Destination
-	if requested == "" {
-		cwd, cwdErr := os.Getwd()
-		if cwdErr != nil {
-			return fmt.Errorf("get working directory: %w", cwdErr)
-		}
-		requested, err = destination.DefaultPath(parsed.Source, cwd, home)
-		if err != nil {
-			return err
-		}
-	}
-	resolvedResult, err := destination.New(destination.Options{Paths: invocation.Config.Paths, Home: home}).Resolve(requested)
+	result, err := cloneflow.Clone(ctx, cloneflow.Options{
+		Runner:     invocation.Runner,
+		Paths:      invocation.Config.Paths,
+		ConfigPath: invocation.ConfigPath,
+		Home:       os.Getenv("HOME"),
+	}, cloneflow.Request{
+		Source:      parsed.Source,
+		Destination: parsed.Destination,
+		AddParent:   parsed.AddParent,
+	})
 	if err != nil {
 		return err
 	}
-	resolved := resolvedResult.Path
-	sourceOperand := destination.ExpandHome(parsed.Source, home)
-	if err := gitops.Clone(ctx, invocation.Runner, sourceOperand, resolved); err != nil {
-		if _, statErr := os.Lstat(resolved); statErr == nil {
-			return fmt.Errorf("%w (partial destination %q remains; remove it before retrying)", err, resolved)
-		}
-		return err
-	}
-	if parsed.AddParent && resolvedResult.AddParent {
-		if _, err := addParentToConfig(invocation, resolved); err != nil {
-			return fmt.Errorf("clone succeeded but add parent: %w", err)
-		}
-	}
-
 	if invocation.Stdout == nil {
 		return nil
 	}
-	result := cloneJSON{Source: parsed.Source, Destination: resolved}
+	output := cloneJSON{Source: result.Source, Destination: result.Destination}
 	if invocation.JSON {
-		if err := json.NewEncoder(invocation.Stdout).Encode(result); err != nil {
+		if err := json.NewEncoder(invocation.Stdout).Encode(output); err != nil {
 			return err
 		}
 		return nil
 	}
-	_, err = fmt.Fprintf(invocation.Stdout, "cloned %s to %s\n", parsed.Source, resolved)
+	_, err = fmt.Fprintf(invocation.Stdout, "cloned %s to %s\n", result.Source, result.Destination)
 	return err
 }
 

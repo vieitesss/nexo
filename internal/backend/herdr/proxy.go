@@ -171,8 +171,39 @@ func (b *Backend) operationWithCleanup(operationErr error, workspaceID string) e
 func (b *Backend) closeWorkspace(workspaceID string) error {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), proxyCleanupTimeout)
 	defer cancel()
-	_, err := b.run(cleanupCtx, "workspace", "close", workspaceID)
+	return b.closeWorkspaceContext(cleanupCtx, workspaceID)
+}
+
+func (b *Backend) closeWorkspaceContext(ctx context.Context, workspaceID string) error {
+	_, err := b.run(ctx, "workspace", "close", workspaceID)
 	return err
+}
+
+// CloseProxyWorkspace closes the local Herdr workspace that owns paneID after
+// a proxy attachment exits. It never sends a close operation to the remote
+// machine.
+func (b *Backend) CloseProxyWorkspace(ctx context.Context, paneID string) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("close Herdr proxy workspace requires a command runner")
+	}
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return errors.New("herdr proxy pane id is required to close the workspace")
+	}
+	cleanupCtx, cancel := context.WithTimeout(ctx, proxyCleanupTimeout)
+	defer cancel()
+	output, err := b.run(cleanupCtx, "pane", "get", paneID)
+	if err != nil {
+		return fmt.Errorf("find Herdr proxy workspace: %w", err)
+	}
+	workspaceID, err := decodePaneWorkspace(output)
+	if err != nil || strings.TrimSpace(workspaceID) == "" {
+		return errors.New("herdr proxy pane did not report a workspace id")
+	}
+	if err := b.closeWorkspaceContext(cleanupCtx, workspaceID); err != nil {
+		return fmt.Errorf("close Herdr proxy workspace %s: %w", workspaceID, err)
+	}
+	return nil
 }
 
 // SendPaneKeys sends the original user binding to a Herdr pane through the

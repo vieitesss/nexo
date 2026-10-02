@@ -571,16 +571,6 @@ func (s *Source) sessionOptionValue(ctx context.Context, sessionID, name string)
 	return strings.TrimRight(string(output), "\r\n"), nil
 }
 
-// setGlanceRow renders and writes one row. It is used by tests and by the
-// enable path; reconcile goes through applyGlanceLocked.
-func (s *Source) setGlanceRow(ctx context.Context, index int, agents []capabilities.Agent) error {
-	row := glance.Render(agents, s.glance.WithDefaults(), s.clientWidth(ctx), s.now())
-	if _, err := s.runTmux(ctx, "set-option", "-g", fmt.Sprintf("status-format[%d]", index), row); err != nil {
-		return fmt.Errorf("update tmux glance row: %w", err)
-	}
-	return nil
-}
-
 // clientWidth returns the narrowest attached client's width, or zero when the
 // width is unknown (no client, or tmux cannot report one).
 func (s *Source) clientWidth(ctx context.Context) int {

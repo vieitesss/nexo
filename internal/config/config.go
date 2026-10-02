@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/vieitesss/nexo/internal/destination"
 )
 
 // Config is the typed configuration shared by all features.
@@ -114,7 +115,7 @@ func parse(contents []byte, path string) (Config, error) {
 		Remote: RemoteConfig{
 			Machines:  raw.Remote.Machines,
 			Backends:  raw.Remote.Backends,
-			SSHConfig: expandConfigHome(raw.Remote.SSHConfig, os.Getenv("HOME")),
+			SSHConfig: destination.ExpandHome(raw.Remote.SSHConfig, os.Getenv("HOME")),
 			Transport: raw.Remote.Transport,
 		},
 	}

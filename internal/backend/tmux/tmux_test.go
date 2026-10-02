@@ -3,9 +3,12 @@ package tmux
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vieitesss/nexo/internal/agentstate"
 	"github.com/vieitesss/nexo/internal/capabilities"
@@ -104,6 +107,40 @@ func TestContainerActionsUseBackendNativeCommands(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestRecordFocusEventMarksSeenWhenHistoryFails(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"display-message -p -t %1 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}": []byte("$1\tdev\t\t/tmp/tmux-test\n"),
+	}}
+	backend := New(runner, true)
+	backend.usageServer = "/tmp/tmux-test"
+	agentDir := t.TempDir()
+	backend.agents.stateDir = agentDir
+	backend.agents.server = "/tmp/tmux-test"
+	ledger := agentstate.New(agentDir, "/tmp/tmux-test", time.Now)
+	if err := ledger.Update(func(document *agentstate.Document) error {
+		document.Agents["%1"] = agentstate.State{State: "stopped"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	historyPath := filepath.Join(t.TempDir(), "history-file")
+	if err := os.WriteFile(historyPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backend.usageStateDir = historyPath
+	t.Setenv("TMUX_PANE", "%1")
+	if err := backend.RecordFocusEvent(context.Background(), nil); err == nil {
+		t.Fatal("RecordFocusEvent() succeeded despite history failure")
+	}
+	document, err := ledger.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !document.Agents["%1"].Seen {
+		t.Fatal("focused stopped agent was not marked seen")
 	}
 }
 

@@ -6,12 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/picker"
 )
 
 type agentsCommand struct{}
@@ -29,14 +28,17 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 	if configurable, ok := invocation.Adapter.(interface{ ConfigureAgents(config.AgentsConfig) }); ok {
 		configurable.ConfigureAgents(invocation.Config.Agents)
 	}
-	if configurable, ok := invocation.Adapter.(interface {
-		ConfigureGlance(config.GlanceConfig)
-	}); ok {
-		configurable.ConfigureGlance(invocation.Config.Glance)
-	}
 	if len(invocation.Args) > 0 {
 		switch invocation.Args[0] {
 		case "watch":
+			if len(invocation.Args) != 1 {
+				return UsageError{Err: errors.New("usage: nexo agents watch")}
+			}
+			if configurable, ok := invocation.Adapter.(interface {
+				ConfigureGlance(config.GlanceConfig)
+			}); ok {
+				configurable.ConfigureGlance(invocation.Config.Glance)
+			}
 			if configurable, ok := invocation.Adapter.(interface {
 				ConfigureAgentCommand(string, string)
 			}); ok {
@@ -46,31 +48,6 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 				return watcher.WatchAgents(ctx)
 			}
 			return errors.New("selected backend does not support agent watching")
-		case "seen":
-			if len(invocation.Args) != 2 || strings.TrimSpace(invocation.Args[1]) == "" {
-				return errors.New("agents seen requires a pane id")
-			}
-			paneID := invocation.Args[1]
-			var failures []error
-			recorded := false
-			if recorder, ok := invocation.Adapter.(interface {
-				RecordFocusedPane(context.Context, string) error
-			}); ok {
-				recorded = true
-				if err := recorder.RecordFocusedPane(ctx, paneID); err != nil {
-					failures = append(failures, err)
-				}
-			}
-			if marker, ok := invocation.Adapter.(interface {
-				MarkAgentSeen(context.Context, string) error
-			}); ok {
-				if err := marker.MarkAgentSeen(ctx, paneID); err != nil {
-					failures = append(failures, err)
-				}
-			} else if !recorded {
-				return errors.New("selected backend does not support marking agents seen")
-			}
-			return errors.Join(failures...)
 		default:
 			return fmt.Errorf("unknown agents command %q", invocation.Args[0])
 		}
@@ -87,15 +64,7 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	sort.SliceStable(agents, func(i, j int) bool {
-		if agents[i].State != agents[j].State {
-			return agents[i].State == "stopped"
-		}
-		if agents[i].State == "stopped" && agents[i].Seen != agents[j].Seen {
-			return !agents[i].Seen
-		}
-		return agents[i].Target < agents[j].Target
-	})
+	agents = picker.SortAgentsForCLI(agents)
 	if invocation.JSON {
 		return json.NewEncoder(invocation.Stdout).Encode(agents)
 	}

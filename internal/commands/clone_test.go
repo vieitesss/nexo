@@ -117,7 +117,7 @@ func TestCloneCommandAddsParentOnSuccess(t *testing.T) {
 	}
 }
 
-func TestCloneCommandAddsParentBeforeGitAndRestoresOnFailure(t *testing.T) {
+func TestCloneCommandLeavesConfigUnchangedOnGitFailure(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	parent := filepath.Join(home, "projects")

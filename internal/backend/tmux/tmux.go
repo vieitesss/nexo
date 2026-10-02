@@ -416,7 +416,7 @@ func (b *Backend) RecentContainers(ctx context.Context) ([]containerstate.Entry,
 // CurrentContainerID reports the session that owns the calling pane.
 func (b *Backend) CurrentContainerID(ctx context.Context) (string, error) {
 	if b == nil || b.Runner == nil {
-		return "", errors.New("tmux container history requires a command runner")
+		return "", errors.New("tmux current container requires a command runner")
 	}
 	return b.currentContainer(ctx)
 }
@@ -428,7 +428,10 @@ func (b *Backend) CurrentProxyMachine(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	target, err := b.ProxyTarget(ctx, pane)
-	if err != nil || strings.TrimSpace(target) == "" {
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(target) == "" {
 		return "", nil
 	}
 	identity, ok := proxyidentity.ParseValue(target)
@@ -438,14 +441,22 @@ func (b *Backend) CurrentProxyMachine(ctx context.Context) (string, error) {
 	return proxyidentity.NormalizeMachineName(identity.Machine), nil
 }
 
-// RecordFocusedPane records the container owning a pane after a focus hook.
-// A proxy's metadata is authoritative, so reconnecting its attachment never
-// turns the entry into a local container.
-func (b *Backend) RecordFocusedPane(ctx context.Context, paneID string) error {
+// RecordFocusEvent records the container owning the pane named by a tmux
+// focus hook. A proxy's metadata is authoritative, so reconnecting its
+// attachment never turns the entry into a local container. Marking the pane
+// seen belongs to this same focus transition, keeping the hook's durable
+// effects on one path.
+func (b *Backend) RecordFocusEvent(ctx context.Context, _ []byte) error {
 	if b == nil || b.Runner == nil {
 		return errors.New("tmux container state requires a command runner")
 	}
-	return b.recordTarget(ctx, paneID)
+	paneID := strings.TrimSpace(os.Getenv("TMUX_PANE"))
+	if paneID == "" {
+		return nil
+	}
+	historyErr := b.recordTarget(ctx, paneID)
+	seenErr := b.MarkAgentSeen(ctx, paneID)
+	return errors.Join(historyErr, seenErr)
 }
 
 // recordTarget classifies one tmux target from authoritative session metadata
@@ -574,4 +585,5 @@ func (b *Backend) FocusPane(ctx context.Context, paneID string) error {
 }
 
 var _ capabilities.AgentSource = (*Backend)(nil)
+var _ capabilities.FocusEventRecorder = (*Backend)(nil)
 var _ capabilities.PaneFocuser = (*Backend)(nil)

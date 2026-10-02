@@ -14,12 +14,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	cloneflow "github.com/vieitesss/nexo/internal/clone"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/deletion"
 	"github.com/vieitesss/nexo/internal/picker"
@@ -53,7 +53,6 @@ type RemoteTarget struct {
 // Places and agents are snapshots; optional commands keep slow discovery out
 // of Update and let a caller retain its backend-specific command runner.
 type Deps struct {
-	Backend string
 	// Theme is auto, dark, or light. An empty value is treated as auto.
 	Theme      string
 	Projects   []picker.Place
@@ -91,14 +90,15 @@ type Deps struct {
 	OpenProject   func(context.Context, picker.Place) error
 	OpenContainer func(context.Context, picker.Place) error
 	FocusAgent    func(context.Context, AgentRef) error
-	// CloneProject is the backend-neutral Git action used by the Projects-tab
-	// staged form. It must not open or focus a container.
-	CloneProject func(context.Context, string, string) error
+	// CloneProject is the backend-neutral clone transaction used by the
+	// Projects-tab staged form. It must not open or focus a container.
+	CloneProject func(context.Context, cloneflow.Request) error
 	// CreateDirectory is the backend-neutral filesystem action behind the
 	// Projects-tab directory form. It must not open or focus a container.
 	CreateDirectory func(context.Context, string) error
-	// ExtractWorktree is the shared worktree lifecycle used by the Projects-tab
-	// staged form. The backend owns preflight, creation, opening and rollback.
+	// ExtractWorktree is the shared worktree operation used by the Projects-tab
+	// staged form. The backend owns native preflight, creation, opening and
+	// rollback while the operation owns project-path registration.
 	ExtractWorktree     func(context.Context, string, string, string) (capabilities.Worktree, error)
 	ExtractReturnBranch func(context.Context, string) (string, error)
 	// DeleteFingerprint captures selection identity before the confirmation UI.
@@ -118,10 +118,9 @@ type Deps struct {
 	KillContainers     func(context.Context, []picker.ContainerRef) error
 	RenameContainer    func(context.Context, picker.ContainerRef, string) error
 
-	Input      io.Reader
-	Output     io.Writer
-	Now        func() time.Time
-	AgentError error
+	Input  io.Reader
+	Output io.Writer
+	Now    func() time.Time
 }
 
 // Run starts the full-screen TUI and executes the accepted action through the
@@ -203,12 +202,9 @@ func validTab(tab Tab) bool {
 	return tab == AgentsTab || tab == ContainersTab || tab == ProjectsTab
 }
 
-// DefaultTab applies the no-argument opening rule to an initial agent snapshot.
-func DefaultTab(agents []capabilities.Agent) Tab { return defaultTab(agents) }
-
 func defaultTab(agents []capabilities.Agent) Tab {
 	for _, agent := range agents {
-		if strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && !agent.Seen {
+		if picker.AttentionRank(agent) == 0 {
 			return AgentsTab
 		}
 	}

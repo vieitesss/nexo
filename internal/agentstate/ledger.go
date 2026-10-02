@@ -56,10 +56,9 @@ type Policy struct {
 	IdleThreshold time.Duration
 }
 
-// Result pairs an observation with the state produced by the transition.
+// Result is the state produced for one observation, in observation order.
 type Result struct {
-	Observation Observation
-	State       State
+	State State
 }
 
 // Transition records a newly entered stopped state. It is supplied to the
@@ -108,19 +107,9 @@ func (l *Ledger) Read() (Document, error) {
 // Read, it creates the state directory because the lock itself is a durable
 // coordination seam.
 func (l *Ledger) ReadLocked() (Document, error) {
-	if l.server == "" {
-		return Document{}, errors.New("agent state has no server")
-	}
-	stateDir := l.stateDir
-	if stateDir == "" {
-		stateDir = statefile.DefaultDir()
-	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return Document{}, fmt.Errorf("create agent state directory: %w", err)
-	}
-	release, err := statefile.Lock(l.Path("state.lock"), false)
+	release, err := l.lock()
 	if err != nil {
-		return Document{}, fmt.Errorf("lock agent state: %w", err)
+		return Document{}, err
 	}
 	defer release()
 	document, err := l.read()
@@ -133,19 +122,9 @@ func (l *Ledger) ReadLocked() (Document, error) {
 // Update applies one mutation while holding the per-server lock and writes an
 // atomic replacement. All persistent agent-state changes cross this seam.
 func (l *Ledger) Update(update func(*Document) error) error {
-	if l.server == "" {
-		return errors.New("agent state has no server")
-	}
-	stateDir := l.stateDir
-	if stateDir == "" {
-		stateDir = statefile.DefaultDir()
-	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return fmt.Errorf("create agent state directory: %w", err)
-	}
-	release, err := statefile.Lock(l.Path("state.lock"), false)
+	release, err := l.lock()
 	if err != nil {
-		return fmt.Errorf("lock agent state: %w", err)
+		return err
 	}
 	defer release()
 	document, err := l.read()
@@ -166,6 +145,25 @@ func (l *Ledger) Update(update func(*Document) error) error {
 		return fmt.Errorf("write agent state: %w", err)
 	}
 	return nil
+}
+
+// lock prepares the per-server state directory and acquires its lock.
+func (l *Ledger) lock() (func(), error) {
+	if l.server == "" {
+		return nil, errors.New("agent state has no server")
+	}
+	stateDir := l.stateDir
+	if stateDir == "" {
+		stateDir = statefile.DefaultStateDir()
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create agent state directory: %w", err)
+	}
+	release, err := statefile.Lock(l.Path("state.lock"), false)
+	if err != nil {
+		return nil, fmt.Errorf("lock agent state: %w", err)
+	}
+	return release, nil
 }
 
 // Observe applies the transition policy to one complete observation batch and
@@ -200,7 +198,7 @@ func (l *Ledger) Observe(batch Batch, policy Policy, mutation func(*Document, []
 			previous := document.Agents[observation.ID]
 			current, enteredStopped := transition(previous, observation, policy, now)
 			document.Agents[observation.ID] = current
-			results = append(results, Result{Observation: observation, State: current})
+			results = append(results, Result{State: current})
 			if enteredStopped {
 				transitions = append(transitions, Transition{Observation: observation, State: current})
 			}

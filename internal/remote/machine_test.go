@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -9,11 +10,22 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 )
 
+func TestHerdrMachineSavedMatchesEnabledSSHTargetOnly(t *testing.T) {
+	if !herdrMachineSaved([]byte(`[{"id":"1","label":"other","target":"gpu1","enabled":true}]`), "gpu1") {
+		t.Fatal("expected matching target to be recognized")
+	}
+	if herdrMachineSaved([]byte(`[{"id":"1","label":"gpu1","target":"gpu1","enabled":false}]`), "gpu1") {
+		t.Fatal("disabled target must not be recognized")
+	}
+	if herdrMachineSaved([]byte(`[{"id":"1","label":"gpu1","target":"other","enabled":true}]`), "gpu1") {
+		t.Fatal("display label must not identify a machine")
+	}
+}
+
 func TestOrchestratorOpenUsesDetectedKindAndCanonicalTmuxName(t *testing.T) {
 	proxy := &recordingMachineProxy{}
 	orchestrator := NewOrchestrator(nil, ListingConfig{Backend: backend.Herdr}, OperationPolicy{
-		Backend: backend.Herdr,
-		Proxy:   proxy,
+		Proxy: proxy,
 	})
 	result := MachineResult{Machine: "dev", Kind: KindTmux}
 	if err := orchestrator.Open(context.Background(), result, "api.v1:blue"); err != nil {
@@ -25,25 +37,28 @@ func TestOrchestratorOpenUsesDetectedKindAndCanonicalTmuxName(t *testing.T) {
 }
 
 func TestOrchestratorNewChoosesNativeCreationFromMachineKind(t *testing.T) {
-	created := ""
-	opened := ""
-	orchestrator := NewOrchestrator(nil, ListingConfig{Backend: backend.Herdr}, OperationPolicy{
-		Backend: backend.Herdr,
-		CreateHerdr: func(_ context.Context, machine, name string) error {
-			created = machine + "/" + name
-			return nil
-		},
-		OpenHerdr: func(_ context.Context, machine, name string) error {
-			opened = machine + "/" + name
-			return nil
-		},
+	var calls []string
+	var output bytes.Buffer
+	runner := machineRunnerFunc(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		if name == "herdr" && strings.Join(args, " ") == "machine list --json" {
+			return []byte("[]"), nil
+		}
+		return nil, nil
+	})
+	orchestrator := NewOrchestrator(runner, ListingConfig{Backend: backend.Herdr}, OperationPolicy{
+		Stdout: &output,
 	})
 	result := MachineResult{Machine: "gpu", Kind: KindHerdr}
 	if err := orchestrator.New(context.Background(), result, "api"); err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if created != "gpu/api" || opened != "gpu/api" {
-		t.Fatalf("created = %q, opened = %q, want native Herdr operation", created, opened)
+	if !strings.Contains(strings.Join(calls, "|"), "ssh -o BatchMode=yes gpu herdr workspace create --label 'api'") ||
+		!strings.Contains(strings.Join(calls, "|"), "herdr machine add gpu --label gpu") {
+		t.Fatalf("calls = %q, want remote creation and native machine setup", calls)
+	}
+	if !strings.Contains(output.String(), "api is available under gpu") {
+		t.Fatalf("output = %q, want native Herdr operation", output.String())
 	}
 }
 
@@ -51,8 +66,7 @@ func TestOrchestratorFocusAgentUsesRemotePaneAndThenOpenPolicy(t *testing.T) {
 	runner := &machineRunner{}
 	proxy := &recordingMachineProxy{}
 	orchestrator := NewOrchestrator(runner, ListingConfig{Backend: backend.Tmux, SSHConfig: "/tmp/config"}, OperationPolicy{
-		Backend: backend.Tmux,
-		Proxy:   proxy,
+		Proxy: proxy,
 	})
 	result := MachineResult{Machine: "dev", Kind: KindTmux}
 	agent := capabilities.Agent{PaneID: "%7", Container: "api"}
@@ -74,6 +88,12 @@ type recordingMachineProxy struct {
 func (p *recordingMachineProxy) Proxy(_ context.Context, machine, container string) error {
 	p.opened = [2]string{machine, container}
 	return nil
+}
+
+type machineRunnerFunc func(context.Context, string, ...string) ([]byte, error)
+
+func (f machineRunnerFunc) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return f(ctx, name, args...)
 }
 
 type machineRunner struct {

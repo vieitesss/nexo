@@ -25,15 +25,11 @@ func (previousCommand) Run(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) != 0 {
 		return errors.New("previous accepts no arguments")
 	}
-	history, ok := invocation.Adapter.(containerHistory)
-	if !ok {
-		return fmt.Errorf("backend %q does not support container history", invocation.Selection.Kind)
-	}
 	opener, ok := invocation.Adapter.(capabilities.ContainerOpener)
 	if !ok {
 		return fmt.Errorf("backend %q does not support opening containers", invocation.Selection.Kind)
 	}
-	entries, err := history.RecentContainers(ctx)
+	entries, err := recentContainerEntries(ctx, invocation)
 	if err != nil {
 		return fmt.Errorf("read previous container: %w", err)
 	}
@@ -41,7 +37,10 @@ func (previousCommand) Run(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return fmt.Errorf("list live containers: %w", err)
 	}
-	current := currentContainerID(ctx, invocation)
+	current, err := currentContainerID(ctx, invocation)
+	if err != nil {
+		return fmt.Errorf("identify current container: %w", err)
+	}
 	for _, entry := range entries {
 		if entry.Proxy || entry.ID == "" || entry.ID == current {
 			continue

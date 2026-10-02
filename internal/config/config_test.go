@@ -299,8 +299,8 @@ func TestLoadParsesRemoteBackends(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got.Remote.BackendFor("devbox") != "tmux" || got.Remote.BackendFor("gpu1") != "herdr" || got.Remote.BackendFor("other") != "auto" {
-		t.Fatalf("remote backends = %#v, want per-machine values and auto default", got.Remote.Backends)
+	if got.Remote.Backends["devbox"] != "tmux" || got.Remote.Backends["gpu1"] != "herdr" {
+		t.Fatalf("remote backends = %#v, want configured per-machine values", got.Remote.Backends)
 	}
 }
 

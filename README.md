@@ -268,41 +268,20 @@ working-pattern = { pi = "⠋" }
 
 ## Upgrading
 
-On every machine running nexo's tmux watcher, restart it after installing a new
-nexo binary. The watcher is a long-running process that keeps the binary and
-the configuration it started with; a new binary does not replace it, and
-`nexo tmux init` starts a second watcher that exits silently while the old one
-still holds the lock. Restart it after changing `[agents] highlight-color` or
-any `[glance]` key too, because those values are read once when the watcher
-starts. Herdr keeps its native agent state and notifications, so a Herdr-only
-machine needs no nexo watcher restart.
-
-On a machine, run this from a shell. The `[n]` keeps `pkill` and `pgrep` from
-matching the command itself, and the loop waits for the old watcher to release
-its lock before the new one starts:
+The tmux watcher is a long-running process that keeps the binary and the
+configuration it started with. After installing a new nexo binary, or after
+changing `[agents] highlight-color` or any `[glance]` key, rerun init on every
+machine running the watcher. Init stops the running watcher and starts a new
+one:
 
 ```sh
-pkill -f '[n]exo --backend=tmux agents watch'
-while pgrep -f '[n]exo --backend=tmux agents watch' >/dev/null; do sleep 0.2; done
 nexo tmux init --backend=tmux
+ssh MACHINE 'nexo tmux init --backend=tmux'
 ```
 
-Over SSH, run the same commands as one remote script:
-
-```sh
-ssh MACHINE "pkill -f '[n]exo --backend=tmux agents watch'; while pgrep -f '[n]exo --backend=tmux agents watch' >/dev/null; do sleep 0.2; done; nexo tmux init --backend=tmux"
-```
-
-If you started the watcher with an explicit `--config-file`, its command line
-includes that flag. Widen the self-non-matching pattern to
-`'[n]exo.*agents watch'` and pass the same path to init, so the restart keeps
-the explicit config:
-
-```sh
-pkill -f '[n]exo.*agents watch'
-while pgrep -f '[n]exo.*agents watch' >/dev/null; do sleep 0.2; done
-nexo --backend=tmux --config-file=/same/path tmux init
-```
+If the watcher runs with an explicit `--config-file`, pass the same path to
+init. Herdr keeps its native agent state and notifications, so a Herdr-only
+machine needs no restart.
 
 ## Configuration
 
@@ -341,7 +320,7 @@ See [docs/usage.md](docs/usage.md) for the full command reference and examples.
 | --- | --- |
 | `nexo tui [agents\|containers\|projects]` | Open the tabbed terminal UI. |
 | `nexo list [--places]` | List project candidates; `--places` adds open local and remote containers, each local one with a screen preview. |
-| `nexo agents [watch\|seen PANE_ID]` | List agent panes, run the watcher, or mark one pane seen. |
+| `nexo agents [watch]` | List agent panes or run the watcher. |
 | `nexo previous` | Open the last non-proxy local container. |
 | `nexo remote list\|open\|new\|close\|previous\|paste\|passthrough` | List, open, create, close, and attach to remote containers. |
 | `nexo open PATH` | Open a discovered project candidate. |

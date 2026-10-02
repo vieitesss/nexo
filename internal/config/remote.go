@@ -22,7 +22,6 @@ type RemoteConfig struct {
 
 const (
 	DefaultRemoteTransport  = "ssh"
-	DefaultRemoteBackend    = "auto"
 	DefaultReconnectInitial = time.Second
 	DefaultReconnectMax     = 30 * time.Second
 )
@@ -69,33 +68,21 @@ func (r RemoteConfig) ConfiguredMachines() []string {
 // IsMachineConfigured reports whether machine is named by remote.machines or
 // remote.backends.
 func (r RemoteConfig) IsMachineConfigured(machine string) bool {
-	key := proxyidentity.NormalizeMachineName(machine)
-	if key == "" {
-		return false
-	}
-	for _, configured := range r.ConfiguredMachines() {
-		if proxyidentity.NormalizeMachineName(configured) == key {
-			return true
-		}
-	}
-	return false
+	return proxyidentity.NewMachineSet(r.ConfiguredMachines()).Contains(machine)
 }
 
-// BackendFor returns the configured remote backend, defaulting to auto.
-func (r RemoteConfig) BackendFor(machine string) string {
-	machine = proxyidentity.NormalizeMachineName(machine)
-	backend := ""
-	for configured, value := range r.Backends {
-		if proxyidentity.NormalizeMachineName(configured) == machine {
-			backend = value
-			break
-		}
+// ValidateMachine checks a command target against the configured machine set.
+// The option-prefix check belongs here with the configuration policy so every
+// remote operation rejects the same unsafe target before invoking SSH.
+func (r RemoteConfig) ValidateMachine(machine string) error {
+	machine = strings.TrimSpace(machine)
+	if strings.HasPrefix(machine, "-") {
+		return fmt.Errorf("machine %q starts with '-'", machine)
 	}
-	backend = strings.ToLower(strings.TrimSpace(backend))
-	if backend == "" {
-		return DefaultRemoteBackend
+	if !r.IsMachineConfigured(machine) {
+		return fmt.Errorf("remote machine %q is not configured", machine)
 	}
-	return backend
+	return nil
 }
 
 // ReconnectDelays returns the configured proxy retry bounds with defaults.

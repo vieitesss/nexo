@@ -23,7 +23,7 @@ func TestFinishHerdrProxyAttachClosesWorkspaceFromPane(t *testing.T) {
 		}
 		return nil, nil
 	})
-	if err := finishHerdrProxyAttach(Invocation{Runner: fake}, nil); err != nil {
+	if err := finishHerdrProxyAttach(Invocation{Runner: fake, Adapter: herdr.New(fake)}, nil); err != nil {
 		t.Fatalf("finishHerdrProxyAttach() error = %v", err)
 	}
 	if strings.Join(calls, "|") != "herdr pane get pane-1|herdr workspace close w1" {
@@ -92,18 +92,6 @@ func TestRemoteOpenHerdrPreservesNativeContainerSpelling(t *testing.T) {
 	}
 	if adapter.opened != [2]string{} {
 		t.Fatalf("proxy = %#v, want the native Herdr machine path", adapter.opened)
-	}
-}
-
-func TestHerdrMachineSavedMatchesEnabledSSHTargetOnly(t *testing.T) {
-	if !herdrMachineSaved([]byte(`[{"id":"1","label":"other","target":"gpu1","enabled":true}]`), "gpu1") {
-		t.Fatal("expected matching target to be recognized")
-	}
-	if herdrMachineSaved([]byte(`[{"id":"1","label":"gpu1","target":"gpu1","enabled":false}]`), "gpu1") {
-		t.Fatal("disabled target must not be recognized")
-	}
-	if herdrMachineSaved([]byte(`[{"id":"1","label":"gpu1","target":"other","enabled":true}]`), "gpu1") {
-		t.Fatal("display label must not identify a machine")
 	}
 }
 

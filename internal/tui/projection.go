@@ -86,7 +86,7 @@ func agentIdentity(record agentRecord) string {
 
 func hasUnseenStopped(agents []capabilities.Agent) bool {
 	for _, agent := range agents {
-		if strings.EqualFold(sanitize(agent.State), "stopped") && !agent.Seen {
+		if picker.AttentionRank(agent) == 0 {
 			return true
 		}
 	}

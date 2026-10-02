@@ -11,15 +11,15 @@ import (
 	"syscall"
 )
 
-// DefaultDir returns nexo's XDG state directory for backend state.
-func DefaultDir() string {
+// DefaultStateDir returns nexo's XDG state directory for backend state.
+func DefaultStateDir() string {
 	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "nexo", "agents")
+		return filepath.Join(dir, "nexo")
 	}
 	if dir, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(dir, ".local", "state", "nexo", "agents")
+		return filepath.Join(dir, ".local", "state", "nexo")
 	}
-	return filepath.Join(os.TempDir(), "nexo", "agents")
+	return filepath.Join(os.TempDir(), "nexo")
 }
 
 // ServerFileName returns a filesystem-safe, server-specific state-file stem.
@@ -34,7 +34,7 @@ func ServerFileName(server string) string {
 // Path returns a state path for one server and suffix.
 func Path(dir, server, suffix string) string {
 	if dir == "" {
-		dir = DefaultDir()
+		dir = DefaultStateDir()
 	}
 	return filepath.Join(dir, ServerFileName(server)+"."+suffix)
 }
@@ -66,7 +66,7 @@ func Lock(path string, nonBlocking bool) (func(), error) {
 // WriteAtomic writes contents with restrictive permissions and atomically
 // replaces path after syncing the temporary file.
 func WriteAtomic(path string, contents []byte) error {
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".agents-state-*.tmp")
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".nexo-state-*.tmp")
 	if err != nil {
 		return err
 	}

@@ -216,6 +216,10 @@ func herdrPathContains(project, candidate string) bool {
 }
 
 var _ capabilities.AgentSource = (*Backend)(nil)
+var _ capabilities.ContainerHistory = (*Backend)(nil)
+var _ capabilities.CurrentContainer = (*Backend)(nil)
+var _ capabilities.CurrentProxyMachine = (*Backend)(nil)
+var _ capabilities.FocusEventRecorder = (*Backend)(nil)
 var _ capabilities.PaneFocuser = (*Backend)(nil)
 var _ capabilities.ProjectUseChecker = (*Backend)(nil)
 
@@ -281,17 +285,13 @@ func (b *Backend) createWorktree(ctx context.Context, options capabilities.Workt
 		cleanupErr := b.rollbackPartialCreate(options, workspaceID(output), ctx)
 		return capabilities.Worktree{}, errors.Join(err, cleanupErr)
 	}
-	name := workspace.Label
-	if name == "" {
-		name = projects.TargetName(options.Destination)
-	}
 	return capabilities.Worktree{
 		Path:        options.Destination,
 		Branch:      options.Branch,
 		Repo:        options.Repo,
 		NewBranch:   options.NewBranch,
 		ContainerID: workspace.ID,
-		Container:   capabilities.OpenedContainer{ID: workspace.ID, Name: name, Path: options.Destination, Created: true},
+		Container:   capabilities.OpenedContainer{ID: workspace.ID, Name: workspace.Label, Path: options.Destination, Created: true},
 	}, nil
 }
 
@@ -434,7 +434,7 @@ func (b *Backend) RecentContainers(ctx context.Context) ([]containerstate.Entry,
 // CurrentContainerID reports the workspace owning the calling pane.
 func (b *Backend) CurrentContainerID(ctx context.Context) (string, error) {
 	if b == nil || b.Runner == nil {
-		return "", errors.New("herdr container history requires a command runner")
+		return "", errors.New("herdr current container requires a command runner")
 	}
 	if workspace := strings.TrimSpace(os.Getenv("HERDR_WORKSPACE_ID")); workspace != "" {
 		return workspace, nil
@@ -445,11 +445,11 @@ func (b *Backend) CurrentContainerID(ctx context.Context) (string, error) {
 	}
 	output, err := b.run(ctx, "pane", "get", pane)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 	workspace, err := decodePaneWorkspace(output)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 	return strings.TrimSpace(workspace), nil
 }
@@ -461,7 +461,10 @@ func (b *Backend) CurrentProxyMachine(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	target, err := b.ProxyTarget(ctx, pane)
-	if err != nil || strings.TrimSpace(target) == "" {
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(target) == "" {
 		return "", nil
 	}
 	identity, ok := proxyidentity.ParseValue(target)
@@ -501,7 +504,10 @@ func (b *Backend) RecordFocusEvent(ctx context.Context, payload []byte) error {
 	if b == nil || b.Runner == nil {
 		return errors.New("herdr container history requires a command runner")
 	}
-	workspaceID := focusEventWorkspace(payload)
+	workspaceID, isFocusEvent := focusEventWorkspace(payload)
+	if !isFocusEvent && strings.TrimSpace(string(payload)) != "" {
+		return nil
+	}
 	if workspaceID == "" {
 		workspaceID = strings.TrimSpace(os.Getenv("HERDR_WORKSPACE_ID"))
 	}
@@ -511,23 +517,31 @@ func (b *Backend) RecordFocusEvent(ctx context.Context, payload []byte) error {
 	return b.recordWorkspace(ctx, workspaceID)
 }
 
-// focusEventWorkspace extracts the workspace id from a Herdr event payload,
+// focusEventWorkspace extracts a workspace id from a Herdr focus event,
 // accepting both the event data itself and a wrapper with an event field.
-func focusEventWorkspace(payload []byte) string {
+// Unrelated events are rejected so a payload that happens to carry a
+// workspace_id cannot create a false history entry.
+func focusEventWorkspace(payload []byte) (string, bool) {
 	if len(payload) == 0 {
-		return ""
+		return "", false
 	}
 	var event struct {
+		Type        string          `json:"type"`
 		WorkspaceID string          `json:"workspace_id"`
 		Event       json.RawMessage `json:"event"`
 	}
 	if err := json.Unmarshal(payload, &event); err != nil {
-		return ""
+		return "", false
 	}
 	if len(event.Event) != 0 && string(event.Event) != "null" {
 		return focusEventWorkspace(event.Event)
 	}
-	return strings.TrimSpace(event.WorkspaceID)
+	switch event.Type {
+	case "workspace_focused", "pane_focused":
+		return strings.TrimSpace(event.WorkspaceID), true
+	default:
+		return "", false
+	}
 }
 
 func (b *Backend) openProjectNative(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
@@ -570,11 +584,7 @@ func (b *Backend) openProjectNative(ctx context.Context, path string, options ca
 	if err != nil {
 		return capabilities.OpenedContainer{}, err
 	}
-	name := created.Label
-	if name == "" {
-		name = target
-	}
-	return capabilities.OpenedContainer{ID: created.ID, Name: name, Path: path, Created: true}, nil
+	return capabilities.OpenedContainer{ID: created.ID, Name: created.Label, Path: path, Created: true}, nil
 }
 
 // openWorkspaceByID resolves the workspace label from the workspace list so the

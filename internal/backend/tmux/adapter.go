@@ -18,6 +18,9 @@ func (b *Backend) Init(ctx context.Context, input InitInput) error {
 		return errors.New("tmux adapter requires a command runner")
 	}
 	b.agents.ConfigureHookCommand(os.Args[0], input.ConfigPath)
+	if err := b.agents.ReplaceWatcher(ctx); err != nil {
+		return err
+	}
 	if err := b.agents.installHooks(ctx); err != nil {
 		return err
 	}

@@ -11,7 +11,25 @@ import (
 	"unicode"
 
 	"github.com/pelletier/go-toml/v2/unstable"
+	"github.com/vieitesss/nexo/internal/destination"
 )
+
+// AddProjectParent registers the parent of destination in project discovery.
+// It is the shared add-parent operation used by clone and worktree flows.
+func AddProjectParent(path, destinationPath, home string) (restore func() error, changed bool, err error) {
+	if path == "" {
+		path = DefaultPath()
+	}
+	if strings.TrimSpace(destinationPath) == "" {
+		return nil, false, errors.New("destination path is empty")
+	}
+	destinationPath = destination.ExpandHome(destinationPath, home)
+	absolute, err := filepath.Abs(destinationPath)
+	if err != nil {
+		return nil, false, fmt.Errorf("resolve destination %q: %w", destinationPath, err)
+	}
+	return AddProjectPath(path, filepath.Dir(absolute), home)
+}
 
 // AddProjectPath appends parent to the top-level paths array without
 // reformatting the rest of the configuration. The returned restore function
@@ -33,7 +51,7 @@ func AddProjectPath(path, parent, home string) (restore func() error, changed bo
 		if err := decode(original, path, &cfg); err != nil {
 			return nil, false, err
 		}
-		if projectPathCovered(cfg.Paths, parent, home) {
+		if destination.Covered(cfg.Paths, parent, home) {
 			return func() error { return nil }, false, nil
 		}
 	}
@@ -45,7 +63,7 @@ func AddProjectPath(path, parent, home string) (restore func() error, changed bo
 	if bytes.Equal(updated, original) && existed {
 		return func() error { return nil }, false, nil
 	}
-	if err := writeConfigFile(path, updated, mode, existed); err != nil {
+	if err := writeConfigFile(path, updated, mode); err != nil {
 		return nil, false, err
 	}
 	writtenInfo, statErr := os.Stat(path)
@@ -75,7 +93,7 @@ func AddProjectPath(path, parent, home string) (restore func() error, changed bo
 			return errors.New("config changed after project path update; refusing to overwrite newer edits")
 		}
 		if existed {
-			return writeConfigFile(path, original, mode, true)
+			return writeConfigFile(path, original, mode)
 		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -100,7 +118,7 @@ func readConfigFile(path string) (contents []byte, mode os.FileMode, existed boo
 	return nil, 0o600, false, nil
 }
 
-func writeConfigFile(path string, contents []byte, mode os.FileMode, _ bool) error {
+func writeConfigFile(path string, contents []byte, mode os.FileMode) error {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
@@ -139,45 +157,6 @@ func writeConfigFile(path string, contents []byte, mode os.FileMode, _ bool) err
 		_ = dirFile.Close()
 	}
 	return nil
-}
-
-func projectPathCovered(paths []string, parent, home string) bool {
-	parentPath := filepath.Clean(parent)
-	if absolute, err := filepath.Abs(parentPath); err == nil {
-		parentPath = absolute
-	}
-	for _, pattern := range paths {
-		candidate := expandConfigHome(strings.TrimSpace(pattern), home)
-		if strings.HasSuffix(candidate, string(filepath.Separator)+"*") {
-			candidate = strings.TrimSuffix(candidate, string(filepath.Separator)+"*")
-		}
-		candidate = filepath.Clean(candidate)
-		if absolute, err := filepath.Abs(candidate); err == nil {
-			candidate = absolute
-		}
-		if candidate == parentPath {
-			return true
-		}
-	}
-	return false
-}
-
-func expandConfigHome(pattern, home string) string {
-	if home == "" {
-		return pattern
-	}
-	switch {
-	case pattern == "~", pattern == "~/":
-		return home
-	case strings.HasPrefix(pattern, "~/"):
-		return filepath.Join(home, strings.TrimPrefix(pattern, "~/"))
-	case pattern == "$HOME":
-		return home
-	case strings.HasPrefix(pattern, "$HOME/"):
-		return filepath.Join(home, strings.TrimPrefix(pattern, "$HOME/"))
-	default:
-		return pattern
-	}
 }
 
 func appendProjectPath(contents []byte, parent string) ([]byte, error) {
