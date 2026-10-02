@@ -3,12 +3,12 @@ package picker
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/projects"
 )
 
@@ -97,14 +97,8 @@ func ProjectPlaces(candidates []projects.Candidate) []Place {
 	return places
 }
 
-// LocalMachine returns the hostname used to group local containers.
-func LocalMachine() string {
-	name, err := os.Hostname()
-	if err != nil || strings.TrimSpace(name) == "" {
-		return "local"
-	}
-	return name
-}
+// LocalMachine returns the machine identity used to group local containers.
+func LocalMachine() string { return containerstate.LocalMachine() }
 
 // ContainerPlaces converts backend containers to machine-grouped picker
 // places. The machine field is deliberately separate from the group so remote

@@ -277,8 +277,8 @@ func TestProxyHistorySurvivesReconnectWithChangedNativeID(t *testing.T) {
 	}
 
 	// A local selection must never see the proxy identity.
-	store := containerstate.New(stateDir, "tmux", localMachine(), socket)
-	if err := store.Record(containerstate.Entry{ID: "$7", Name: "local", Machine: localMachine()}); err != nil {
+	store := containerstate.New(stateDir, "tmux", containerstate.LocalMachine(), socket)
+	if err := store.Record(containerstate.Entry{ID: "$7", Name: "local", Machine: containerstate.LocalMachine()}); err != nil {
 		t.Fatal(err)
 	}
 	freshEntries, err := fresh.RecentContainers(context.Background())

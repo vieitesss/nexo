@@ -22,7 +22,7 @@ func TestRecordFocusEventRecordsLocalWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].ID != "w1" || entries[0].Proxy || entries[0].Machine != localMachine() {
+	if len(entries) != 1 || entries[0].ID != "w1" || entries[0].Proxy || entries[0].Machine != containerstate.LocalMachine() {
 		t.Fatalf("entries = %#v, want the local workspace w1", entries)
 	}
 }

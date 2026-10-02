@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/pathpolicy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
@@ -41,7 +42,7 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 		}
 		return nil, err
 	}
-	machine := localMachine()
+	machine := containerstate.LocalMachine()
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	containers := make([]capabilities.Container, 0, len(lines))
 	for _, line := range lines {
@@ -308,14 +309,6 @@ func (b *Backend) currentContainer(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(output)), nil
-}
-
-func localMachine() string {
-	name, err := os.Hostname()
-	if err != nil || strings.TrimSpace(name) == "" {
-		return "local"
-	}
-	return name
 }
 
 func isNoServer(err error) bool {
