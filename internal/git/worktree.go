@@ -100,7 +100,7 @@ func worktreeOwners(output []byte, branch string) []string {
 func (c *Commands) PreviousBranch(ctx context.Context, repo string) (string, error) {
 	current, err := c.CurrentBranch(ctx, repo)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 	for index := 1; index <= 100; index++ {
 		output, err := c.run(ctx, repo, "rev-parse", "--abbrev-ref", "@{-"+strconv.Itoa(index)+"}")
