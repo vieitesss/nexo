@@ -5,8 +5,6 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/vieitesss/nexo/internal/deletion"
-
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -61,15 +59,11 @@ type stagedForm struct {
 	busyLabel  string
 	expanded   map[string]bool
 
-	deletePreflightEnabled bool
-	deletePreflightPending bool
-	deleteIdentity         string
-	deleteIdentityValid    bool
-	deletePlan             *deletion.Plan
-	deletePreflightScroll  int
-	deletePreflightSeen    bool
-	viewportHeight         int
-	viewportWidth          int
+	keyHook        func(tea.KeyMsg) (formEffect, bool)
+	stageLinesHook func(formStage) []string
+	viewportHook   func([]string, int, int) (int, bool)
+	viewportHeight int
+	viewportWidth  int
 }
 
 func newStagedForm(ctx context.Context, stages []formStage, validate func(*stagedForm) formValidation, submit func(context.Context, map[string]string, uint64) tea.Cmd) *stagedForm {
@@ -173,25 +167,9 @@ func (f *stagedForm) key(msg tea.KeyMsg) formEffect {
 	if f.inFlight {
 		return formEffect{}
 	}
-	if f.deletePreflightEnabled && f.stage == f.deleteStageIndex() {
-		switch msg.Type {
-		case tea.KeyUp:
-			return f.scrollDeletePreflight(-1)
-		case tea.KeyDown:
-			return f.scrollDeletePreflight(1)
-		case tea.KeyPgUp:
-			return f.scrollDeletePreflight(-max(1, f.viewportHeight-1))
-		case tea.KeyPgDown:
-			return f.scrollDeletePreflight(max(1, f.viewportHeight-1))
-		case tea.KeyEnter, tea.KeyRight, tea.KeyTab:
-			if !f.deletePreflightSeen {
-				f.stageError = "scroll through the complete preflight before continuing"
-				return formEffect{Changed: true}
-			}
-			if msg.Type == tea.KeyTab {
-				return f.nextField()
-			}
-			return f.advance()
+	if f.keyHook != nil {
+		if effect, handled := f.keyHook(msg); handled {
+			return effect
 		}
 	}
 	field := f.currentField()
@@ -256,10 +234,6 @@ func (f *stagedForm) key(msg tea.KeyMsg) formEffect {
 }
 
 func (f *stagedForm) advance() formEffect {
-	if f.deletePreflightEnabled && f.stage == f.deleteStageIndex() && !f.deletePreflightSeen {
-		f.stageError = "scroll through the complete preflight before continuing"
-		return formEffect{Changed: true}
-	}
 	if !f.applyValidation() {
 		return formEffect{Changed: true}
 	}
@@ -310,33 +284,6 @@ func (f *stagedForm) previousField() formEffect {
 	return formEffect{}
 }
 
-func (f *stagedForm) deleteStageIndex() int {
-	for index, stage := range f.stages {
-		if stage.ID == "preflight" {
-			return index
-		}
-	}
-	return -1
-}
-
-func (f *stagedForm) scrollDeletePreflight(delta int) formEffect {
-	if f.viewportHeight <= 0 {
-		return formEffect{}
-	}
-	width := f.viewportWidth
-	if width <= 0 {
-		width = 80
-	}
-	lines := formLinesForWidth(f.renderLines(), width)
-	maxScroll := max(0, len(lines)-f.viewportHeight)
-	f.deletePreflightScroll = min(maxScroll, max(0, f.deletePreflightScroll+delta))
-	if f.deletePreflightScroll >= maxScroll {
-		f.deletePreflightSeen = true
-	}
-	f.stageError = ""
-	return formEffect{Changed: true}
-}
-
 func (f *stagedForm) finish(err error) {
 	if f.cancel != nil {
 		f.cancel()
@@ -383,16 +330,8 @@ func (f stagedForm) renderLines() []string {
 			}
 		}
 		if stageIndex == f.stage {
-			if f.deletePlan != nil && f.deletePreflightEnabled && stage.ID == "preflight" {
-				for _, finding := range f.deletePlan.Warnings {
-					lines = append(lines, "  warning: "+finding.Message)
-				}
-				for _, finding := range f.deletePlan.Blockers {
-					lines = append(lines, "  blocker: "+finding.Message)
-				}
-				if len(f.deletePlan.Warnings) == 0 && len(f.deletePlan.Blockers) == 0 {
-					lines = append(lines, "  no warnings or blockers")
-				}
+			if f.stageLinesHook != nil {
+				lines = append(lines, f.stageLinesHook(stage)...)
 			}
 			for _, field := range stage.Fields {
 				if field.Expandable && !f.expanded[field.ID] {

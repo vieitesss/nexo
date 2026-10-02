@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/backend"
+	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/commands"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
@@ -175,9 +176,7 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		return 2
 	}
 	trace.Mark("backend-ready")
-	if configurator, ok := selection.Adapter.(interface {
-		ConfigureRemoteConfig(config.RemoteConfig, string)
-	}); ok {
+	if configurator, ok := selection.Adapter.(capabilities.RemoteConfigurator); ok {
 		configurator.ConfigureRemoteConfig(cfg.Remote, options.ConfigPath)
 	}
 	if err := command.Run(context.Background(), commands.Invocation{

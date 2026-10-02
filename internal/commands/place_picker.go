@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
@@ -146,7 +147,7 @@ func (a localContainerActions) KillContainers(ctx context.Context, ids []string)
 
 func isLocalContainer(machine string) bool {
 	machine = strings.TrimSpace(machine)
-	return machine == "" || proxyidentity.NormalizeMachineName(machine) == "local" || proxyidentity.NormalizeMachineName(machine) == proxyidentity.NormalizeMachineName(picker.LocalMachine())
+	return machine == "" || proxyidentity.NormalizeMachineName(machine) == "local" || proxyidentity.NormalizeMachineName(machine) == proxyidentity.NormalizeMachineName(containerstate.LocalMachine())
 }
 
 func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {

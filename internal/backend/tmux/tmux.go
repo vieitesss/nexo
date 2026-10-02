@@ -378,7 +378,7 @@ func (b *Backend) OpenContainer(ctx context.Context, id string) error {
 }
 
 func (b *Backend) usageStore(ctx context.Context) containerstate.Store {
-	return containerstate.New(b.usageStateDir, "tmux", localMachine(), b.serverName(ctx))
+	return containerstate.New(b.usageStateDir, "tmux", containerstate.LocalMachine(), b.serverName(ctx))
 }
 
 // serverName resolves and caches the tmux socket path that scopes native IDs.
@@ -485,7 +485,7 @@ func (b *Backend) recordTarget(ctx context.Context, target string) error {
 	if id == "" {
 		id = strings.TrimSpace(target)
 	}
-	return b.recordContainer(ctx, containerstate.Entry{ID: id, Name: strings.TrimSpace(fields[1]), Machine: localMachine()})
+	return b.recordContainer(ctx, containerstate.Entry{ID: id, Name: strings.TrimSpace(fields[1]), Machine: containerstate.LocalMachine()})
 }
 
 // ConfigureAgents applies the shared agents configuration to the tmux source.
@@ -500,7 +500,7 @@ func (b *Backend) ConfigureGlance(cfg config.GlanceConfig) {
 }
 
 // Glance implements the user-bound `nexo tmux glance` command.
-func (b *Backend) Glance(ctx context.Context, action GlanceAction) error {
+func (b *Backend) Glance(ctx context.Context, action capabilities.GlanceAction) error {
 	if b == nil || b.agents == nil {
 		return errors.New("tmux glance requires an agent source")
 	}

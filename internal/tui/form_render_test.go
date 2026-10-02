@@ -11,14 +11,10 @@ import (
 )
 
 func TestDeletePreflightSmallViewportIsScrollable(t *testing.T) {
-	form := newStagedForm(context.Background(), []formStage{
-		{ID: "target", Title: "delete project", Fields: []formField{{ID: "path", Label: "path", Value: "/tmp/project"}}},
-		{ID: "preflight", Title: "preflight"},
-		{ID: "confirmation", Title: "confirm deletion", Fields: []formField{{ID: "confirm", Label: "type yes to delete", Value: "no"}}},
-	}, func(*stagedForm) formValidation { return formValidation{} }, nil)
-	form.deletePreflightEnabled = true
-	form.stage = 1
-	form.deletePlan = &deletion.Plan{Path: "/tmp/project", Action: "trash", Warnings: []deletion.Finding{
+	delete := newDeleteForm(Deps{}, context.Background(), "/tmp/project")
+	form := delete.stagedForm
+	form.stage = delete.preflightStage()
+	delete.plan = &deletion.Plan{Path: "/tmp/project", Action: "trash", Warnings: []deletion.Finding{
 		{Code: "one", Message: "local-only Git data: unpushed commits and stashes must be reviewed"},
 		{Code: "two", Message: "non-empty directory contains files that will be removed"},
 		{Code: "three", Message: "remote verification failed and deletion is blocked"},
@@ -36,13 +32,13 @@ func TestDeletePreflightSmallViewportIsScrollable(t *testing.T) {
 			t.Fatalf("wrapped preflight omitted %q: %q", phrase, wrapped)
 		}
 	}
-	if form.deletePreflightSeen {
+	if delete.preflightSeen {
 		t.Fatal("small preflight marked seen before its findings were scrolled")
 	}
 	if effect := form.key(tea.KeyMsg{Type: tea.KeyEnter}); !effect.Changed || form.stage != 1 {
 		t.Fatalf("Enter advanced without presenting the complete preflight: %#v stage=%d", effect, form.stage)
 	}
-	for !form.deletePreflightSeen {
+	for !delete.preflightSeen {
 		form.key(tea.KeyMsg{Type: tea.KeyPgDown})
 		_ = overlayForm(lines, form, 32, 8)
 	}

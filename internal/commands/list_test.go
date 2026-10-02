@@ -10,6 +10,7 @@ import (
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/projects"
 )
@@ -145,7 +146,7 @@ func TestListCommandJSONIsStable(t *testing.T) {
 
 func TestListPlacesKeepsProjectAndMachineNamespacesSeparate(t *testing.T) {
 	var output strings.Builder
-	host := picker.LocalMachine()
+	host := containerstate.LocalMachine()
 	err := writePlaces(&output, []picker.Place{
 		{Kind: picker.ProjectKind, Group: host, DisplayRemainder: "project"},
 		{Kind: picker.ContainerKind, Machine: host, Group: host, DisplayRemainder: "container"},

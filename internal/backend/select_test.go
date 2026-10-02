@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -68,6 +69,36 @@ func TestResolveInitializesAdapterAndCapabilities(t *testing.T) {
 	}
 	if !sort.StringsAreSorted(got.Capabilities) {
 		t.Fatalf("selection capabilities = %#v, want sorted names", got.Capabilities)
+	}
+}
+
+func TestResolveReportsCompleteBackendCapabilityLists(t *testing.T) {
+	cases := []struct {
+		name string
+		want []string
+	}{
+		{name: "tmux", want: []string{
+			"AgentSource", "ContainerHistory", "ContainerKiller", "ContainerLister", "ContainerOpener", "ContainerRenamer",
+			"CurrentContainer", "CurrentProxyMachine", "FocusEventRecorder", "MessageDisplayer", "Notifier", "PaneFocuser",
+			"ProjectOpener", "ProjectUseChecker", "RemotePaste", "RemoteProxy", "ScreenReader", "WorktreeCreator", "WorktreeExtractor",
+		}},
+		{name: "herdr", want: []string{
+			"AgentSource", "ContainerHistory", "ContainerKiller", "ContainerLister", "ContainerOpener", "ContainerRenamer",
+			"CurrentContainer", "CurrentProxyMachine", "FocusEventRecorder", "PaneFocuser", "ProjectOpener", "ProjectUseChecker",
+			"RemotePaste", "RemoteProxy", "ScreenReader", "WorktreeCreator", "WorktreeExtractor",
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			flag := test.name
+			got, err := Resolve(context.Background(), ResolveInput{Flag: &flag, Env: mapEnvironment{}})
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			if !reflect.DeepEqual(got.Capabilities, test.want) {
+				t.Fatalf("capabilities = %#v, want %#v", got.Capabilities, test.want)
+			}
+		})
 	}
 }
 

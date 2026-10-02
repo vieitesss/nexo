@@ -413,7 +413,7 @@ func (b *Backend) OpenProject(ctx context.Context, path string, options capabili
 }
 
 func (b *Backend) usageStore() containerstate.Store {
-	return containerstate.New(b.usageStateDir, "herdr", localMachine(), herdrServerIdentity())
+	return containerstate.New(b.usageStateDir, "herdr", containerstate.LocalMachine(), herdrServerIdentity())
 }
 
 func (b *Backend) recordContainer(entry containerstate.Entry) error {
@@ -492,7 +492,7 @@ func (b *Backend) recordWorkspace(ctx context.Context, workspaceID string) error
 		if machine, container, ok := b.proxyWorkspaceTarget(workspace); ok {
 			return b.recordContainer(containerstate.Entry{ID: workspace.ID, Name: container, Machine: machine, Proxy: true})
 		}
-		return b.recordContainer(containerstate.Entry{ID: workspace.ID, Name: workspace.Label, Machine: localMachine()})
+		return b.recordContainer(containerstate.Entry{ID: workspace.ID, Name: workspace.Label, Machine: containerstate.LocalMachine()})
 	}
 	return nil
 }

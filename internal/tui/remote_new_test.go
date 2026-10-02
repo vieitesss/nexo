@@ -8,13 +8,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
 )
 
 func remoteNewDeps() Deps {
 	return Deps{
-		Containers:     []capabilities.Container{{ID: "local-one", Name: "local-one", Machine: picker.LocalMachine()}},
+		Containers:     []capabilities.Container{{ID: "local-one", Name: "local-one", Machine: containerstate.LocalMachine()}},
 		RemoteMachines: []string{"dev", "down"},
 	}
 }
@@ -60,7 +61,7 @@ func TestRemoteNewRowCarriesResolvedBackend(t *testing.T) {
 	if label := shell.Plain(row.label); label != newContainerLabel {
 		t.Fatalf("new row label = %q, want %q", label, newContainerLabel)
 	}
-	if _, ok := newRowFor(model, "new:"+picker.LocalMachine()); ok {
+	if _, ok := newRowFor(model, "new:"+containerstate.LocalMachine()); ok {
 		t.Fatalf("local machine grew a new-container row: %v", model.Rows())
 	}
 }

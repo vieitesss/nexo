@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
 )
@@ -144,7 +145,7 @@ func TestMouseUsesRenderedBodyLayout(t *testing.T) {
 	}
 	model := NewModel(context.Background(), Deps{
 		Projects:   projects,
-		Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: picker.LocalMachine()}},
+		Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: containerstate.LocalMachine()}},
 	}, ContainersTab)
 	model.SetSize(50, 6)
 

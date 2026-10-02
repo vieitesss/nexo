@@ -16,13 +16,14 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
 )
 
 func richDeps() Deps {
 	since := time.Now().Add(-3 * time.Minute)
-	local := picker.LocalMachine()
+	local := containerstate.LocalMachine()
 	return Deps{
 		Projects: []picker.Place{
 			{Kind: picker.ProjectKind, Path: "/work/nexo", Group: "/work", DisplayRemainder: "nexo", Git: true},
@@ -532,7 +533,7 @@ func foregroundTokens(value string) []string {
 // state. "con" matches all of them so the query paints them on the selection.
 func selectionDeps() Deps {
 	since := time.Now().Add(-2 * time.Minute)
-	local := picker.LocalMachine()
+	local := containerstate.LocalMachine()
 	return Deps{
 		Projects: []picker.Place{{
 			Kind: picker.ProjectKind, Path: "/work/con", Group: "/work", DisplayRemainder: "con", Git: true,

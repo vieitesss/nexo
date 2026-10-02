@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
-	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
 )
 
@@ -25,7 +24,7 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 	if invocation.Adapter == nil {
 		return errors.New("agents requires a backend with the AgentSource capability")
 	}
-	if configurable, ok := invocation.Adapter.(interface{ ConfigureAgents(config.AgentsConfig) }); ok {
+	if configurable, ok := invocation.Adapter.(capabilities.AgentConfigurator); ok {
 		configurable.ConfigureAgents(invocation.Config.Agents)
 	}
 	if len(invocation.Args) > 0 {
@@ -34,17 +33,13 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 			if len(invocation.Args) != 1 {
 				return UsageError{Err: errors.New("usage: nexo agents watch")}
 			}
-			if configurable, ok := invocation.Adapter.(interface {
-				ConfigureGlance(config.GlanceConfig)
-			}); ok {
+			if configurable, ok := invocation.Adapter.(capabilities.GlanceConfigurator); ok {
 				configurable.ConfigureGlance(invocation.Config.Glance)
 			}
-			if configurable, ok := invocation.Adapter.(interface {
-				ConfigureAgentCommand(string, string)
-			}); ok {
+			if configurable, ok := invocation.Adapter.(capabilities.AgentCommandConfigurator); ok {
 				configurable.ConfigureAgentCommand(os.Args[0], invocation.ConfigPath)
 			}
-			if watcher, ok := invocation.Adapter.(interface{ WatchAgents(context.Context) error }); ok {
+			if watcher, ok := invocation.Adapter.(capabilities.AgentWatcher); ok {
 				return watcher.WatchAgents(ctx)
 			}
 			return errors.New("selected backend does not support agent watching")

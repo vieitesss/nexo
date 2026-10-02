@@ -2,11 +2,11 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
@@ -114,7 +114,7 @@ func remoteValidationKey(err error) string {
 }
 
 func validateRemote(remote RemoteConfig) error {
-	localMachine, _ := os.Hostname()
+	localMachine := containerstate.LocalMachine()
 	configured := make(map[string]bool, len(remote.Machines)+len(remote.Backends))
 	for _, machine := range remote.ConfiguredMachines() {
 		trimmed := strings.TrimSpace(machine)
@@ -122,7 +122,7 @@ func validateRemote(remote RemoteConfig) error {
 		if strings.HasPrefix(trimmed, "-") {
 			return fmt.Errorf("machine %q starts with '-' and would be interpreted as an ssh option", machine)
 		}
-		if proxyidentity.NormalizeMachineName(trimmed) == "local" || (localMachine != "" && proxyidentity.NormalizeMachineName(trimmed) == proxyidentity.NormalizeMachineName(localMachine)) {
+		if proxyidentity.NormalizeMachineName(trimmed) == "local" || proxyidentity.NormalizeMachineName(trimmed) == proxyidentity.NormalizeMachineName(localMachine) {
 			return fmt.Errorf("machine alias %q refers to the local machine", machine)
 		}
 	}

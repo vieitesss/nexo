@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 )
 
@@ -30,7 +31,7 @@ func (f *fakeContainerActionsAdapter) KillContainer(_ context.Context, id string
 
 func TestLocalContainerResolverWrapsCurrentAdapter(t *testing.T) {
 	adapter := &fakeContainerActionsAdapter{}
-	actions, err := (localContainerResolver{adapter: adapter}).ResolveContainerActions(context.Background(), picker.LocalMachine())
+	actions, err := (localContainerResolver{adapter: adapter}).ResolveContainerActions(context.Background(), containerstate.LocalMachine())
 	if err != nil {
 		t.Fatalf("ResolveContainerActions() error = %v", err)
 	}

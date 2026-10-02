@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
@@ -71,6 +72,8 @@ func runWorktreeCreate(ctx context.Context, invocation Invocation) error {
 		Creator:    creator,
 		Remover:    remover,
 		ConfigPath: invocation.ConfigPath,
+		Paths:      invocation.Config.Paths,
+		Home:       os.Getenv("HOME"),
 	}, worktreeflow.Request{
 		Repo:        parsed.Repo,
 		Branch:      parsed.Branch,
@@ -106,6 +109,8 @@ func runWorktreeExtract(ctx context.Context, invocation Invocation) error {
 		Extractor:          extractor,
 		ExtractionRollback: rollbacker,
 		ConfigPath:         invocation.ConfigPath,
+		Paths:              invocation.Config.Paths,
+		Home:               os.Getenv("HOME"),
 	}, worktreeflow.Request{
 		Repo:         parsed.Repo,
 		Destination:  parsed.Destination,

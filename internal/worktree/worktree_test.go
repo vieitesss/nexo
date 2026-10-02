@@ -53,6 +53,31 @@ func (f *fakeExtractionRollback) RollbackExtractWorktree(_ context.Context, work
 	return nil
 }
 
+func TestValidateNormalizesDestinationAndPreservesRepositoryIdentity(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "checkout ")
+	trimmedRepo := filepath.Join(root, "checkout")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(trimmedRepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	request, err := Validate(Request{Repo: repo, Destination: " " + root + "/created"}, nil, root)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if request.Repo != repo || request.Destination != filepath.Join(root, "created") {
+		t.Fatalf("Validate() request = %#v, want repo %q", request, repo)
+	}
+}
+
+func TestValidateRequiresDestination(t *testing.T) {
+	if _, err := Validate(Request{}, nil, t.TempDir()); !errors.Is(err, ErrDestinationRequired) {
+		t.Fatalf("Validate() error = %v, want destination-required", err)
+	}
+}
+
 func TestCreateRegistersParentAfterNativeSuccess(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	parent := filepath.Dir(configPath)

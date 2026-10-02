@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,6 +68,58 @@ func TestExtractFormPrefillsSuggestionAndSubmits(t *testing.T) {
 	}
 	if gotRepo != repo || gotDestination != filepath.Join(root, "checkout-feature-thing") || gotReturn != "main" {
 		t.Fatalf("extraction = %q, %q, %q", gotRepo, gotDestination, gotReturn)
+	}
+}
+
+func TestExtractFormKeepsInlineDestinationError(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "existing")
+	if err := os.Mkdir(existing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{
+		Projects: []picker.Place{{Kind: picker.ProjectKind, Path: filepath.Join(root, "checkout"), Group: root, Git: true}},
+		Home:     root,
+	}
+	model := openExtractForm(t, extractTestModel(t, deps))
+	model.input.form.stages[0].Fields[0].Value = existing
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	want := `destination "` + existing + `" already exists`
+	if cmd != nil || model.input.form == nil || model.input.form.stageError != want {
+		t.Fatalf("validation = cmd %v, form=%#v; want inline %q", cmd != nil, model.input.form, want)
+	}
+}
+
+func TestExtractFormPreservesTrailingSpaceRepositoryIdentity(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "checkout ")
+	trimmedRepo := filepath.Join(root, "checkout")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(trimmedRepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var gotRepo string
+	deps := Deps{
+		Projects: []picker.Place{{Kind: picker.ProjectKind, Path: repo, Group: root, Git: true}},
+		ExtractWorktree: func(_ context.Context, selectedRepo, _, _ string) (capabilities.Worktree, error) {
+			gotRepo = selectedRepo
+			return capabilities.Worktree{Path: filepath.Join(root, "extracted"), Branch: "feature"}, nil
+		},
+		Home: root,
+	}
+	model := openExtractForm(t, extractTestModel(t, deps))
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("extraction did not start")
+	}
+	updateModel(t, model, cmd())
+	if gotRepo != repo {
+		t.Fatalf("extraction repo = %q, want %q", gotRepo, repo)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 )
 
@@ -52,7 +53,7 @@ func TestInputTransitionOwnsQueryAndFoldingState(t *testing.T) {
 func TestInputDefersPresentationUntilNeeded(t *testing.T) {
 	rows := []row{{
 		id: "container:local:one", kind: itemRow, itemKind: "container", cursorable: true,
-		place: picker.Place{Kind: picker.ContainerKind, Machine: picker.LocalMachine(), ContainerID: "one"},
+		place: picker.Place{Kind: picker.ContainerKind, Machine: containerstate.LocalMachine(), ContainerID: "one"},
 	}}
 	builds := 0
 	inputFrameFor := func() inputFrame {

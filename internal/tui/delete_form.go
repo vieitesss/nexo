@@ -10,10 +10,24 @@ import (
 	"github.com/vieitesss/nexo/internal/deletion"
 )
 
+// deleteForm owns the destructive flow's identity, preflight plan, and
+// scrolling state. stagedForm provides the generic field and stage mechanics;
+// this wrapper adds the safety-critical preflight stage.
+type deleteForm struct {
+	*stagedForm
+
+	preflightPending bool
+	identity         string
+	identityValid    bool
+	plan             *deletion.Plan
+	preflightScroll  int
+	preflightSeen    bool
+}
+
 // newDeleteForm captures the selected path identity before the modal is
 // displayed, then gathers a complete read-only plan before showing the
 // destructive confirmation fields.
-func newDeleteForm(deps Deps, ctx context.Context, path string) *stagedForm {
+func newDeleteForm(deps Deps, ctx context.Context, path string) *deleteForm {
 	identity := ""
 	identityValid := false
 	if deps.DeleteFingerprint != nil {
@@ -22,7 +36,11 @@ func newDeleteForm(deps Deps, ctx context.Context, path string) *stagedForm {
 			identity, identityValid = captured, true
 		}
 	}
-	form := newStagedForm(ctx, []formStage{
+	state := &deleteForm{
+		identity:      identity,
+		identityValid: identityValid,
+	}
+	state.stagedForm = newStagedForm(ctx, []formStage{
 		{ID: "target", Title: "delete project", Fields: []formField{
 			{ID: "path", Label: "path", Value: path, ReadOnly: true},
 		}},
@@ -32,35 +50,48 @@ func newDeleteForm(deps Deps, ctx context.Context, path string) *stagedForm {
 			{ID: "force", Label: "accept warnings (yes/no)", Value: "no"},
 			{ID: "confirm", Label: "type yes to delete", Value: "no"},
 		}},
-	}, deleteFormValidation, nil)
-	form.deletePreflightEnabled = true
-	form.deleteIdentity = identity
-	form.deleteIdentityValid = identityValid
-	form.submit = deleteFormSubmit(deps, form)
-	form.busyLabel = "preflighting and deleting…"
-	return form
+	}, state.validate, nil)
+	state.keyHook = state.key
+	state.stageLinesHook = state.stageLines
+	state.viewportHook = state.viewport
+	state.submit = deleteFormSubmit(deps, state)
+	state.busyLabel = "preflighting and deleting…"
+	return state
 }
 
-func deleteFormValidation(form *stagedForm) formValidation {
+func (d *deleteForm) preflightStage() int {
+	for index, stage := range d.stages {
+		if stage.ID == "preflight" {
+			return index
+		}
+	}
+	return -1
+}
+
+func (d *deleteForm) validate(form *stagedForm) formValidation {
 	result := formValidation{Values: map[string]string{}}
 	path := formValue(form, "path")
 	if path == "" {
 		result.Error = "path is required"
 		return result
 	}
-	if form.deletePreflightPending {
+	if d.preflightPending {
 		result.Error = "preflight is still running"
 		return result
 	}
-	if form.deletePlan == nil {
+	if d.plan == nil {
 		result.Error = "preflight is required before confirmation"
 		return result
 	}
 	if form.stage == 0 {
 		return result
 	}
-	if form.stage == 1 {
-		if len(form.deletePlan.Blockers) > 0 {
+	if form.stage == d.preflightStage() {
+		if !d.preflightSeen {
+			result.Error = "scroll through the complete preflight before continuing"
+			return result
+		}
+		if len(d.plan.Blockers) > 0 {
 			result.Error = "delete is blocked; cancel or fix the selected candidate"
 		}
 		return result
@@ -80,7 +111,7 @@ func deleteFormValidation(form *stagedForm) formValidation {
 		result.Error = "type yes to confirm deletion"
 		return result
 	}
-	if len(form.deletePlan.Warnings) > 0 && force != "yes" {
+	if len(d.plan.Warnings) > 0 && force != "yes" {
 		result.Error = "accept warnings must be yes"
 		return result
 	}
@@ -88,12 +119,12 @@ func deleteFormValidation(form *stagedForm) formValidation {
 	return result
 }
 
-func deleteFormSubmit(deps Deps, form *stagedForm) func(context.Context, map[string]string, uint64) tea.Cmd {
+func deleteFormSubmit(deps Deps, form *deleteForm) func(context.Context, map[string]string, uint64) tea.Cmd {
 	return func(actionCtx context.Context, values map[string]string, generation uint64) tea.Cmd {
 		path := values["path"]
 		permanent := strings.EqualFold(values["mode"], "permanent")
 		force := strings.EqualFold(values["force"], "yes")
-		plan := form.deletePlan
+		plan := form.plan
 		return func() tea.Msg {
 			if deps.DeleteProjectPlan == nil || plan == nil {
 				return actionMsg{kind: "delete", destination: path, generation: generation, err: errors.New("project deletion is not configured")}
@@ -103,21 +134,89 @@ func deleteFormSubmit(deps Deps, form *stagedForm) func(context.Context, map[str
 	}
 }
 
-// startDeletePreflight launches the read-only plan gather before confirmation.
-func (f *stagedForm) startDeletePreflight(deps Deps) tea.Cmd {
-	if f == nil || deps.DeletePreflight == nil {
+func (d *deleteForm) key(msg tea.KeyMsg) (formEffect, bool) {
+	if d.stage != d.preflightStage() {
+		return formEffect{}, false
+	}
+	switch msg.Type {
+	case tea.KeyUp:
+		return d.scroll(-1), true
+	case tea.KeyDown:
+		return d.scroll(1), true
+	case tea.KeyPgUp:
+		return d.scroll(-max(1, d.viewportHeight-1)), true
+	case tea.KeyPgDown:
+		return d.scroll(max(1, d.viewportHeight-1)), true
+	default:
+		return formEffect{}, false
+	}
+}
+
+func (d *deleteForm) stageLines(stage formStage) []string {
+	if d.plan == nil || stage.ID != "preflight" {
 		return nil
 	}
-	f.deletePreflightPending = true
-	f.inFlight = true
-	f.generation++
-	generation := f.generation
-	ctx, cancel := context.WithCancel(f.ctx)
-	f.cancel = cancel
-	path := formValue(f, "path")
-	identity := f.deleteIdentity
+	lines := make([]string, 0, len(d.plan.Warnings)+len(d.plan.Blockers)+1)
+	for _, finding := range d.plan.Warnings {
+		lines = append(lines, "  warning: "+finding.Message)
+	}
+	for _, finding := range d.plan.Blockers {
+		lines = append(lines, "  blocker: "+finding.Message)
+	}
+	if len(lines) == 0 {
+		lines = append(lines, "  no warnings or blockers")
+	}
+	return lines
+}
+
+func (d *deleteForm) viewport(body []string, maxBody, width int) (int, bool) {
+	if d.stage != d.preflightStage() {
+		return 0, false
+	}
+	if maxBody <= 0 || width <= 0 {
+		d.preflightSeen = false
+		return 0, true
+	}
+	maxScroll := max(0, len(body)-maxBody)
+	d.preflightScroll = min(maxScroll, max(0, d.preflightScroll))
+	if len(body) <= maxBody || d.preflightScroll >= maxScroll {
+		d.preflightSeen = true
+	}
+	return d.preflightScroll, true
+}
+
+func (d *deleteForm) scroll(delta int) formEffect {
+	if d.viewportHeight <= 0 {
+		return formEffect{}
+	}
+	width := d.viewportWidth
+	if width <= 0 {
+		width = 80
+	}
+	lines := formLinesForWidth(d.renderLines(), width)
+	maxScroll := max(0, len(lines)-d.viewportHeight)
+	d.preflightScroll = min(maxScroll, max(0, d.preflightScroll+delta))
+	if d.preflightScroll >= maxScroll {
+		d.preflightSeen = true
+	}
+	d.stageError = ""
+	return formEffect{Changed: true}
+}
+
+// startPreflight launches the read-only plan gather before confirmation.
+func (d *deleteForm) startPreflight(deps Deps) tea.Cmd {
+	if d == nil || deps.DeletePreflight == nil {
+		return nil
+	}
+	d.preflightPending = true
+	d.inFlight = true
+	generation := d.nextGeneration()
+	ctx, cancel := context.WithCancel(d.ctx)
+	d.cancel = cancel
+	path := formValue(d.stagedForm, "path")
+	identity := d.identity
 	return func() tea.Msg {
-		if !f.deleteIdentityValid {
+		if !d.identityValid {
 			return actionMsg{kind: "delete-preflight", destination: path, generation: generation, err: errors.New("cannot verify selected project identity")}
 		}
 		plan, err := deps.DeletePreflight(ctx, path, identity)
@@ -125,22 +224,25 @@ func (f *stagedForm) startDeletePreflight(deps Deps) tea.Cmd {
 	}
 }
 
-func (f *stagedForm) finishDeletePreflight(plan *deletion.Plan, err error) {
-	if f.cancel != nil {
-		f.cancel()
-		f.cancel = nil
-	}
-	f.inFlight = false
-	f.deletePreflightPending = false
-	f.deletePreflightScroll = 0
-	f.deletePreflightSeen = f.viewportHeight == 0
-	if err != nil {
-		f.stageError = err.Error()
+func (d *deleteForm) finishAction(msg actionMsg) {
+	if msg.kind != "delete-preflight" {
 		return
 	}
-	f.deletePlan = plan
-	if f.stage < 1 {
-		f.stage = 1
-		f.field = 0
+	if d.cancel != nil {
+		d.cancel()
+		d.cancel = nil
+	}
+	d.inFlight = false
+	d.preflightPending = false
+	d.preflightScroll = 0
+	d.preflightSeen = d.viewportHeight == 0
+	if msg.err != nil {
+		d.stageError = msg.err.Error()
+		return
+	}
+	d.plan = msg.plan
+	if d.stage < d.preflightStage() {
+		d.stage = d.preflightStage()
+		d.field = 0
 	}
 }

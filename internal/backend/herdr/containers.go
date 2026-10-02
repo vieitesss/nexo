@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 )
 
 var (
@@ -38,7 +39,7 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 	if err != nil {
 		return nil, err
 	}
-	machine := localMachine()
+	machine := containerstate.LocalMachine()
 	containers := make([]capabilities.Container, 0, len(workspaces))
 	for _, workspace := range workspaces {
 		proxyMachine, proxyContainer, isProxy := b.proxyWorkspaceTarget(workspace)
@@ -240,12 +241,4 @@ func decodePaneWorkspace(output []byte) (string, error) {
 		return "", fmt.Errorf("decode herdr pane: %w", err)
 	}
 	return paneResult.Pane.WorkspaceID, nil
-}
-
-func localMachine() string {
-	name, err := os.Hostname()
-	if err != nil || strings.TrimSpace(name) == "" {
-		return "local"
-	}
-	return name
 }

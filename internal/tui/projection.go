@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
 )
@@ -15,7 +16,7 @@ func (m Model) catalogSnapshot() picker.CatalogSnapshot {
 	if m.catalog == nil {
 		return picker.CatalogSnapshot{
 			Places:   append([]picker.Place(nil), m.deps.Projects...),
-			Machines: []string{picker.LocalMachine()},
+			Machines: []string{containerstate.LocalMachine()},
 			Status:   map[string]picker.MachineStatus{},
 		}
 	}
@@ -166,7 +167,7 @@ func abbreviateHome(value string) string {
 
 func newAgentRecords(agents []capabilities.Agent, machine string) []agentRecord {
 	if machine == "" {
-		machine = picker.LocalMachine()
+		machine = containerstate.LocalMachine()
 	}
 	result := make([]agentRecord, 0, len(agents))
 	for _, agent := range agents {

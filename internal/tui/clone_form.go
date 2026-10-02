@@ -10,7 +10,6 @@ import (
 
 	cloneflow "github.com/vieitesss/nexo/internal/clone"
 	"github.com/vieitesss/nexo/internal/config"
-	"github.com/vieitesss/nexo/internal/destination"
 )
 
 func newCloneForm(deps Deps, ctx context.Context) *stagedForm {
@@ -36,36 +35,38 @@ func newCloneForm(deps Deps, ctx context.Context) *stagedForm {
 func cloneFormValidation(deps Deps) func(*stagedForm) formValidation {
 	return func(form *stagedForm) formValidation {
 		protocol := strings.ToLower(strings.TrimSpace(formValue(form, "protocol")))
-		source := strings.TrimSpace(formValue(form, "source"))
+		source := formValue(form, "source")
 		prefix := strings.TrimSpace(formValue(form, "prefix"))
 		result := formValidation{Values: map[string]string{}}
 		if protocol != config.CloneProtocolSSH && protocol != config.CloneProtocolHTTPS {
 			result.Error = "protocol must be ssh or https"
 			return result
 		}
-		if source == "" {
-			result.Error = "repository source is required"
+		validatedSource, err := cloneflow.ValidateSource(source)
+		if err != nil {
+			result.Error = cloneFormValidationError(err)
 			return result
 		}
+		source = validatedSource
 		defaults := deps.CloneConfig.WithDefaults()
 		if prefix == "" || (protocol == config.CloneProtocolHTTPS && prefix == config.DefaultSSHPrefix) || (protocol == config.CloneProtocolSSH && prefix == config.DefaultHTTPSPrefix) {
 			prefix = defaults.Prefix(protocol)
-			result.Values["prefix"] = prefix
 		}
+		result.Values["prefix"] = prefix
 		if form.stage == 0 {
 			return result
 		}
-		destinationValue := strings.TrimSpace(formValue(form, "destination"))
-		if destinationValue == "" {
-			result.Error = "destination is required"
-			return result
-		}
-		resolved, err := destination.New(destination.Options{Paths: deps.ProjectPaths, Home: deps.Home}).Resolve(destinationValue)
+		destinationValue := formValue(form, "destination")
+		request, resolved, err := cloneflow.Validate(cloneflow.Request{
+			Source:      source,
+			Prefix:      prefix,
+			Destination: destinationValue,
+		}, deps.ProjectPaths, deps.Home)
 		if err != nil {
-			result.Error = err.Error()
+			result.Error = cloneFormValidationError(err)
 			return result
 		}
-		result.Values["destination"] = resolved.Path
+		result.Values["destination"] = request.Destination
 		if deps.AddProjectPath != nil {
 			choice := strings.ToLower(strings.TrimSpace(formValue(form, "add-parent")))
 			if choice == "" {
@@ -84,14 +85,17 @@ func cloneFormValidation(deps Deps) func(*stagedForm) formValidation {
 	}
 }
 
+func cloneFormValidationError(err error) string {
+	if errors.Is(err, cloneflow.ErrSourceRequired) {
+		return "repository source is required"
+	}
+	return err.Error()
+}
+
 func cloneFormSubmit(deps Deps) func(context.Context, map[string]string, uint64) tea.Cmd {
 	return func(actionCtx context.Context, values map[string]string, generation uint64) tea.Cmd {
 		source := strings.TrimSpace(values["source"])
-		clone := deps.CloneConfig.WithDefaults()
 		prefix := strings.TrimSpace(values["prefix"])
-		if prefix == "" {
-			prefix = clone.Prefix(strings.ToLower(strings.TrimSpace(values["protocol"])))
-		}
 		destinationValue := strings.TrimSpace(values["destination"])
 		addParent := strings.EqualFold(strings.TrimSpace(values["add-parent"]), "yes")
 		cloneProject := deps.CloneProject

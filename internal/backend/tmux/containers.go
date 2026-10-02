@@ -11,18 +11,23 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/pathpolicy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
 var (
-	_ capabilities.ContainerLister     = (*Backend)(nil)
-	_ capabilities.ContainerRenamer    = (*Backend)(nil)
-	_ capabilities.ContainerKiller     = (*Backend)(nil)
-	_ capabilities.ContainerHistory    = (*Backend)(nil)
-	_ capabilities.CurrentContainer    = (*Backend)(nil)
-	_ capabilities.CurrentProxyMachine = (*Backend)(nil)
-	_ capabilities.ProjectUseChecker   = (*Backend)(nil)
+	_ capabilities.ContainerLister          = (*Backend)(nil)
+	_ capabilities.ContainerRenamer         = (*Backend)(nil)
+	_ capabilities.ContainerKiller          = (*Backend)(nil)
+	_ capabilities.ContainerHistory         = (*Backend)(nil)
+	_ capabilities.CurrentContainer         = (*Backend)(nil)
+	_ capabilities.CurrentProxyMachine      = (*Backend)(nil)
+	_ capabilities.ProjectUseChecker        = (*Backend)(nil)
+	_ capabilities.AgentConfigurator        = (*Backend)(nil)
+	_ capabilities.GlanceConfigurator       = (*Backend)(nil)
+	_ capabilities.AgentCommandConfigurator = (*Backend)(nil)
+	_ capabilities.AgentWatcher             = (*Backend)(nil)
 )
 
 // ListContainers lists tmux sessions and records each session's active pane.
@@ -41,7 +46,7 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 		}
 		return nil, err
 	}
-	machine := localMachine()
+	machine := containerstate.LocalMachine()
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	containers := make([]capabilities.Container, 0, len(lines))
 	for _, line := range lines {
@@ -308,14 +313,6 @@ func (b *Backend) currentContainer(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(output)), nil
-}
-
-func localMachine() string {
-	name, err := os.Hostname()
-	if err != nil || strings.TrimSpace(name) == "" {
-		return "local"
-	}
-	return name
 }
 
 func isNoServer(err error) bool {

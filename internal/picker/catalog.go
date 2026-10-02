@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 )
 
 // CatalogAgent is one agent snapshot with the machine namespace supplied by
@@ -92,7 +93,7 @@ func (c *Catalog) ReplaceLocalAgents(agents []capabilities.Agent) {
 func (c *Catalog) SetRemoteMachines(machines []string) {
 	for _, machine := range machines {
 		machine = NormalizeMachine(machine)
-		if machine == "" || machine == LocalMachine() || c.hasMachine(machine) {
+		if machine == "" || machine == containerstate.LocalMachine() || c.hasMachine(machine) {
 			continue
 		}
 		c.machines = append(c.machines, machine)
@@ -108,7 +109,7 @@ func (c *Catalog) SetRemoteMachines(machines []string) {
 func (c *Catalog) MarkRemoteLoading(machines []string) {
 	for _, machine := range machines {
 		machine = NormalizeMachine(machine)
-		if machine == "" || machine == LocalMachine() {
+		if machine == "" || machine == containerstate.LocalMachine() {
 			continue
 		}
 		if c.loading == nil {
@@ -124,7 +125,7 @@ func (c *Catalog) MarkRemoteLoading(machines []string) {
 // labels never participate in source replacement.
 func (c *Catalog) ApplyRemote(batch RemoteBatch) {
 	machine := NormalizeMachine(batch.Machine)
-	if machine == "" || machine == LocalMachine() {
+	if machine == "" || machine == containerstate.LocalMachine() {
 		return
 	}
 	delete(c.loading, machine)
@@ -174,7 +175,7 @@ func (c *Catalog) Snapshot() CatalogSnapshot {
 	c.normalizePlaces(places)
 
 	agents := make([]CatalogAgent, 0, len(c.localAgents))
-	localMachine := LocalMachine()
+	localMachine := containerstate.LocalMachine()
 	for _, agent := range c.localAgents {
 		agents = append(agents, CatalogAgent{Agent: agent, Machine: localMachine})
 	}
@@ -258,8 +259,8 @@ func (c *Catalog) Marked(marked map[ContainerRef]bool) []ContainerRef {
 // compatibility, while remote names are case-insensitive.
 func NormalizeMachine(machine string) string {
 	machine = strings.TrimSpace(machine)
-	if machine == "" || strings.EqualFold(machine, "local") || strings.EqualFold(machine, LocalMachine()) {
-		return LocalMachine()
+	if machine == "" || strings.EqualFold(machine, "local") || strings.EqualFold(machine, containerstate.LocalMachine()) {
+		return containerstate.LocalMachine()
 	}
 	return strings.ToLower(machine)
 }
@@ -287,12 +288,12 @@ func (c *Catalog) hasMachine(machine string) bool {
 func (c *Catalog) remoteOrderForSnapshot() []string {
 	order := make([]string, 0, len(c.machines)+len(c.remote))
 	for _, machine := range c.machines {
-		if machine != LocalMachine() && !containsString(order, machine) {
+		if machine != containerstate.LocalMachine() && !containsString(order, machine) {
 			order = append(order, machine)
 		}
 	}
 	for machine := range c.remote {
-		if machine != LocalMachine() && !containsString(order, machine) {
+		if machine != containerstate.LocalMachine() && !containsString(order, machine) {
 			order = append(order, machine)
 		}
 	}
@@ -300,7 +301,7 @@ func (c *Catalog) remoteOrderForSnapshot() []string {
 }
 
 func (c *Catalog) snapshotMachines(places []Place, agents []CatalogAgent) []string {
-	seen := map[string]bool{LocalMachine(): true}
+	seen := map[string]bool{containerstate.LocalMachine(): true}
 	for _, machine := range c.machines {
 		if machine != "" {
 			seen[machine] = true
@@ -324,7 +325,7 @@ func (c *Catalog) snapshotMachines(places []Place, agents []CatalogAgent) []stri
 	for machine := range seen {
 		machines = append(machines, machine)
 	}
-	local := LocalMachine()
+	local := containerstate.LocalMachine()
 	// Keep machine membership deterministic while leaving row ordering and
 	// display choices to the caller's projection.
 	for index := range machines {

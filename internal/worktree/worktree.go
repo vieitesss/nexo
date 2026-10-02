@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/destination"
 	"github.com/vieitesss/nexo/internal/lifecycle"
 )
 
@@ -35,7 +37,31 @@ type Options struct {
 	Remover            capabilities.WorktreeRemover
 	ExtractionRollback capabilities.WorktreeExtractionRollback
 	ConfigPath         string
+	Paths              []string
 	Home               string
+}
+
+var ErrDestinationRequired = errors.New("destination is required")
+
+// Validate checks and normalizes the destination shared by the CLI and the
+// Projects extraction form. Missing parents remain allowed because the native
+// backend owns creating the worktree's destination tree.
+func Validate(request Request, paths []string, home string) (Request, error) {
+	destinationPath := strings.TrimSpace(request.Destination)
+	if destinationPath == "" {
+		return Request{}, ErrDestinationRequired
+	}
+	resolved, err := destination.New(destination.Options{
+		Paths:              paths,
+		Home:               home,
+		AllowMissingParent: true,
+	}).Resolve(destinationPath)
+	if err != nil {
+		return Request{}, err
+	}
+	request.Destination = resolved.Path
+	request.ReturnBranch = strings.TrimSpace(request.ReturnBranch)
+	return request, nil
 }
 
 // Result is a successful worktree operation. Rollback removes resources
@@ -64,6 +90,10 @@ func (r Result) Rollback(ctx context.Context) error {
 func Create(ctx context.Context, options Options, request Request) (Result, error) {
 	if options.Creator == nil {
 		return Result{}, errors.New("worktree creation requires a creator")
+	}
+	request, err := validateOperation(request, options.Paths, options.Home)
+	if err != nil {
+		return Result{}, err
 	}
 	worktree, err := options.Creator.CreateWorktree(ctx, capabilities.WorktreeCreateOptions{
 		Repo:        request.Repo,
@@ -96,6 +126,10 @@ func Extract(ctx context.Context, options Options, request Request) (Result, err
 	if options.Extractor == nil {
 		return Result{}, errors.New("worktree extraction requires an extractor")
 	}
+	request, err := validateOperation(request, options.Paths, options.Home)
+	if err != nil {
+		return Result{}, err
+	}
 	worktree, err := options.Extractor.ExtractWorktree(ctx, capabilities.WorktreeExtractOptions{
 		Repo:         request.Repo,
 		Destination:  request.Destination,
@@ -116,6 +150,17 @@ func Extract(ctx context.Context, options Options, request Request) (Result, err
 		}
 		return options.ExtractionRollback.RollbackExtractWorktree(cleanupCtx, result)
 	}, restore), nil
+}
+
+func validateOperation(request Request, paths []string, home string) (Request, error) {
+	request, err := Validate(request, paths, home)
+	if err == nil {
+		return request, nil
+	}
+	if errors.Is(err, ErrDestinationRequired) {
+		return Request{}, errors.New("resolve worktree destination: destination is empty")
+	}
+	return Request{}, fmt.Errorf("resolve worktree destination: %w", err)
 }
 
 func newResult(worktree capabilities.Worktree, rollbacker func(context.Context, capabilities.Worktree) error, restore func() error) Result {

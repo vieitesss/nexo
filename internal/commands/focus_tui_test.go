@@ -8,7 +8,7 @@ import (
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
-	"github.com/vieitesss/nexo/internal/picker"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/tui"
 )
 
@@ -46,7 +46,7 @@ func TestTUIFocusRoutesLocalAndRemoteAgentProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := deps.FocusAgent(context.Background(), tui.AgentRef{Agent: capabilities.Agent{PaneID: "%7"}, Machine: picker.LocalMachine()}); err != nil {
+	if err := deps.FocusAgent(context.Background(), tui.AgentRef{Agent: capabilities.Agent{PaneID: "%7"}, Machine: containerstate.LocalMachine()}); err != nil {
 		t.Fatal(err)
 	}
 	if adapter.focused != "%7" || adapter.proxied != "" {

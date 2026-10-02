@@ -80,6 +80,90 @@ func TestWorktreeCreateCommandPrintsJSON(t *testing.T) {
 	}
 }
 
+func TestWorktreeCreateCommandPreservesRepositoryIdentity(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "checkout ")
+	trimmedRepo := filepath.Join(root, "checkout")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(trimmedRepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(root, "created")
+	creator := &fakeWorktreeCreator{result: capabilities.Worktree{Path: destination, Branch: "feature"}}
+	command, _ := NewRegistry().Lookup("worktree")
+	if err := command.Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Adapter:   creator,
+		Stdout:    &bytes.Buffer{},
+		Args:      []string{"create", repo, "feature", destination},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if creator.options.Repo != repo {
+		t.Fatalf("creator repo = %q, want %q", creator.options.Repo, repo)
+	}
+}
+
+func TestWorktreeCreateCommandPreservesDestinationErrorContext(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "existing")
+	if err := os.Mkdir(existing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command, _ := NewRegistry().Lookup("worktree")
+	err := command.Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Adapter:   &fakeWorktreeCreator{},
+		Stdout:    &bytes.Buffer{},
+		Args:      []string{"create", "/repo", "feature", existing},
+	})
+	want := fmt.Sprintf("resolve worktree destination: destination %q already exists", existing)
+	if err == nil || err.Error() != want {
+		t.Fatalf("Run() error = %q, want %q", err, want)
+	}
+}
+
+func TestWorktreeExtractCommandPreservesDestinationErrorContext(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "existing")
+	if err := os.Mkdir(existing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command, _ := NewRegistry().Lookup("worktree")
+	err := command.Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Adapter:   &fakeWorktreeCreator{},
+		Stdout:    &bytes.Buffer{},
+		Args:      []string{"extract", "/repo", existing},
+	})
+	want := fmt.Sprintf("resolve worktree destination: destination %q already exists", existing)
+	if err == nil || err.Error() != want {
+		t.Fatalf("Run() error = %q, want %q", err, want)
+	}
+}
+
+func TestWorktreeCreateCommandPreservesInvalidParentErrorContext(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "file")
+	if err := os.WriteFile(parent, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(parent, "created")
+	command, _ := NewRegistry().Lookup("worktree")
+	err := command.Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Adapter:   &fakeWorktreeCreator{},
+		Stdout:    &bytes.Buffer{},
+		Args:      []string{"create", "/repo", "feature", destination},
+	})
+	want := fmt.Sprintf("resolve worktree destination: check destination %q: lstat %s: not a directory", destination, destination)
+	if err == nil || err.Error() != want {
+		t.Fatalf("Run() error = %q, want %q", err, want)
+	}
+}
+
 func TestWorktreeCreateCommandAddsParentOnSuccess(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(configPath, []byte("paths = []\n"), 0o600); err != nil {

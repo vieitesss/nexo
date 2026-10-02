@@ -326,4 +326,6 @@ func NewCommandTransport(remote config.RemoteConfig) proxy.Transport {
 
 var _ capabilities.RemoteProxy = (*Backend)(nil)
 var _ capabilities.RemotePaste = (*Backend)(nil)
+var _ capabilities.RemoteConfigurator = (*Backend)(nil)
+var _ capabilities.ProxySessionResolver = (*Backend)(nil)
 var _ proxy.Transport = commandProxyTransport{}
