@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +20,8 @@ import (
 	"github.com/vieitesss/nexo/internal/remote"
 	"github.com/vieitesss/nexo/internal/runner"
 	"github.com/vieitesss/nexo/internal/tui"
+	"github.com/vieitesss/nexo/internal/upgrade"
+	"github.com/vieitesss/nexo/internal/version"
 )
 
 // Options are the non-interactive setup controls.
@@ -321,6 +322,7 @@ type remotePlan struct {
 	Backend  string
 	Install  bool
 	BinaryAt string
+	BuildRef string
 	Actions  []string
 	Error    error
 }
@@ -363,11 +365,18 @@ func planRemote(ctx context.Context, in Input, options Options, machine, sshConf
 	if !facts.HasNexo {
 		platform := install.LocalPlatform()
 		if facts.OS != platform.OS || facts.Arch != platform.Arch {
-			if _, err := in.Runner.Run(machineCtx, "go", "version"); err != nil {
-				plan.Error = fmt.Errorf("remote platform %s/%s differs from local %s/%s and no Go toolchain is available for cross-build", facts.OS, facts.Arch, platform.OS, platform.Arch)
+			builder := &install.LocalBuilder{Runner: in.Runner}
+			if !builder.Available(machineCtx) {
+				plan.Error = fmt.Errorf("remote platform %s/%s differs from local %s/%s and no local Go toolchain is available for cross-build", facts.OS, facts.Arch, platform.OS, platform.Arch)
 				return plan
 			}
-			plan.Actions = append(plan.Actions, fmt.Sprintf("cross-build nexo for %s/%s", facts.OS, facts.Arch))
+			ref, refErr := runningRevision()
+			if refErr != nil {
+				plan.Error = fmt.Errorf("remote platform %s/%s differs from local %s/%s: %w", facts.OS, facts.Arch, platform.OS, platform.Arch, refErr)
+				return plan
+			}
+			plan.BuildRef = ref
+			plan.Actions = append(plan.Actions, fmt.Sprintf("build nexo %s for %s/%s", ref, facts.OS, facts.Arch))
 		}
 		plan.Install = true
 		plan.BinaryAt = filepath.Join(defaultRemoteHome(facts), ".local", "bin", "nexo")
@@ -443,6 +452,24 @@ func planRemote(ctx context.Context, in Input, options Options, machine, sshConf
 		}
 	}
 	return plan
+}
+
+var (
+	releaseRevisionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+$`)
+	commitRevisionPattern  = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
+	moduleRevisionPattern  = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]{14}-[0-9a-fA-F]{7,}$`)
+)
+
+func runningRevision() (string, error) {
+	raw := strings.TrimSpace(version.String())
+	switch {
+	case releaseRevisionPattern.MatchString(raw):
+		return "v" + strings.TrimPrefix(raw, "v"), nil
+	case commitRevisionPattern.MatchString(raw), moduleRevisionPattern.MatchString(raw):
+		return raw, nil
+	default:
+		return "", fmt.Errorf("running binary has no usable release tag or commit (version %q); install a versioned build before configuring a different platform", raw)
+	}
 }
 
 func defaultRemoteHome(machine RemoteMachine) string {
@@ -758,20 +785,33 @@ func Run(ctx context.Context, in Input, options Options) error {
 
 func applyRemotePlan(ctx context.Context, in Input, options Options, sshConfig string, plan remotePlan) error {
 	if plan.Install {
-		if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "mkdir", "-p", filepath.Dir(plan.BinaryAt)); err != nil {
-			return fmt.Errorf("prepare binary directory: %w", err)
-		}
-		source, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("find local nexo binary: %w", err)
-		}
-		if plan.Machine.OS != runtime.GOOS || plan.Machine.Arch != runtime.GOARCH {
-			built, buildErr := crossBuild(ctx, plan.Machine.OS, plan.Machine.Arch)
-			if buildErr != nil {
+		platform := install.LocalPlatform()
+		var source string
+		if plan.Machine.OS != platform.OS || plan.Machine.Arch != platform.Arch {
+			if strings.TrimSpace(plan.BuildRef) == "" {
+				return errors.New("remote plan has no usable revision for cross-build")
+			}
+			file, createErr := os.CreateTemp("", "nexo-cross-build-*")
+			if createErr != nil {
+				return fmt.Errorf("create cross-build output: %w", createErr)
+			}
+			built := file.Name()
+			if closeErr := file.Close(); closeErr != nil {
+				_ = os.Remove(built)
+				return fmt.Errorf("close cross-build output: %w", closeErr)
+			}
+			defer func() { _ = os.Remove(built) }()
+			builder := &install.LocalBuilder{Runner: in.Runner}
+			if buildErr := builder.Build(ctx, upgrade.DefaultRepository, plan.BuildRef, install.Platform{OS: plan.Machine.OS, Arch: plan.Machine.Arch}, built); buildErr != nil {
 				return buildErr
 			}
 			source = built
-			defer func() { _ = os.Remove(source) }()
+		} else {
+			var err error
+			source, err = os.Executable()
+			if err != nil {
+				return fmt.Errorf("find local nexo binary: %w", err)
+			}
 		}
 		if err := install.CopyAtomic(ctx, install.NewRemoteTarget(in.Runner, plan.Machine.Machine, sshConfig), source, plan.BinaryAt); err != nil {
 			return err
@@ -809,39 +849,6 @@ func applyRemotePlan(ctx context.Context, in Input, options Options, sshConfig s
 		return errors.New("remote non-interactive shell is not using a UTF-8 locale")
 	}
 	return nil
-}
-
-func crossBuild(ctx context.Context, targetOS, targetArch string) (string, error) {
-	root, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("find source tree for cross-build: %w", err)
-	}
-	for root != filepath.Dir(root) {
-		if _, statErr := os.Stat(filepath.Join(root, "go.mod")); statErr == nil {
-			break
-		}
-		root = filepath.Dir(root)
-	}
-	if _, statErr := os.Stat(filepath.Join(root, "go.mod")); statErr != nil {
-		return "", errors.New("cross-build requires a nexo source tree with go.mod")
-	}
-	file, err := os.CreateTemp("", "nexo-cross-build-*")
-	if err != nil {
-		return "", fmt.Errorf("create cross-build output: %w", err)
-	}
-	path := file.Name()
-	if err := file.Close(); err != nil {
-		_ = os.Remove(path)
-		return "", err
-	}
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", path, "./cmd/nexo")
-	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "GOOS="+targetOS, "GOARCH="+targetArch)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		_ = os.Remove(path)
-		return "", fmt.Errorf("cross-build nexo for %s/%s: %w: %s", targetOS, targetArch, err, strings.TrimSpace(string(output)))
-	}
-	return path, nil
 }
 
 func selectedMachines(options Options, in Input, sshConfig string) ([]string, error) {

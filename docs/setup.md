@@ -17,6 +17,12 @@ version, UTF-8 locale, focus hooks, init line or plugin, watcher, and selected
 backend for every machine. A failed machine does not prevent other machines
 from being probed, but setup exits non-zero when any machine fails.
 
+When a remote has a different OS or architecture and no nexo binary yet, setup
+builds the running binary's tagged revision (or commit) with the local Go
+toolchain before copying it. A development binary with no usable revision
+refuses that remote instead of guessing; use a versioned release or commit
+build when configuring a different platform.
+
 With a non-TTY stdin setup never prompts. Pass `--yes` to accept defaults and
 select all SSH aliases, or use `--local-only` / `--machine ALIAS` to make the
 remote answer explicit. Add `--fix-locale` when a remote offers a UTF-8 locale

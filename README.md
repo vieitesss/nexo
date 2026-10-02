@@ -236,7 +236,10 @@ See [docs/herdr.md](docs/herdr.md) for the complete adapter setup and
 `nexo setup` also configures every selected SSH alias from one place. It probes
 machines in parallel, installs a matching binary, makes it visible to
 non-interactive shells, checks UTF-8, configures the remote multiplexer, and
-records `[remote].machines` and `[remote.backends]`. Select a subset with
+records `[remote].machines` and `[remote.backends]`. A different-platform
+remote is built from the running binary's tagged revision or commit with the
+local Go toolchain; an unversioned development binary refuses that remote.
+Select a subset with
 `nexo setup --machine devbox --machine gpu1`; use `--local-only` to skip SSH.
 The full hand-operated reference, including Herdr remotes and proxy
 behaviour, is in [docs/setup.md](docs/setup.md) and [docs/remote.md](docs/remote.md).
