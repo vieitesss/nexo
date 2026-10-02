@@ -19,21 +19,44 @@ type setupCommand struct{}
 func init()                       { registerBuiltin(func() Command { return setupCommand{} }) }
 func (setupCommand) Name() string { return "setup" }
 
+func (setupCommand) Help() Help {
+	return Help{
+		Summary:     "Configure nexo on this machine and its remotes.",
+		Usage:       "nexo setup [flags]",
+		Description: "Probes the local machine and selected SSH remotes, prints one complete plan, and applies it after confirmation. Use --check to inspect readiness without changing anything.",
+		Flags: []FlagHelp{
+			{Long: "--backend", Value: "auto|tmux|herdr", Description: "Choose the multiplexer backend."},
+			{Long: "--check", Description: "Print local and remote readiness checks without changing anything."},
+			{Long: "--dry-run", Description: "Print the setup plan without changing anything."},
+			{Long: "--fix-locale", Description: "Repair a remote non-UTF-8 locale when a UTF-8 locale is available."},
+			{Long: "--local-only", Description: "Configure only this machine; skip SSH remotes."},
+			{Long: "--machine", Value: "ALIAS", Description: "Configure this SSH alias; repeat for several."},
+			{Long: "--no-notify", Description: "Disable agent notifications in the configuration."},
+			{Long: "--no-remote-config", Description: "Do not copy the local agent configuration to remotes."},
+			{Long: "--notify", Value: "BOOL", Description: "Set agent notifications to true or false."},
+			{Long: "--path", Value: "DIR", Description: "Add a project directory; repeat for several."},
+			{Long: "--remote-config", Description: "Copy the local agent configuration to remotes."},
+			{Short: "-y", Long: "--yes", Description: "Apply the plan without asking for confirmation."},
+		},
+		Examples: []string{"nexo setup", "nexo setup --check", "nexo setup --yes --local-only", "nexo setup --machine devbox --dry-run"},
+	}
+}
+
 func (setupCommand) Run(ctx context.Context, invocation Invocation) error {
 	opts, err := parseSetupArgs(invocation.Args)
 	if err != nil {
 		return UsageError{Err: err}
 	}
-	if opts.Check {
-		return setup.Run(ctx, setup.Input{Runner: invocation.Runner, Stdout: invocation.Stdout, Stderr: invocation.Stderr, Stdin: invocation.Stdin, Home: homeDir(), TTY: backend.ControllingTTY() != "", SelectedBackend: string(invocation.Selection.Kind), ConfigPath: invocation.ConfigPath}, opts)
-	}
 	input := setup.Input{Runner: invocation.Runner, Stdout: invocation.Stdout, Stderr: invocation.Stderr, Stdin: invocation.Stdin, Home: homeDir(), TTY: backend.ControllingTTY() != "", SelectedBackend: string(invocation.Selection.Kind), ConfigPath: invocation.ConfigPath}
+	if opts.Check {
+		return setup.Run(ctx, input, opts)
+	}
 	initializer, ok := invocation.Adapter.(capabilities.TmuxInitializer)
 	if !ok {
 		initializer = tmuxbackend.New(invocation.Runner, strings.TrimSpace(os.Getenv("TMUX")) != "" || strings.TrimSpace(os.Getenv("TMUX_PANE")) != "")
 	}
 	input.LocalTmuxInit = func(initCtx context.Context) error {
-		return initializer.Init(initCtx, tmuxbackend.InitInput{ConfigPath: invocation.ConfigPath})
+		return initializer.Init(initCtx, capabilities.InitInput{ConfigPath: invocation.ConfigPath})
 	}
 	return setup.Run(ctx, input, opts)
 }
