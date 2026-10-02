@@ -65,6 +65,8 @@ for the settled decisions [docs/adr](docs/adr), and for startup measurements
 > plain `go install` and the other methods below apply; see
 > [docs/release.md](docs/release.md).
 
+Install nexo using one of the methods below, then run the guided setup shown after the install check.
+
 Homebrew, after the first release:
 
 ```sh
@@ -86,6 +88,12 @@ Whichever method you use, confirm the binary resolves before continuing:
 
 ```sh
 command -v nexo
+```
+
+Then configure the local machine and its SSH remotes in one reviewed plan:
+
+```sh
+nexo setup
 ```
 
 A Go install writes to `$(go env GOBIN)`, or `$(go env GOPATH)/bin` when

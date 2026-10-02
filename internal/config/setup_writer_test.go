@@ -21,7 +21,7 @@ func TestMergeSetupPreservesCommentsAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "# keep\nbackend = \"tmux\"\n[agents]\n# notify choice\nnotify = true  # nexo setup manages this value\n[remote]\nmachines = [\"old\", \"devbox\"]\n[remote.backends]\ndevbox = \"tmux\"  # nexo setup records the detected remote backend\n"
+	want := "# keep\nbackend = \"tmux\"\n[agents]\n# notify choice\nnotify = true\n[remote]\nmachines = [\"old\", \"devbox\"]\n[remote.backends]\ndevbox = \"tmux\"\n"
 	if string(got) != want {
 		t.Fatalf("config = %q, want %q", got, want)
 	}

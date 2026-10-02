@@ -25,13 +25,15 @@ func (setupCommand) Run(ctx context.Context, invocation Invocation) error {
 		return UsageError{Err: err}
 	}
 	if opts.Check {
-		return setup.Run(ctx, setup.Input{Runner: invocation.Runner, Stdout: invocation.Stdout, Stderr: invocation.Stderr, Stdin: invocation.Stdin, Home: homeDir(), TTY: invocation.TTY != "", SelectedBackend: string(invocation.Selection.Kind), ConfigPath: invocation.ConfigPath}, opts)
+		return setup.Run(ctx, setup.Input{Runner: invocation.Runner, Stdout: invocation.Stdout, Stderr: invocation.Stderr, Stdin: invocation.Stdin, Home: homeDir(), TTY: backend.ControllingTTY() != "", SelectedBackend: string(invocation.Selection.Kind), ConfigPath: invocation.ConfigPath}, opts)
 	}
-	input := setup.Input{Runner: invocation.Runner, Stdout: invocation.Stdout, Stderr: invocation.Stderr, Stdin: invocation.Stdin, Home: homeDir(), TTY: invocation.TTY != "", SelectedBackend: string(invocation.Selection.Kind), ConfigPath: invocation.ConfigPath}
-	if initializer, ok := invocation.Adapter.(capabilities.TmuxInitializer); ok && (invocation.Selection.Kind == backend.Tmux || strings.EqualFold(opts.Backend, "tmux")) {
-		input.LocalTmuxInit = func(initCtx context.Context) error {
-			return initializer.Init(initCtx, tmuxbackend.InitInput{ConfigPath: invocation.ConfigPath})
-		}
+	input := setup.Input{Runner: invocation.Runner, Stdout: invocation.Stdout, Stderr: invocation.Stderr, Stdin: invocation.Stdin, Home: homeDir(), TTY: backend.ControllingTTY() != "", SelectedBackend: string(invocation.Selection.Kind), ConfigPath: invocation.ConfigPath}
+	initializer, ok := invocation.Adapter.(capabilities.TmuxInitializer)
+	if !ok {
+		initializer = tmuxbackend.New(invocation.Runner, strings.TrimSpace(os.Getenv("TMUX")) != "" || strings.TrimSpace(os.Getenv("TMUX_PANE")) != "")
+	}
+	input.LocalTmuxInit = func(initCtx context.Context) error {
+		return initializer.Init(initCtx, tmuxbackend.InitInput{ConfigPath: invocation.ConfigPath})
 	}
 	return setup.Run(ctx, input, opts)
 }
@@ -59,6 +61,8 @@ func parseSetupArgs(args []string) (setup.Options, error) {
 			opts.Yes = true
 		case arg == "--remote-config":
 			opts.RemoteConfig = true
+		case arg == "--fix-locale":
+			opts.FixLocale = true
 		case arg == "--no-remote-config":
 			opts.RemoteConfig = false
 		case arg == "--machine":

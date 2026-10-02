@@ -9,15 +9,18 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// SetupPromptDefaults seeds the guided setup form. Host fields are real
-// multi-select rows: Space toggles the highlighted alias and the submitted
-// value contains only selected aliases.
+// SetupPromptDefaults seeds the guided setup form. Explicit scope selections
+// are marked before the form opens and are never replaced by discovery.
 type SetupPromptDefaults struct {
-	Backend   string
-	Notify    bool
-	TUIKey    string
-	AgentsKey string
-	Hosts     []string
+	Backend       string
+	Notify        bool
+	TUIKey        string
+	AgentsKey     string
+	Hosts         []string
+	SelectedHosts []string
+	LocalOnly     bool
+	ScopeLocked   bool
+	Paths         []string
 }
 
 // SetupPromptValues is the answer returned by PromptSetup.
@@ -27,6 +30,7 @@ type SetupPromptValues struct {
 	TUIKey    string
 	AgentsKey string
 	Hosts     []string
+	Paths     []string
 }
 
 type setupPromptDone struct{ values SetupPromptValues }
@@ -36,27 +40,50 @@ type setupPromptModel struct {
 	err   error
 }
 
-// PromptSetup runs the same Bubble Tea staged-form stack used by the other
-// commands. It is intentionally not called by setup when stdin is not a TTY.
+// PromptSetup runs the shared Bubble Tea staged-form stack. It is never called
+// for a non-terminal stdin.
 func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, defaults SetupPromptDefaults) (SetupPromptValues, error) {
 	stages := []formStage{
 		{ID: "backend", Title: "backend", Fields: []formField{{ID: "backend", Label: "backend (tmux or herdr)", Value: defaults.Backend}}},
+		{ID: "paths", Title: "project roots (comma-separated)", Fields: []formField{{ID: "paths", Label: "paths", Value: strings.Join(defaults.Paths, ", ")}}},
 		{ID: "notify", Title: "agents", Fields: []formField{{ID: "notify", Label: "desktop notifications", Value: boolLabel(defaults.Notify)}}},
-		{ID: "bindings", Title: "optional bindings (leave blank to keep opt-in)", Fields: []formField{{ID: "tui-key", Label: "TUI key", Value: defaults.TUIKey}, {ID: "agents-key", Label: "agents key", Value: defaults.AgentsKey}}},
+		{ID: "bindings", Title: "optional bindings (suggested: ctrl+s, prefix+a)", Fields: []formField{{ID: "tui-key", Label: "TUI key (blank keeps opt-in)", Value: defaults.TUIKey}, {ID: "agents-key", Label: "agents key (blank keeps opt-in)", Value: defaults.AgentsKey}}},
 	}
-	hostFields := make([]formField, 0, len(defaults.Hosts))
-	for _, host := range defaults.Hosts {
-		hostFields = append(hostFields, formField{ID: "host:" + host, Label: host, Value: "✓", ReadOnly: true})
-	}
-	if len(hostFields) > 0 {
+	if !defaults.LocalOnly {
+		hostFields := make([]formField, 0, len(defaults.Hosts)+1)
+		selected := make(map[string]bool, len(defaults.SelectedHosts))
+		for _, host := range defaults.SelectedHosts {
+			selected[strings.ToLower(strings.TrimSpace(host))] = true
+		}
+		for _, host := range defaults.Hosts {
+			if selected[strings.ToLower(strings.TrimSpace(host))] {
+				hostFields = append(hostFields, formField{ID: "host:" + host, Label: host, Value: "✓", ReadOnly: true})
+			} else {
+				hostFields = append(hostFields, formField{ID: "host:" + host, Label: host, Value: "", ReadOnly: true})
+			}
+		}
+		if !defaults.ScopeLocked {
+			hostFields = append(hostFields, formField{ID: "extra-host", Label: "additional alias (optional)", Value: ""})
+		}
 		stages = append(stages, formStage{ID: "hosts", Title: "remote machines (Space toggles)", Fields: hostFields})
 	}
 	form := newStagedForm(ctx, stages, func(*stagedForm) formValidation { return formValidation{} }, func(_ context.Context, values map[string]string, _ uint64) tea.Cmd {
 		return func() tea.Msg {
-			answer := SetupPromptValues{Backend: strings.ToLower(strings.TrimSpace(values["backend"])), Notify: values["notify"] == "yes", TUIKey: strings.TrimSpace(values["tui-key"]), AgentsKey: strings.TrimSpace(values["agents-key"])}
+			answer := SetupPromptValues{Backend: strings.ToLower(strings.TrimSpace(values["backend"])), Notify: values["notify"] == "yes"}
+			for _, raw := range strings.Split(values["paths"], ",") {
+				if path := strings.TrimSpace(raw); path != "" {
+					answer.Paths = append(answer.Paths, path)
+				}
+			}
+			answer.TUIKey, answer.AgentsKey = strings.TrimSpace(values["tui-key"]), strings.TrimSpace(values["agents-key"])
 			for _, host := range defaults.Hosts {
 				if values["host:"+host] == "✓" {
 					answer.Hosts = append(answer.Hosts, host)
+				}
+			}
+			for _, raw := range strings.Fields(values["extra-host"]) {
+				if raw = strings.TrimSpace(raw); raw != "" {
+					answer.Hosts = appendUnique(answer.Hosts, raw)
 				}
 			}
 			return setupPromptDone{values: answer}
@@ -64,10 +91,13 @@ func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, default
 	})
 	form.keyHook = func(msg tea.KeyMsg) (formEffect, bool) {
 		field := form.currentField()
-		if field == nil {
-			return formEffect{}, false
+		if msg.String() == "ctrl+space" || msg.String() == "ctrl+@" {
+			if field != nil {
+				field.Error = "Ctrl-Space is not a valid binding spelling; use ctrl+space or another key"
+			}
+			return formEffect{Changed: true}, true
 		}
-		if msg.Type != tea.KeySpace {
+		if field == nil || msg.Type != tea.KeySpace {
 			return formEffect{}, false
 		}
 		switch {
@@ -103,6 +133,15 @@ func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, default
 		return SetupPromptValues{}, fmt.Errorf("setup form returned no answer")
 	}
 	return *final.value, nil
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, current := range values {
+		if strings.EqualFold(current, value) {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func boolLabel(value bool) string {

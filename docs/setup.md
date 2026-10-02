@@ -19,8 +19,10 @@ from being probed, but setup exits non-zero when any machine fails.
 
 With a non-TTY stdin setup never prompts. Pass `--yes` to accept defaults and
 select all SSH aliases, or use `--local-only` / `--machine ALIAS` to make the
-remote answer explicit. `--dry-run` prints the planned files and does not
-install binaries or run reload commands. Re-running setup replaces its managed
+remote answer explicit. Add `--fix-locale` when a remote offers a UTF-8 locale
+that setup should add to its startup file. `--dry-run` prints the complete
+local and remote plan and does not install binaries, edit files, or run reload
+commands. Re-running setup replaces its managed
 block and reports unchanged files as `ok`.
 
 ## Managed files and backups
@@ -35,9 +37,12 @@ Each edited user file contains one block delimited by:
 
 Before the first edit nexo keeps a sibling `<file>.nexo.bak`; an existing backup
 is never overwritten. Configuration is merged with the same atomic config
-writer used by `clone --add-parent`. Existing TOML values and comments are
+writer used by `clone --add-parent`. Existing TOML values, comments, and formatting outside changed value ranges are
 retained; setup adds only the selected `paths`, `[agents].notify`,
-`[remote].machines`, and detected `[remote.backends]` entries. Unknown TOML
+`[remote].machines`, and detected `[remote.backends]` entries. New keys use
+canonical TOML formatting (comments on existing values are not rewritten).
+`config.toml` is intentionally not wrapped in a managed block: the parser
+edits exact TOML value ranges and validates the complete result. Unknown TOML
 keys remain errors.
 
 ## Manual fallback
