@@ -23,10 +23,18 @@ const glanceStateOption = "@nexo-glance-state"
 const maxStatusRows = 5
 
 // tmuxStatusFormat1Default is tmux's compiled-in default for the second status
-// row, the pane-info row. A slot still holding this value is not owned by the
-// user and may be reused; any other value at a slot is a custom row and is
-// preserved. Tmux ships defaults for the first two rows only.
+// row, the pane-info row, before tmux 3.7. A slot still holding a compiled-in
+// default is not owned by the user and may be reused; any other value at a
+// slot is a custom row and is preserved.
 const tmuxStatusFormat1Default = "#[align=centre]#{P:#{?pane_active,#[reverse],}#{pane_index}[#{pane_width}x#{pane_height}]#[default] }"
+
+// tmuxStatusFormat1PaneListDefault and tmuxStatusFormat2SessionListDefault are
+// tmux 3.7's compiled-in defaults for the second and third rows: the "P:" pane
+// list and the "S:" session list.
+const (
+	tmuxStatusFormat1PaneListDefault    = "#[align=left]#{R: ,#{n:#{session_name}}}P: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{P:#[range=pane|#{pane_id} #{E:pane-status-style}]#[push-default]#{T:window-pane-status-format}#[pop-default]#[norange list=on default]  ,#[range=pane|#{pane_id} list=focus #{?#{!=:#{E:pane-status-current-style},default},#{E:pane-status-current-style},#{E:pane-status-style}}]#[push-default]#{T:window-pane-current-status-format}#[pop-default]#[norange list=on default] }"
+	tmuxStatusFormat2SessionListDefault = "#[align=left]#{R: ,#{n:#{session_name}}}S: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{S:#[range=session|#{session_id} #{E:session-status-style}]#[push-default]#S#{session_alert}#[pop-default]#[norange list=on default]  ,#[range=session|#{session_id} list=focus #{?#{!=:#{E:session-status-current-style},default},#{E:session-status-current-style},#{E:session-status-style}}]#[push-default]#S*#{session_alert}#[pop-default]#[norange list=on default] }"
+)
 
 // GlanceAction is one user-bound glance command.
 type GlanceAction string
@@ -388,7 +396,7 @@ func allocateGlanceIndex(globalStatus string, formats map[int]glanceOption, loca
 
 func glanceSlotOwned(index int, formats map[int]glanceOption, localFormats map[string]map[int]bool) bool {
 	if format, ok := formats[index]; ok && format.Present {
-		if def, hasDefault := tmuxStatusFormatDefault(index); !hasDefault || format.Value != def {
+		if !isTmuxStatusFormatDefault(index, format.Value) {
 			return true
 		}
 	}
@@ -400,14 +408,18 @@ func glanceSlotOwned(index int, formats map[int]glanceOption, localFormats map[s
 	return false
 }
 
-// tmuxStatusFormatDefault reports tmux's compiled-in default for a
-// status-format index. Only the lowest rows have a default; every other set
-// value is user-owned.
-func tmuxStatusFormatDefault(index int) (string, bool) {
-	if index == 1 {
-		return tmuxStatusFormat1Default, true
+// isTmuxStatusFormatDefault reports whether value is a compiled-in default of
+// some tmux version for a status-format index. Only the lowest rows have a
+// default; every other set value is user-owned.
+func isTmuxStatusFormatDefault(index int, value string) bool {
+	switch index {
+	case 1:
+		return value == tmuxStatusFormat1Default || value == tmuxStatusFormat1PaneListDefault
+	case 2:
+		return value == tmuxStatusFormat2SessionListDefault
+	default:
+		return false
 	}
-	return "", false
 }
 
 // globalStatusFormats returns every global status-format slot with its exact
