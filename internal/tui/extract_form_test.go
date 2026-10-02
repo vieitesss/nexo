@@ -71,6 +71,26 @@ func TestExtractFormPrefillsSuggestionAndSubmits(t *testing.T) {
 	}
 }
 
+func TestExtractFormKeepsInlineDestinationError(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "existing")
+	if err := os.Mkdir(existing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{
+		Projects: []picker.Place{{Kind: picker.ProjectKind, Path: filepath.Join(root, "checkout"), Group: root, Git: true}},
+		Home:     root,
+	}
+	model := openExtractForm(t, extractTestModel(t, deps))
+	model.input.form.stages[0].Fields[0].Value = existing
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	want := `destination "` + existing + `" already exists`
+	if cmd != nil || model.input.form == nil || model.input.form.stageError != want {
+		t.Fatalf("validation = cmd %v, form=%#v; want inline %q", cmd != nil, model.input.form, want)
+	}
+}
+
 func TestExtractFormPreservesTrailingSpaceRepositoryIdentity(t *testing.T) {
 	root := t.TempDir()
 	repo := filepath.Join(root, "checkout ")
