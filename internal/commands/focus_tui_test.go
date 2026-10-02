@@ -42,7 +42,7 @@ func TestTUIFocusRoutesLocalAndRemoteAgentProvenance(t *testing.T) {
 	deps, err := tuiDependencies(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter, Runner: runner,
 		Config: config.Config{Remote: config.RemoteConfig{Machines: []string{"dev"}, SSHConfig: "/tmp/ssh-config"}},
-	}, "agents", nil, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestTUIFocusRoutesTwoRemoteTmuxPanesInOneContainer(t *testing.T) {
 	deps, err := tuiDependencies(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter, Runner: runner,
 		Config: config.Config{Remote: config.RemoteConfig{Machines: []string{"dev"}}},
-	}, "agents", nil, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestTUIFocusRoutesTwoRemoteHerdrPanesInOneContainer(t *testing.T) {
 	deps, err := tuiDependencies(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Herdr}, Adapter: adapter, Runner: runner,
 		Config: config.Config{Remote: config.RemoteConfig{Machines: []string{"dev"}}},
-	}, "agents", nil, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestTUIRejectsUnsupportedRemoteKindAndProxiesTmuxFromHerdr(t *testing.T) {
 			deps, err := tuiDependencies(context.Background(), Invocation{
 				Selection: backend.Selection{Kind: test.local}, Adapter: adapter, Runner: runner,
 				Config: config.Config{Remote: config.RemoteConfig{Machines: []string{"dev"}}},
-			}, "agents", nil, nil)
+			})
 			if err != nil {
 				t.Fatal(err)
 			}

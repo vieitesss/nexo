@@ -53,7 +53,6 @@ type RemoteTarget struct {
 // Places and agents are snapshots; optional commands keep slow discovery out
 // of Update and let a caller retain its backend-specific command runner.
 type Deps struct {
-	Backend string
 	// Theme is auto, dark, or light. An empty value is treated as auto.
 	Theme      string
 	Projects   []picker.Place
@@ -119,10 +118,9 @@ type Deps struct {
 	KillContainers     func(context.Context, []picker.ContainerRef) error
 	RenameContainer    func(context.Context, picker.ContainerRef, string) error
 
-	Input      io.Reader
-	Output     io.Writer
-	Now        func() time.Time
-	AgentError error
+	Input  io.Reader
+	Output io.Writer
+	Now    func() time.Time
 }
 
 // Run starts the full-screen TUI and executes the accepted action through the
@@ -203,9 +201,6 @@ func pullRequestFreshness(loader picker.PullRequestLoader) time.Duration {
 func validTab(tab Tab) bool {
 	return tab == AgentsTab || tab == ContainersTab || tab == ProjectsTab
 }
-
-// DefaultTab applies the no-argument opening rule to an initial agent snapshot.
-func DefaultTab(agents []capabilities.Agent) Tab { return defaultTab(agents) }
 
 func defaultTab(agents []capabilities.Agent) Tab {
 	for _, agent := range agents {

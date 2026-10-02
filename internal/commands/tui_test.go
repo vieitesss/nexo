@@ -17,10 +17,6 @@ type tuiFakeAdapter struct {
 	agents []capabilities.Agent
 }
 
-type countingAgentAdapter struct {
-	calls int
-}
-
 type closeClassificationAdapter struct {
 	containers []capabilities.Container
 	killed     []string
@@ -48,11 +44,6 @@ type closeResolver struct{ actions closeActions }
 
 func (r closeResolver) ResolveContainerActions(context.Context, string) (capabilities.ContainerActions, error) {
 	return r.actions, nil
-}
-
-func (a *countingAgentAdapter) ListAgents(context.Context) ([]capabilities.Agent, error) {
-	a.calls++
-	return nil, nil
 }
 
 func (f *tuiFakeAdapter) ListAgents(context.Context) ([]capabilities.Agent, error) {
@@ -85,7 +76,7 @@ func TestTUIWatchesTheResolvedConfigPath(t *testing.T) {
 	deps, err := tuiDependencies(context.Background(), Invocation{
 		Selection:  backend.Selection{Kind: backend.Tmux},
 		ConfigPath: "/tmp/custom-nexo.toml",
-	}, "containers", nil, nil, true)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +84,7 @@ func TestTUIWatchesTheResolvedConfigPath(t *testing.T) {
 		t.Fatalf("ConfigPath = %q, want the explicit path", deps.ConfigPath)
 	}
 
-	deps, err = tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}}, "containers", nil, nil, true)
+	deps, err = tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +104,7 @@ func TestClosingAProxyDoesNotForwardItsLocalID(t *testing.T) {
 		Adapter:           adapter,
 		ContainerResolver: closeResolver{actions: closeActions{killed: &remoteKilled}},
 		Config:            config.Config{Remote: config.RemoteConfig{Machines: []string{"dev"}}},
-	}, "containers", nil, nil, true)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,26 +119,14 @@ func TestClosingAProxyDoesNotForwardItsLocalID(t *testing.T) {
 	}
 }
 
-func TestTUIDefaultsToAgentsForUnseenStopped(t *testing.T) {
-	adapter := &tuiFakeAdapter{agents: []capabilities.Agent{{State: "stopped"}}}
-	if got, want := defaultTab(context.Background(), adapter), "agents"; got != want {
-		t.Fatalf("default tab = %q, want %q", got, want)
-	}
-}
-
-func TestTUIDefaultsToContainersWithoutUnseenStopped(t *testing.T) {
-	adapter := &tuiFakeAdapter{agents: []capabilities.Agent{{State: "stopped", Seen: true}, {State: "working"}}}
-	if got, want := defaultTab(context.Background(), adapter), "containers"; got != want {
-		t.Fatalf("default tab = %q, want %q", got, want)
-	}
-}
-
-func defaultTab(ctx context.Context, adapter capabilities.AgentSource) string {
-	tab, err := tuiTab(ctx, Invocation{Adapter: adapter})
+func TestTUILeavesDefaultTabSelectionToModel(t *testing.T) {
+	got, err := tuiTab(nil)
 	if err != nil {
-		return "error: " + err.Error()
+		t.Fatal(err)
 	}
-	return tab
+	if got != "" {
+		t.Fatalf("default tab argument = %q, want empty for model selection", got)
+	}
 }
 
 func TestTUIRunsTabbedModelOnRequestedTab(t *testing.T) {
@@ -170,19 +149,14 @@ func TestTUIRunsTabbedModelOnRequestedTab(t *testing.T) {
 	}
 }
 
-func TestTUIDependenciesPreserveAnInitialEmptySnapshot(t *testing.T) {
-	adapter := &countingAgentAdapter{}
-	if _, err := tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter}, "agents", nil, nil, true); err != nil {
+func TestTUIDependenciesLeavesAgentReadsToSource(t *testing.T) {
+	adapter := &tuiFakeAdapter{}
+	deps, err := tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if adapter.calls != 0 {
-		t.Fatalf("initial empty snapshot triggered %d duplicate reads", adapter.calls)
-	}
-	if _, err := tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter}, "agents", nil, nil, false); err != nil {
-		t.Fatal(err)
-	}
-	if adapter.calls != 1 {
-		t.Fatalf("unread snapshot calls = %d, want 1", adapter.calls)
+	if deps.AgentSource != adapter {
+		t.Fatalf("AgentSource = %T, want adapter", deps.AgentSource)
 	}
 }
 

@@ -26,7 +26,7 @@ func TestTUIDependenciesRemoteNewUsesResolvedTmuxBackend(t *testing.T) {
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
 		Adapter:   proxy,
 		Runner:    fake,
-	}, "containers", nil, nil, true)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestTUIDependenciesRemoteNewUsesResolvedHerdrBackend(t *testing.T) {
 		Selection: backend.Selection{Kind: backend.Herdr},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"gpu"}}},
 		Runner:    fake,
-	}, "containers", nil, nil, true)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
