@@ -305,9 +305,33 @@ func runRemotePrevious(ctx context.Context, invocation Invocation) error {
 		return fmt.Errorf("read previous remote container: %w", err)
 	}
 	configured := proxyidentity.NewMachineSet(invocation.Config.Remote.ConfiguredMachines())
+	// The current machine is the proxy's machine inside a proxy and the local
+	// machine otherwise. The most recent entry on any other machine wins, so
+	// from a proxy the local machine is a candidate like any remote.
 	current := currentProxyMachine(ctx, invocation)
+	var live map[string]struct{}
 	for _, entry := range entries {
-		if !entry.Proxy || entry.Machine == "" || entry.Name == "" {
+		if !entry.Proxy {
+			// Local entries live in this machine's history, so they are only
+			// eligible from a proxy, and only while the container exists.
+			if current == "" || entry.ID == "" {
+				continue
+			}
+			if live == nil {
+				if live, err = liveLocalContainerIDs(ctx, invocation); err != nil {
+					return fmt.Errorf("list live containers: %w", err)
+				}
+			}
+			if _, ok := live[entry.ID]; !ok {
+				continue
+			}
+			opener, ok := invocation.Adapter.(capabilities.ContainerOpener)
+			if !ok {
+				return fmt.Errorf("backend %q does not support opening containers", invocation.Selection.Kind)
+			}
+			return opener.OpenContainer(ctx, entry.ID)
+		}
+		if entry.Machine == "" || entry.Name == "" {
 			continue
 		}
 		// Skip the machine we are attached to and any machine that is no longer
@@ -317,7 +341,19 @@ func runRemotePrevious(ctx context.Context, invocation Invocation) error {
 		}
 		return proxy.Proxy(ctx, entry.Machine, entry.Name)
 	}
-	return nil
+	return reportNothingEligible(ctx, invocation, "no previous container on another machine")
+}
+
+// reportNothingEligible tells the user why a key-bound command did nothing.
+// The multiplexer's status line is preferred because a binding's stderr is
+// invisible; without it the message is returned as an ordinary error.
+func reportNothingEligible(ctx context.Context, invocation Invocation, message string) error {
+	if displayer, ok := invocation.Adapter.(capabilities.MessageDisplayer); ok {
+		if err := displayer.DisplayMessage(ctx, "nexo: "+message); err == nil {
+			return nil
+		}
+	}
+	return errors.New(message)
 }
 
 func runRemoteAttach(ctx context.Context, invocation Invocation) error {

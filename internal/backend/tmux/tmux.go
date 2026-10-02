@@ -525,6 +525,18 @@ func (b *Backend) WatchAgents(ctx context.Context) error {
 	return b.agents.Watch(ctx)
 }
 
+// DisplayMessage shows message on the attached client's status line. tmux
+// expands display-message text as a format, so literal '#' is escaped.
+func (b *Backend) DisplayMessage(ctx context.Context, message string) error {
+	if b == nil || b.Runner == nil {
+		return errors.New("tmux message display requires a command runner")
+	}
+	_, err := b.runClient(ctx, "display-message", strings.ReplaceAll(message, "#", "##"))
+	return err
+}
+
+var _ capabilities.MessageDisplayer = (*Backend)(nil)
+
 // FocusPane switches to the exact tmux pane target. Each operation receives
 // the pane ID so tmux resolves its owning container and window before the
 // final pane selection.

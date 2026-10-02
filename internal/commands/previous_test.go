@@ -189,3 +189,130 @@ type failingProxyHistory struct{ historyAdapter }
 func (a *failingProxyHistory) Proxy(context.Context, string, string) error {
 	return errTemporaryConnection
 }
+
+// displayingHistory is a historyAdapter whose backend can show status-line
+// messages, like tmux.
+type displayingHistory struct {
+	historyAdapter
+	messages []string
+}
+
+func (a *displayingHistory) DisplayMessage(_ context.Context, message string) error {
+	a.messages = append(a.messages, message)
+	return nil
+}
+
+func runRemotePreviousCommand(t *testing.T, adapter any, machines ...string) error {
+	t.Helper()
+	return (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Config:    config.Config{Remote: config.RemoteConfig{Machines: machines}},
+		Adapter:   adapter,
+		Args:      []string{"previous"},
+	})
+}
+
+func TestRemotePreviousTogglesBetweenLocalAndProxy(t *testing.T) {
+	local := localEntry("$1", "notes")
+	proxy := containerstate.Entry{ID: "$2", Name: "api", Machine: "devbox", Proxy: true}
+	adapter := &historyAdapter{
+		entries:    []containerstate.Entry{local, proxy},
+		containers: []capabilities.Container{localContainer("$1", "notes"), {ID: "$2", Name: "devbox/api", Machine: "devbox", Proxy: true}},
+		current:    "$1",
+	}
+
+	if err := runRemotePreviousCommand(t, adapter, "devbox"); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.proxied != [2]string{"devbox", "api"} {
+		t.Fatalf("first remote previous proxied %#v, want devbox/api", adapter.proxied)
+	}
+
+	// Inside the proxy, the focus hook has recorded it as the newest entry.
+	adapter.entries = []containerstate.Entry{proxy, local}
+	adapter.current = "$2"
+	adapter.currentMachine = "devbox"
+	adapter.proxied = [2]string{}
+	if err := runRemotePreviousCommand(t, adapter, "devbox"); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.opened != "$1" || adapter.proxied != [2]string{} {
+		t.Fatalf("second remote previous opened %q and proxied %#v, want local $1", adapter.opened, adapter.proxied)
+	}
+}
+
+func TestRemotePreviousFromProxySkipsDeadLocalContainers(t *testing.T) {
+	adapter := &historyAdapter{
+		entries: []containerstate.Entry{
+			{ID: "$9", Name: "api", Machine: "devbox", Proxy: true},
+			localEntry("$3", "gone"),
+			localEntry("$1", "notes"),
+		},
+		containers:     []capabilities.Container{localContainer("$1", "notes")},
+		current:        "$9",
+		currentMachine: "devbox",
+	}
+	if err := runRemotePreviousCommand(t, adapter, "devbox"); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.opened != "$1" {
+		t.Fatalf("opened = %q, want live local $1", adapter.opened)
+	}
+}
+
+func TestRemotePreviousFromProxyPicksMostRecentOtherMachine(t *testing.T) {
+	remoteFirst := &historyAdapter{
+		entries: []containerstate.Entry{
+			{ID: "$9", Name: "api", Machine: "devbox", Proxy: true},
+			{ID: "$8", Name: "ci", Machine: "buildbox", Proxy: true},
+			localEntry("$1", "notes"),
+		},
+		containers:     []capabilities.Container{localContainer("$1", "notes")},
+		currentMachine: "devbox",
+	}
+	if err := runRemotePreviousCommand(t, remoteFirst, "devbox", "buildbox"); err != nil {
+		t.Fatal(err)
+	}
+	if remoteFirst.proxied != [2]string{"buildbox", "ci"} || remoteFirst.opened != "" {
+		t.Fatalf("proxied %#v and opened %q, want buildbox/ci", remoteFirst.proxied, remoteFirst.opened)
+	}
+
+	localFirst := &historyAdapter{
+		entries: []containerstate.Entry{
+			{ID: "$9", Name: "api", Machine: "devbox", Proxy: true},
+			localEntry("$1", "notes"),
+			{ID: "$8", Name: "ci", Machine: "buildbox", Proxy: true},
+		},
+		containers:     []capabilities.Container{localContainer("$1", "notes")},
+		currentMachine: "devbox",
+	}
+	if err := runRemotePreviousCommand(t, localFirst, "devbox", "buildbox"); err != nil {
+		t.Fatal(err)
+	}
+	if localFirst.opened != "$1" || localFirst.proxied != [2]string{} {
+		t.Fatalf("opened %q and proxied %#v, want local $1", localFirst.opened, localFirst.proxied)
+	}
+}
+
+func TestRemotePreviousReportsWhenNothingIsEligible(t *testing.T) {
+	adapter := &displayingHistory{historyAdapter: historyAdapter{
+		entries:    []containerstate.Entry{localEntry("$1", "notes")},
+		containers: []capabilities.Container{localContainer("$1", "notes")},
+		current:    "$1",
+	}}
+	if err := runRemotePreviousCommand(t, adapter, "devbox"); err != nil {
+		t.Fatalf("error = %v, want the message shown in the multiplexer instead", err)
+	}
+	if len(adapter.messages) != 1 || adapter.messages[0] != "nexo: no previous container on another machine" {
+		t.Fatalf("messages = %#v, want one nothing-eligible message", adapter.messages)
+	}
+	if adapter.opened != "" || adapter.proxied != [2]string{} {
+		t.Fatalf("opened %q and proxied %#v, want no navigation", adapter.opened, adapter.proxied)
+	}
+
+	// Without a status line the reason is returned so the CLI prints it.
+	plain := &historyAdapter{entries: adapter.entries, containers: adapter.containers, current: "$1"}
+	if err := runRemotePreviousCommand(t, plain, "devbox"); err == nil || err.Error() != "no previous container on another machine" {
+		t.Fatalf("error = %v, want nothing-eligible error", err)
+	}
+}
