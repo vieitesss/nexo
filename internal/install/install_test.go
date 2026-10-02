@@ -55,7 +55,7 @@ func TestDetectsHomebrewBeforeGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Detect() error = %v", err)
 	}
-	if got.Method != MethodHomebrew || got.Path != "/opt/homebrew/bin/nexo" {
+	if got.Method != MethodHomebrew || got.Path != "/opt/homebrew/opt/nexo/bin/nexo" {
 		t.Fatalf("installation = %#v", got)
 	}
 }

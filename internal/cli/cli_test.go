@@ -21,6 +21,16 @@ func TestParseGlobalFlagsBeforeAndAfterCommand(t *testing.T) {
 	}
 }
 
+func TestParseUpgradeVersionIsCommandFlag(t *testing.T) {
+	parsed, err := Parse([]string{"upgrade", "--version", "v1.2.3"})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if parsed.Version || parsed.Command != "upgrade" || strings.Join(parsed.Args, " ") != "--version v1.2.3" {
+		t.Fatalf("parsed = %#v, want command version flag", parsed)
+	}
+}
+
 func TestParseRequiresCommand(t *testing.T) {
 	if _, err := Parse(nil); err == nil {
 		t.Fatal("Parse() error = nil, want missing command")

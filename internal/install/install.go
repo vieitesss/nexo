@@ -149,10 +149,10 @@ func Detect(ctx context.Context, target Target) (Installation, error) {
 	path, pathErr := commandPath(ctx, target)
 	brewPrefix, brewOK := homebrewPrefix(ctx, target)
 	if brewOK {
-		if path == "" {
-			path = filepath.Join(brewPrefix, "bin", "nexo")
-		}
-		return Installation{Method: MethodHomebrew, Path: path, Platform: platform}, nil
+		// Use the formula's real executable rather than the Homebrew shim on
+		// PATH. A nightly fallback can then replace it without breaking that
+		// shim, and subsequent Homebrew upgrades keep owning the symlink.
+		return Installation{Method: MethodHomebrew, Path: filepath.Join(brewPrefix, "bin", "nexo"), Platform: platform}, nil
 	}
 	if pathErr != nil {
 		return Installation{}, pathErr
@@ -272,7 +272,7 @@ func Install(ctx context.Context, target Target, request Request) (Installation,
 		return Installation{}, err
 	}
 	if request.Nightly && current.Method == MethodHomebrew {
-		return Installation{}, errors.New("Homebrew cannot install --nightly; install Go or use a release binary")
+		return Installation{}, errors.New("homebrew cannot install --nightly; install Go or use a release binary")
 	}
 	if !request.Nightly && strings.TrimSpace(request.Version) == "" {
 		return Installation{}, errors.New("a release version is required")
