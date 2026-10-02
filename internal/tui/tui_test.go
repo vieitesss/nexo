@@ -277,11 +277,37 @@ func TestStateColorMapsEachState(t *testing.T) {
 	}{
 		{"unseen stopped", capabilities.Agent{State: "stopped"}, lipgloss.Color("1")},
 		{"working", capabilities.Agent{State: "working"}, lipgloss.Color("3")},
-		{"seen stopped", capabilities.Agent{State: "stopped", Seen: true}, palette.Muted},
+		{"seen stopped", capabilities.Agent{State: "stopped", Seen: true}, lipgloss.Color("2")},
 	} {
 		if got := stateColor(tc.agent).GetForeground(); got != tc.want {
 			t.Errorf("%s: stateColor foreground = %#v, want %#v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestSeenStoppedAgentRendersGreen(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI)
+	since := time.Now().Add(-time.Hour)
+	deps := Deps{
+		Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: picker.LocalMachine()}},
+		Agents: []capabilities.Agent{
+			{PaneID: "seen", ContainerID: "one", Container: "one", Harness: "pi", State: "stopped", Seen: true, StoppedSince: &since},
+		},
+	}
+	model := NewModel(context.Background(), deps, AgentsTab)
+	model.SetSize(100, 20)
+	line := ""
+	for _, candidate := range strings.Split(model.View(), "\n") {
+		if strings.Contains(shell.Plain(candidate), "● stopped") {
+			line = candidate
+			break
+		}
+	}
+	if line == "" {
+		t.Fatalf("no seen stopped agent row rendered: %q", model.View())
+	}
+	if token := foregroundTokens(green().Render("x"))[0]; !strings.Contains(line, "\x1b["+token+"m") {
+		t.Fatalf("seen stopped agent is not painted with green %q: %q", token, line)
 	}
 }
 

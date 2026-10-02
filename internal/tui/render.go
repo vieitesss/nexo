@@ -923,15 +923,15 @@ func itoa(value int) string { return fmt.Sprintf("%d", value) }
 
 func stoppedAge(now, since time.Time) string { return picker.StoppedAge(now, since) }
 
-// stateColor follows the shared agent attention hierarchy: red needs
-// attention, yellow is working, and a seen stopped agent recedes into muted
-// text.
+// stateColor follows the shared agent attention hierarchy and the glance dots:
+// red needs attention, yellow is working, and a seen stopped agent is green
+// like the glance dot.
 func stateColor(agent capabilities.Agent) lipgloss.Style {
 	switch picker.AttentionRank(agent) {
 	case 0:
 		return red()
 	case 2:
-		return muted()
+		return green()
 	default:
 		return yellow()
 	}
@@ -950,6 +950,8 @@ func accent() lipgloss.Style { return lipgloss.NewStyle().Foreground(palette.Acc
 func divergence() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("6")) }
 
 func red() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("1")) }
+
+func green() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("2")) }
 
 func yellow() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("3")) }
 
