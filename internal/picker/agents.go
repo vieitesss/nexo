@@ -63,42 +63,73 @@ func belongsToMachine(place Place, machine string) bool {
 	return placeMachine == NormalizeMachine(machine)
 }
 
-// AttentionRank orders agents by urgency: unseen stopped, working, then seen stopped.
-func AttentionRank(agent capabilities.Agent) int {
-	switch strings.ToLower(strings.TrimSpace(agent.State)) {
-	case "stopped":
-		if !agent.Seen {
-			return 0
-		}
-		return 2
-	case "working":
-		return 1
-	default:
-		return 1
+type agentClassification struct {
+	stopped bool
+	seen    bool
+}
+
+func classifyAgent(agent capabilities.Agent) agentClassification {
+	return agentClassification{
+		stopped: strings.EqualFold(strings.TrimSpace(agent.State), "stopped"),
+		seen:    agent.Seen,
 	}
 }
 
-// agentLess orders agents for views that do not add their own query or
-// location grouping. The pane identity breaks ties when targets are equal so
-// script output and status rows are deterministic.
-func agentLess(left, right capabilities.Agent) bool {
-	leftRank, rightRank := AttentionRank(left), AttentionRank(right)
-	if leftRank != rightRank {
-		return leftRank < rightRank
+// AttentionRank orders agents by urgency: unseen stopped, working, then seen stopped.
+func AttentionRank(agent capabilities.Agent) int {
+	classification := classifyAgent(agent)
+	if classification.stopped {
+		if !classification.seen {
+			return 0
+		}
+		return 2
 	}
+	return 1
+}
+
+func cliAgentRank(agent capabilities.Agent) int {
+	classification := classifyAgent(agent)
+	if classification.stopped {
+		if !classification.seen {
+			return 0
+		}
+		return 1
+	}
+	return 2
+}
+
+// agentTieLess breaks rank ties by target and then pane identity so script
+// output and status rows are deterministic.
+func agentTieLess(left, right capabilities.Agent) bool {
 	if left.Target != right.Target {
 		return left.Target < right.Target
 	}
 	return left.PaneID < right.PaneID
 }
 
-// SortAgents returns agents in the canonical urgency order used by the
-// scriptable listing and glance row. The source snapshot is not mutated.
-func SortAgents(agents []capabilities.Agent) []capabilities.Agent {
+func sortAgents(agents []capabilities.Agent, rank func(capabilities.Agent) int) []capabilities.Agent {
 	ordered := make([]capabilities.Agent, len(agents))
 	copy(ordered, agents)
-	sort.SliceStable(ordered, func(i, j int) bool { return agentLess(ordered[i], ordered[j]) })
+	sort.SliceStable(ordered, func(i, j int) bool {
+		leftRank, rightRank := rank(ordered[i]), rank(ordered[j])
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		return agentTieLess(ordered[i], ordered[j])
+	})
 	return ordered
+}
+
+// SortAgents returns agents in the canonical urgency order used by glance.
+// The source snapshot is not mutated.
+func SortAgents(agents []capabilities.Agent) []capabilities.Agent {
+	return sortAgents(agents, AttentionRank)
+}
+
+// SortAgentsForCLI preserves the scriptable listing order: all stopped agents
+// first (unseen, then seen), followed by working agents.
+func SortAgentsForCLI(agents []capabilities.Agent) []capabilities.Agent {
+	return sortAgents(agents, cliAgentRank)
 }
 
 // AgentIdentity returns the backend-native pane identity.

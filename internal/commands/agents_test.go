@@ -49,6 +49,32 @@ func TestAgentsCommandJSONEmptyOutputIsArray(t *testing.T) {
 	}
 }
 
+func TestAgentsCommandKeepsStoppedAgentsBeforeWorking(t *testing.T) {
+	var output strings.Builder
+	command, ok := NewRegistry().Lookup("agents")
+	if !ok {
+		t.Fatal("agents command is not registered")
+	}
+	if err := command.Run(context.Background(), Invocation{
+		Adapter: fakeAgentSource{agents: []capabilities.Agent{
+			{PaneID: "%working", Target: "work:1.3", State: "working"},
+			{PaneID: "%seen", Target: "work:1.2", State: "stopped", Seen: true},
+			{PaneID: "%unseen", Target: "work:1.1", State: "stopped"},
+		}},
+		Stdout: &output,
+		JSON:   true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var got []capabilities.Agent
+	if err := json.Unmarshal([]byte(output.String()), &got); err != nil {
+		t.Fatalf("JSON output = %q: %v", output.String(), err)
+	}
+	if len(got) != 3 || got[0].PaneID != "%unseen" || got[1].PaneID != "%seen" || got[2].PaneID != "%working" {
+		t.Fatalf("ordered pane IDs = %#v, want unseen, seen, working", got)
+	}
+}
+
 func TestAgentsCommandJSONUsesAgentSchema(t *testing.T) {
 	stopped := time.Date(2025, 1, 1, 12, 0, 3, 0, time.UTC)
 	var output strings.Builder

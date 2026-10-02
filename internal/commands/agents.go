@@ -64,7 +64,7 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	agents = picker.SortAgents(agents)
+	agents = picker.SortAgentsForCLI(agents)
 	if invocation.JSON {
 		return json.NewEncoder(invocation.Stdout).Encode(agents)
 	}
