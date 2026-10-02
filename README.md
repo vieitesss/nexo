@@ -115,10 +115,11 @@ prompts when stdin is not a TTY. The hand-operated reference is in
 [docs/setup.md](docs/setup.md).
 
 The setup wizard configures the adapter owned by the current pane. It keeps
-bindings opt-in: choose them during setup or add your own later. tmux uses key
-names such as `C-s` (root table) and `a` (the prefix table); the wizard rejects
-Ctrl-Space, which is the shared multiplexer prefix. Herdr uses its native agent
-state and notifications and needs no nexo watcher. See
+bindings opt-in: choose them during setup or add your own later. tmux accepts
+only tmux key names such as `C-s`, `a`, `F1`, or `Enter`; the wizard rejects
+invalid names and every spelling of Ctrl-Space, which is the shared multiplexer
+prefix. Herdr uses its native agent state and notifications and needs no nexo
+watcher. See
 [docs/setup.md](docs/setup.md) for manual tmux/Herdr instructions,
 [docs/agents.md](docs/agents.md) for watcher details, and
 [docs/remote.md](docs/remote.md) for remote bindings and proxy controls.
