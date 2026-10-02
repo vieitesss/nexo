@@ -289,7 +289,7 @@ func TestSeenStoppedAgentRendersGreen(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI)
 	since := time.Now().Add(-time.Hour)
 	deps := Deps{
-		Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: picker.LocalMachine()}},
+		Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: containerstate.LocalMachine()}},
 		Agents: []capabilities.Agent{
 			{PaneID: "seen", ContainerID: "one", Container: "one", Harness: "pi", State: "stopped", Seen: true, StoppedSince: &since},
 		},
