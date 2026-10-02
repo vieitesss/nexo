@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -165,6 +166,25 @@ func TestListCommandPrintsGroups(t *testing.T) {
 		t.Fatalf("writeCandidates() error = %v", err)
 	}
 	if got, want := output.String(), "/group:\n  /a [git] [linked worktree]\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestListRejectsUnknownArgumentsAsUsageError(t *testing.T) {
+	err := listCommand{}.Run(context.Background(), Invocation{Stdout: &strings.Builder{}, Args: []string{"--unknown"}})
+	var usage UsageError
+	if !errors.As(err, &usage) {
+		t.Fatalf("error = %T (%v), want UsageError", err, err)
+	}
+}
+
+func TestWritePlacesOmitsEmptyPreview(t *testing.T) {
+	var output strings.Builder
+	err := writePlaces(&output, []picker.Place{{Kind: picker.ContainerKind, Machine: "dev", Group: "dev", DisplayRemainder: "api", Preview: "\n  \n"}})
+	if err != nil {
+		t.Fatalf("writePlaces() error = %v", err)
+	}
+	if got, want := output.String(), "dev:\n  api\n"; got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
