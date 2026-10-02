@@ -87,3 +87,54 @@ func TestMergeAgentsPreservesRemoteTables(t *testing.T) {
 		t.Fatalf("merged config invalid: %v", err)
 	}
 }
+
+func TestPrepareSetupMergesDottedKeys(t *testing.T) {
+	notify := true
+	got, err := PrepareSetup([]byte("backend = \"tmux\"\nagents.notify = false\n"), "config.toml", "/home/u", SetupValues{Notify: &notify})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "agents.notify = true") {
+		t.Fatalf("dotted key was not updated: %s", got)
+	}
+}
+
+func TestMergeAgentsSupportsDottedAndInlineTables(t *testing.T) {
+	tests := []struct {
+		name   string
+		local  string
+		remote string
+		want   string
+	}{
+		{name: "dotted", local: "agents.notify = true\nagents.processes = [\"pi\"]\n", remote: "backend = \"tmux\"\n", want: "notify = true"},
+		{name: "inline", local: "agents = { notify = true, processes = [\"pi\"] }\n", remote: "backend = \"tmux\"\n[agents]\nnotify = false\n", want: "notify = true"},
+		{name: "remote-inline", local: "[agents]\nnotify = true\n", remote: "agents = { notify = false }\n", want: "notify = true"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := MergeAgents([]byte(test.remote), []byte(test.local), "remote.toml")
+			if err != nil {
+				t.Logf("partial merged config = %q", got)
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(got), test.want) {
+				t.Fatalf("merged config = %q, want %q", got, test.want)
+			}
+			var cfg Config
+			if err := decode(got, "remote.toml", &cfg); err != nil {
+				t.Fatalf("result is invalid TOML: %v\n%s", err, got)
+			}
+		})
+	}
+}
+
+func TestPrepareSetupArrayMembershipUsesDecodedValues(t *testing.T) {
+	before := "[remote]\nmachines = [ # \"dev\" is only a suggestion\n  'old',\n]\n"
+	after, err := PrepareSetup([]byte(before), "config.toml", "/home/u", SetupValues{Machines: []string{"dev"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(after), "'old'") || !strings.Contains(string(after), `"dev"`) {
+		t.Fatalf("machine was not added semantically: %s", after)
+	}
+}

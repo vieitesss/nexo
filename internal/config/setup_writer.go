@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/pelletier/go-toml/v2/unstable"
 	"github.com/vieitesss/nexo/internal/destination"
 )
@@ -190,10 +191,17 @@ type valueSpan struct {
 	value []byte
 }
 
-type expression struct {
-	table string
+type rangeValueSpan struct {
 	key   string
 	value unstable.Range
+}
+
+type expression struct {
+	table       string
+	key         string
+	value       unstable.Range
+	inline      bool
+	inlineSpans []rangeValueSpan
 }
 
 func parseExpressions(contents []byte) ([]expression, error) {
@@ -207,12 +215,26 @@ func parseExpressions(contents []byte) ([]expression, error) {
 		case unstable.Table, unstable.ArrayTable:
 			table, _ = keyInfo(expr.Key())
 		case unstable.KeyValue:
-			key, raw := keyInfo(expr.Key())
+			fullKey, raw := keyInfo(expr.Key())
 			value, err := tomlValueRange(contents, raw)
 			if err != nil {
 				return nil, err
 			}
-			expressions = append(expressions, expression{table: table, key: key, value: value})
+			tableName, key := splitSemanticKey(table, fullKey)
+			item := expression{table: tableName, key: key, value: value}
+			if expr.Value().Kind == unstable.InlineTable {
+				item.inline = true
+				for children := expr.Value().Children(); children.Next(); {
+					child := children.Node()
+					childKey, childRaw := keyInfo(child.Key())
+					childValue, childErr := tomlInlineValueRange(contents, childRaw)
+					if childErr != nil {
+						return nil, childErr
+					}
+					item.inlineSpans = append(item.inlineSpans, rangeValueSpan{key: childKey, value: childValue})
+				}
+			}
+			expressions = append(expressions, item)
 		}
 	}
 	if err := parser.Error(); err != nil {
@@ -226,13 +248,58 @@ func keyInfo(key unstable.Iterator) (string, unstable.Range) {
 	var raw unstable.Range
 	first := true
 	for key.Next() {
+		node := key.Node()
 		if first {
-			raw = key.Node().Raw
+			raw = node.Raw
 			first = false
+		} else {
+			end := node.Raw.Offset + node.Raw.Length
+			if end > raw.Offset+raw.Length {
+				raw.Length = end - raw.Offset
+			}
 		}
-		parts = append(parts, string(key.Node().Data))
+		parts = append(parts, string(node.Data))
 	}
 	return strings.Join(parts, "."), raw
+}
+
+// splitSemanticKey turns either a table-local key or a dotted key into the
+// same table/key pair. TOML permits both [agents]\nnotify = true and
+// agents.notify = true; the setup merge must treat them identically.
+func splitSemanticKey(table, key string) (string, string) {
+	// A dot in a quoted table-local key (for example "dev.box") is data, not
+	// dotted-key syntax. Top-level dotted keys are the form setup needs to
+	// merge into semantic tables.
+	if table == "" {
+		if dot := strings.LastIndexByte(key, '.'); dot >= 0 {
+			return key[:dot], key[dot+1:]
+		}
+	}
+	return table, key
+}
+
+func tomlInlineValueRange(contents []byte, key unstable.Range) (unstable.Range, error) {
+	rangeValue, err := tomlValueRange(contents, key)
+	if err != nil {
+		return unstable.Range{}, err
+	}
+	start := int(rangeValue.Offset)
+	end := start + int(rangeValue.Length)
+	for index := start; index < end; index++ {
+		next, ok := skipTOMLString(contents, index)
+		if ok {
+			index = next - 1
+			continue
+		}
+		if contents[index] == ',' || contents[index] == '}' {
+			end = index
+			break
+		}
+	}
+	for end > start && (contents[end-1] == ' ' || contents[end-1] == '\t' || contents[end-1] == '\r' || contents[end-1] == '\n') {
+		end--
+	}
+	return unstable.Range{Offset: uint32(start), Length: uint32(end - start)}, nil
 }
 
 func tomlValueRange(contents []byte, key unstable.Range) (unstable.Range, error) {
@@ -314,12 +381,20 @@ func tableValues(contents []byte, table string) ([]valueSpan, error) {
 	values := []valueSpan{}
 	for _, expr := range expressions {
 		if expr.table != table || expr.key == "" {
+			if expr.table != "" || expr.key != table || !expr.inline {
+				continue
+			}
+			values = append(values, cloneValueSpans(contents, expr.inlineSpans)...)
 			continue
 		}
 		start := int(expr.value.Offset)
 		end := start + int(expr.value.Length)
 		if start < 0 || end > len(contents) || start > end {
 			return nil, errors.New("TOML value range is unavailable")
+		}
+		if expr.inline {
+			values = append(values, cloneValueSpans(contents, expr.inlineSpans)...)
+			continue
 		}
 		values = append(values, valueSpan{key: expr.key, value: append([]byte(nil), contents[start:end]...)})
 	}
@@ -333,20 +408,62 @@ func upsertTOMLValue(contents []byte, path, table, key, value string) ([]byte, e
 	}
 	for _, expr := range expressions {
 		if expr.table != table || expr.key != key {
-			continue
+			if expr.table != "" || expr.key != table || !expr.inline {
+				continue
+			}
+			for _, span := range expr.inlineSpans {
+				if span.key != key {
+					continue
+				}
+				return replaceRange(contents, span.value, value), nil
+			}
+			return appendInlineValue(contents, expr.value, key, value), nil
 		}
 		start := int(expr.value.Offset)
 		end := start + int(expr.value.Length)
 		if start < 0 || end > len(contents) || start > end {
 			return nil, errors.New("TOML value range is unavailable")
 		}
-		result := make([]byte, 0, len(contents)-end+start+len(value))
-		result = append(result, contents[:start]...)
-		result = append(result, value...)
-		result = append(result, contents[end:]...)
-		return result, nil
+		return replaceRange(contents, expr.value, value), nil
 	}
 	return appendTOMLKey(contents, table, key, value), nil
+}
+
+func cloneValueSpans(contents []byte, spans []rangeValueSpan) []valueSpan {
+	values := make([]valueSpan, 0, len(spans))
+	for _, span := range spans {
+		start := int(span.value.Offset)
+		end := start + int(span.value.Length)
+		if start < 0 || end > len(contents) || start > end {
+			continue
+		}
+		values = append(values, valueSpan{key: span.key, value: append([]byte(nil), contents[start:end]...)})
+	}
+	return values
+}
+
+func replaceRange(contents []byte, span unstable.Range, value string) []byte {
+	start := int(span.Offset)
+	end := start + int(span.Length)
+	result := make([]byte, 0, len(contents)-end+start+len(value))
+	result = append(result, contents[:start]...)
+	result = append(result, value...)
+	result = append(result, contents[end:]...)
+	return result
+}
+
+func appendInlineValue(contents []byte, span unstable.Range, key, value string) []byte {
+	start := int(span.Offset)
+	end := start + int(span.Length)
+	if end <= start || end > len(contents) || contents[end-1] != '}' {
+		return contents
+	}
+	insert := end - 1
+	prefix := ""
+	if insert > start && !strings.HasSuffix(strings.TrimSpace(string(contents[start:insert])), ",") {
+		prefix = ", "
+	}
+	return appendAt(contents, insert, prefix+formatTOMLKey(key)+" = "+value)
 }
 
 func appendTOMLArrayValue(contents []byte, path, table, key, value string) ([]byte, error) {
@@ -368,7 +485,11 @@ func appendTOMLArrayValue(contents []byte, path, table, key, value string) ([]by
 		if !bytes.HasPrefix(bytes.TrimSpace(array), []byte("[")) {
 			return nil, fmt.Errorf("%s.%s must be an array", table, key)
 		}
-		if arrayHasString(array, value) {
+		contains, containsErr := arrayHasString(array, value)
+		if containsErr != nil {
+			return nil, fmt.Errorf("decode %s.%s: %w", table, key, containsErr)
+		}
+		if contains {
 			return contents, nil
 		}
 		updated := appendArrayValue(contents, start, end-1, quoted)
@@ -377,9 +498,23 @@ func appendTOMLArrayValue(contents []byte, path, table, key, value string) ([]by
 	return appendTOMLKey(contents, table, key, "["+quoted+"]"), nil
 }
 
-func arrayHasString(array []byte, value string) bool {
-	quoted := strconv.Quote(value)
-	return bytes.Contains(array, []byte(quoted))
+func arrayHasString(array []byte, value string) (bool, error) {
+	// Decode the array instead of searching bytes: comments, single-quoted
+	// strings, and escaped spellings are all distinct TOML syntax for the same
+	// semantic machine alias.
+	var document struct {
+		Values []string `toml:"values"`
+	}
+	wrapped := append([]byte("values = "), array...)
+	if err := toml.Unmarshal(wrapped, &document); err != nil {
+		return false, err
+	}
+	for _, current := range document.Values {
+		if current == value {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func appendTOMLKey(contents []byte, table, key, value string) []byte {
