@@ -113,7 +113,7 @@ func (o Orchestrator) FocusAgent(ctx context.Context, result MachineResult, agen
 	if err := FocusRemotePane(ctx, o.listing.runner, o.listing.config.SSHConfig, result.Machine, result.Kind, agent.PaneID); err != nil {
 		return err
 	}
-	return o.Open(ctx, result, container)
+	return o.policy.openValidated(ctx, o.listing.runner, o.listing.config.Backend, result.Machine, result.Kind, container)
 }
 
 func (p OperationPolicy) validateKind(local backend.Kind, machine string, kind Kind, operation string) error {

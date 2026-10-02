@@ -62,6 +62,18 @@ func TestOrchestratorNewChoosesNativeCreationFromMachineKind(t *testing.T) {
 	}
 }
 
+func TestOrchestratorFocusAgentRejectsUnsupportedRemoteKindBeforeFocus(t *testing.T) {
+	runner := &machineRunner{}
+	orchestrator := NewOrchestrator(runner, ListingConfig{Backend: backend.Tmux}, OperationPolicy{})
+	err := orchestrator.FocusAgent(context.Background(), MachineResult{Machine: "dev", Kind: KindHerdr}, capabilities.Agent{PaneID: "%7", Container: "api"})
+	if err == nil || !strings.Contains(err.Error(), "use Herdr to focus") {
+		t.Fatalf("FocusAgent() error = %v, want unsupported-kind diagnostic", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("focus commands = %#v, want none", runner.commands)
+	}
+}
+
 func TestOrchestratorFocusAgentUsesRemotePaneAndThenOpenPolicy(t *testing.T) {
 	runner := &machineRunner{}
 	proxy := &recordingMachineProxy{}
