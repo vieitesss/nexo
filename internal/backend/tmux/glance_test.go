@@ -273,6 +273,36 @@ func TestGlanceOnRaisesSessionLocalStatus(t *testing.T) {
 	}
 }
 
+// A session that hides its own status bar, such as a remote proxy, keeps it
+// hidden: the remote multiplexer owns that client's status bar.
+func TestGlanceLeavesAHiddenSessionStatusOff(t *testing.T) {
+	fake := newFakeTmuxServer()
+	fake.addSession("$1", "devbox/work")
+	fake.setSessionOption("$1", "status", "off")
+	source := glanceSource(t, fake)
+	ctx := context.Background()
+
+	if err := source.Glance(ctx, GlanceOn); err != nil {
+		t.Fatalf("Glance(on) error = %v", err)
+	}
+	if err := source.reconcileGlanceLocked(ctx, nil); err != nil {
+		t.Fatalf("reconcile error = %v", err)
+	}
+	if got := fake.sessionOption("$1", "status"); got != "off" {
+		t.Fatalf("hidden session status = %q, want off", got)
+	}
+	if got := fake.sessionOption("$1", "status-format[1]"); got != "" {
+		t.Fatalf("hidden session row = %q, want unset", got)
+	}
+
+	if err := source.Glance(ctx, GlanceOff); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.sessionOption("$1", "status"); got != "off" {
+		t.Fatalf("hidden session status after off = %q, want off", got)
+	}
+}
+
 func TestGlanceReconcileHandlesANewSession(t *testing.T) {
 	fake := newFakeTmuxServer()
 	source := glanceSource(t, fake)

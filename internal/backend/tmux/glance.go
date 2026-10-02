@@ -270,6 +270,11 @@ func (s *Source) applyGlanceLocked(ctx context.Context, state *glanceState, agen
 	present := make(map[string]struct{}, len(sessions))
 	for _, session := range sessions {
 		present[session.ID] = struct{}{}
+		if statusRows(session.Status) == 0 {
+			// The global status was raised above, so an effective "off" is the
+			// session's own choice (a remote proxy hides its local bar). Keep it.
+			continue
+		}
 		saved := state.Sessions[session.ID]
 		if statusRows(session.Status) < index+1 {
 			// The session's own status value shadows the raised global one.
