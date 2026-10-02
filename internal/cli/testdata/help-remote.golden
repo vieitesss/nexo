@@ -1,0 +1,18 @@
+Usage: nexo remote <subcommand>
+List and operate on containers on remote machines.
+
+Subcommands:
+  close        Close a local proxy container.
+  list         List containers on configured remote machines.
+  new          Create a remote container and open its proxy.
+  open         Open a remote container locally or through a proxy.
+  passthrough  Forward keys to a remote container.
+  paste        Upload an image from the clipboard, or pass keys through.
+  previous     Open the previous remote container.
+
+Examples:
+  nexo remote list
+  nexo remote open devbox/api
+  nexo remote new devbox feature-api
+
+Run 'nexo remote <subcommand> --help' for more.

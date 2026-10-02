@@ -64,6 +64,7 @@ func (e HandledError) Error() string { return e.Reason }
 // Command is a registered nexo subcommand.
 type Command interface {
 	Name() string
+	Help() Help
 	Run(context.Context, Invocation) error
 }
 
@@ -106,27 +107,47 @@ func (r *Registry) Register(command Command) error {
 	if name == "" {
 		return errors.New("cannot register a command without a name")
 	}
+	metadata, ok := commandHelp(command)
+	if !ok {
+		return fmt.Errorf("command %q has no help metadata", name)
+	}
+	if err := validateCommandHelp(name, metadata); err != nil {
+		return err
+	}
+	if _, exists := r.commands[name]; exists {
+		return fmt.Errorf("command %q is already registered", name)
+	}
+	if _, exists := r.aliases[name]; exists {
+		return fmt.Errorf("command name %q conflicts with an existing alias", name)
+	}
+	seenAliases := make(map[string]struct{}, len(metadata.Aliases))
+	for _, alias := range metadata.Aliases {
+		if alias == name {
+			continue
+		}
+		if alias == "" {
+			return fmt.Errorf("command %q has an empty alias", name)
+		}
+		if _, exists := seenAliases[alias]; exists {
+			return fmt.Errorf("command alias %q is repeated", alias)
+		}
+		seenAliases[alias] = struct{}{}
+		if _, exists := r.commands[alias]; exists {
+			return fmt.Errorf("command alias %q is already registered", alias)
+		}
+		if _, exists := r.aliases[alias]; exists {
+			return fmt.Errorf("command alias %q is already registered", alias)
+		}
+	}
 	if r.commands == nil {
 		r.commands = make(map[string]Command)
 	}
 	if r.aliases == nil {
 		r.aliases = make(map[string]string)
 	}
-	if _, exists := r.commands[name]; exists {
-		return fmt.Errorf("command %q is already registered", name)
-	}
 	r.commands[name] = command
-	if metadata, ok := commandHelp(command); ok {
-		for _, alias := range metadata.Aliases {
-			if alias == "" || alias == name {
-				continue
-			}
-			if _, exists := r.commands[alias]; exists {
-				return fmt.Errorf("command alias %q is already registered", alias)
-			}
-			if _, exists := r.aliases[alias]; exists {
-				return fmt.Errorf("command alias %q is already registered", alias)
-			}
+	for _, alias := range metadata.Aliases {
+		if alias != name {
 			r.aliases[alias] = name
 		}
 	}

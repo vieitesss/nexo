@@ -27,6 +27,9 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) > 0 && invocation.Args[0] != "watch" {
 		return UsageError{Err: fmt.Errorf("unknown agents command %q", invocation.Args[0])}
 	}
+	if len(invocation.Args) > 1 {
+		return UsageError{Err: errors.New("usage: nexo agents watch")}
+	}
 	if invocation.Adapter == nil {
 		return errors.New("agents requires a backend with the AgentSource capability")
 	}
@@ -36,9 +39,6 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) > 0 {
 		switch invocation.Args[0] {
 		case "watch":
-			if len(invocation.Args) != 1 {
-				return UsageError{Err: errors.New("usage: nexo agents watch")}
-			}
 			if configurable, ok := invocation.Adapter.(capabilities.GlanceConfigurator); ok {
 				configurable.ConfigureGlance(invocation.Config.Glance)
 			}

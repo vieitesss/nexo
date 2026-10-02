@@ -141,60 +141,26 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 	options, err := Parse(args)
 	if err != nil {
 		writeError(stderr, err)
-		writeHelpHint(stderr, "", "")
+		writeHelpHint(stderr, "Usage: nexo [flags] <command> [args]", "nexo")
 		return 2
 	}
 	if options.Help {
-		switch options.Command {
-		case "":
-			commands.PrintHelp(stdout, registry, "", nil)
-		case "help":
-			if len(options.Args) == 0 {
+		name, helpArgs := options.Command, options.Args
+		if name == "help" {
+			if len(helpArgs) == 0 {
 				commands.PrintHelp(stdout, registry, "", nil)
-			} else {
-				name, helpArgs := options.Args[0], options.Args[1:]
-				if !commands.HelpPathExists(registry, name, helpArgs) {
-					unknown := name
-					if len(helpArgs) > 0 {
-						unknown = helpArgs[0]
-					}
-					writeError(stderr, fmt.Errorf("unknown subcommand %q", unknown))
-					writeHelpHint(stderr, commands.HelpUsage(registry, name, nil), commands.HelpCommandPath(registry, name, nil))
-					return 2
-				}
-				commands.PrintHelp(stdout, registry, name, helpArgs)
+				return 0
 			}
-		default:
-			if !commands.HelpPathExists(registry, options.Command, options.Args) {
-				unknown := options.Command
-				if len(options.Args) > 0 {
-					unknown = options.Args[0]
-				}
-				writeError(stderr, fmt.Errorf("unknown subcommand %q", unknown))
-				writeHelpHint(stderr, commands.HelpUsage(registry, options.Command, nil), commands.HelpCommandPath(registry, options.Command, nil))
-				return 2
-			}
-			commands.PrintHelp(stdout, registry, options.Command, options.Args)
+			name, helpArgs = helpArgs[0], helpArgs[1:]
 		}
-		return 0
+		return dispatchHelp(registry, name, helpArgs, stdout, stderr)
 	}
 	if options.Command == "help" {
 		if len(options.Args) == 0 {
 			commands.PrintHelp(stdout, registry, "", nil)
 			return 0
 		}
-		name, helpArgs := options.Args[0], options.Args[1:]
-		if !commands.HelpPathExists(registry, name, helpArgs) {
-			unknown := name
-			if len(helpArgs) > 0 {
-				unknown = helpArgs[0]
-			}
-			writeError(stderr, fmt.Errorf("unknown subcommand %q", unknown))
-			writeHelpHint(stderr, commands.HelpUsage(registry, name, nil), commands.HelpCommandPath(registry, name, nil))
-			return 2
-		}
-		commands.PrintHelp(stdout, registry, name, helpArgs)
-		return 0
+		return dispatchHelp(registry, options.Args[0], options.Args[1:], stdout, stderr)
 	}
 	if options.Version {
 		printVersion(stdout)
@@ -204,7 +170,7 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 	command, ok := registry.Lookup(options.Command)
 	if !ok {
 		writeError(stderr, fmt.Errorf("unknown subcommand %q", options.Command))
-		writeHelpHint(stderr, "", "")
+		writeHelpHint(stderr, "Usage: nexo [flags] <command> [args]", "nexo")
 		return 2
 	}
 
@@ -259,6 +225,29 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 	return 0
 }
 
+func dispatchHelp(registry *commands.Registry, name string, helpArgs []string, stdout, stderr io.Writer) int {
+	if name == "" {
+		commands.PrintHelp(stdout, registry, "", nil)
+		return 0
+	}
+	if !commands.HelpPathExists(registry, name, helpArgs) {
+		unknown := name
+		if _, found := registry.Lookup(name); found {
+			for index, arg := range helpArgs {
+				if !commands.HelpPathExists(registry, name, helpArgs[:index+1]) {
+					unknown = arg
+					break
+				}
+			}
+		}
+		writeError(stderr, fmt.Errorf("unknown subcommand %q", unknown))
+		writeHelpHint(stderr, commands.HelpUsage(registry, name, helpArgs), commands.HelpCommandPath(registry, name, helpArgs))
+		return 2
+	}
+	commands.PrintHelp(stdout, registry, name, helpArgs)
+	return 0
+}
+
 func loadConfig(options Options) (config.Config, error) {
 	if options.ConfigExplicit {
 		return config.Load(options.ConfigPath)
@@ -277,8 +266,10 @@ func writeHelpHint(stderr io.Writer, usage, path string) {
 		return
 	}
 	if usage == "" {
-		_, _ = fmt.Fprintln(stderr, "Run 'nexo --help' for more.")
-		return
+		usage = "Usage: nexo [flags] <command> [args]"
+	}
+	if !strings.HasPrefix(usage, "Usage: ") {
+		usage = "Usage: " + usage
 	}
 	if path == "" {
 		path = strings.TrimPrefix(usage, "Usage: ")

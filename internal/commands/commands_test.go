@@ -1,3 +1,4 @@
+// Package commands contains the subcommand registry and command implementations.
 package commands
 
 import (
@@ -29,7 +30,22 @@ type testCommand struct{ name string }
 
 func (c testCommand) Name() string { return c.name }
 
+func (c testCommand) Help() Help {
+	return Help{Summary: "Test command.", Usage: "nexo " + c.name}
+}
+
 func (testCommand) Run(context.Context, Invocation) error { return nil }
+
+type aliasTestCommand struct {
+	name    string
+	aliases []string
+}
+
+func (c aliasTestCommand) Name() string { return c.name }
+func (c aliasTestCommand) Help() Help {
+	return Help{Summary: "Alias test command.", Usage: "nexo " + c.name, Aliases: c.aliases}
+}
+func (aliasTestCommand) Run(context.Context, Invocation) error { return nil }
 
 func TestRegistryRejectsDuplicateNames(t *testing.T) {
 	registry := NewRegistry()
@@ -41,11 +57,44 @@ func TestRegistryRejectsDuplicateNames(t *testing.T) {
 	}
 }
 
+func TestRegistryAliasesAreCollisionSafeAndAtomic(t *testing.T) {
+	registry := &Registry{}
+	if err := registry.Register(aliasTestCommand{name: "feature", aliases: []string{"f"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := registry.Lookup("f"); !ok || got.Name() != "feature" {
+		t.Fatalf("alias lookup = %v, %v", got, ok)
+	}
+	if err := registry.Register(aliasTestCommand{name: "f"}); err == nil {
+		t.Fatal("canonical name matching an alias was accepted")
+	}
+	if err := registry.Register(aliasTestCommand{name: "other", aliases: []string{"feature"}}); err == nil {
+		t.Fatal("alias matching a canonical name was accepted")
+	}
+	if _, ok := registry.Lookup("other"); ok {
+		t.Fatal("failed registration mutated canonical commands")
+	}
+	if err := registry.Register(aliasTestCommand{name: "third", aliases: []string{"f"}}); err == nil {
+		t.Fatal("duplicate alias was accepted")
+	}
+	if _, ok := registry.Lookup("third"); ok {
+		t.Fatal("failed registration mutated canonical commands")
+	}
+	if err := registry.Register(aliasTestCommand{name: "clean", aliases: []string{"c"}}); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	PrintHelp(&output, registry, "", nil)
+	if !strings.Contains(output.String(), "clean (aliases: c)") {
+		t.Fatalf("top-level help omitted alias: %s", output.String())
+	}
+}
+
 func TestBackendCommandReportsSelection(t *testing.T) {
 	registry := NewRegistry()
 	command, ok := registry.Lookup("backend")
 	if !ok {
-		t.Fatal("backend command not registered")
+		t.Fatal("backend command is not registered")
 	}
 	var output strings.Builder
 	err := command.Run(context.Background(), Invocation{

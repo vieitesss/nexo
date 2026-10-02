@@ -22,11 +22,11 @@ func (previousCommand) Help() Help {
 // Run opens the most recent live non-proxy container that is not the current
 // one. It is the scriptable equivalent of tmux's switch-client -l.
 func (previousCommand) Run(ctx context.Context, invocation Invocation) error {
-	if err := invocation.Selection.Require(); err != nil {
-		return err
-	}
 	if len(invocation.Args) != 0 {
 		return UsageError{Err: errors.New("previous accepts no arguments")}
+	}
+	if err := invocation.Selection.Require(); err != nil {
+		return err
 	}
 	opener, ok := invocation.Adapter.(capabilities.ContainerOpener)
 	if !ok {

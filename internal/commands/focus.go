@@ -24,11 +24,11 @@ func (focusCommand) Help() Help {
 // declared by the Herdr plugin's [[events]] hook; tmux records focus through
 // its own hooks.
 func (focusCommand) Run(ctx context.Context, invocation Invocation) error {
-	if err := invocation.Selection.Require(); err != nil {
-		return err
-	}
 	if len(invocation.Args) != 0 {
 		return UsageError{Err: errors.New("focus accepts no arguments")}
+	}
+	if err := invocation.Selection.Require(); err != nil {
+		return err
 	}
 	recorder, ok := invocation.Adapter.(capabilities.FocusEventRecorder)
 	if !ok {

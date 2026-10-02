@@ -5,6 +5,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/charmbracelet/x/term"
 )
 
 // Help describes the command-line surface of a command. Commands keep this
@@ -21,12 +23,15 @@ type Help struct {
 }
 
 type SubcommandHelp struct {
-	Name    string
-	Summary string
-	Usage   string
-	Flags   []FlagHelp
-	Aliases []string
-	Hidden  bool
+	Name        string
+	Summary     string
+	Usage       string
+	Description string
+	Subcommands []SubcommandHelp
+	Flags       []FlagHelp
+	Examples    []string
+	Aliases     []string
+	Hidden      bool
 }
 
 type FlagHelp struct {
@@ -35,9 +40,6 @@ type FlagHelp struct {
 	Value       string
 	Description string
 }
-
-// HelpProvider is implemented by commands that expose their help metadata.
-type HelpProvider interface{ Help() Help }
 
 var globalFlags = []FlagHelp{
 	{Long: "--backend", Value: "auto|tmux|herdr", Description: "Select the backend (default: auto-detect)."},
@@ -48,18 +50,10 @@ var globalFlags = []FlagHelp{
 }
 
 func commandHelp(command Command) (Help, bool) {
-	provider, ok := command.(HelpProvider)
-	if !ok {
+	if command == nil {
 		return Help{}, false
 	}
-	h := provider.Help()
-	if h.Summary == "" {
-		return Help{}, false
-	}
-	if h.Usage == "" {
-		h.Usage = "nexo " + command.Name()
-	}
-	return h, true
+	return command.Help(), true
 }
 
 func sortedSubcommands(h Help) []SubcommandHelp {
@@ -82,7 +76,25 @@ func flagLabel(flag FlagHelp) string {
 	return label + flag.Long
 }
 
-func helpPath(registry *Registry, name string, args []string) (Command, Help, string, bool) {
+// subcommandHelp converts nested metadata into the command-shaped renderer
+// input used by the recursive resolver.
+func subcommandHelp(sub SubcommandHelp) Help {
+	return Help{
+		Summary:     sub.Summary,
+		Usage:       sub.Usage,
+		Description: sub.Description,
+		Subcommands: sub.Subcommands,
+		Flags:       sub.Flags,
+		Examples:    sub.Examples,
+		Aliases:     sub.Aliases,
+		Hidden:      sub.Hidden,
+	}
+}
+
+// resolveHelpPath resolves every component of a nested help path. When a
+// suffix is unknown it returns the deepest known parent, which is also the
+// relevant usage to print for the error.
+func resolveHelpPath(registry *Registry, name string, args []string) (Command, Help, string, bool) {
 	command, ok := registry.Lookup(name)
 	if !ok {
 		return nil, Help{}, "", false
@@ -92,27 +104,26 @@ func helpPath(registry *Registry, name string, args []string) (Command, Help, st
 		return command, Help{}, name, false
 	}
 	path := name
-	if len(args) > 0 {
-		for _, sub := range h.Subcommands {
-			if args[0] == sub.Name || contains(sub.Aliases, args[0]) {
-				path += " " + sub.Name
-				if sub.Usage != "" {
-					h.Usage = sub.Usage
-				}
-				h.Summary = sub.Summary
-				h.Description = ""
-				h.Examples = nil
-				if len(sub.Flags) > 0 {
-					h.Flags = sub.Flags
-				} else {
-					h.Flags = nil
-				}
-				h.Subcommands = nil
+	for _, arg := range args {
+		var found *SubcommandHelp
+		for index := range h.Subcommands {
+			sub := &h.Subcommands[index]
+			if arg == sub.Name || contains(sub.Aliases, arg) {
+				found = sub
 				break
 			}
 		}
+		if found == nil {
+			return command, h, path, false
+		}
+		path += " " + found.Name
+		h = subcommandHelp(*found)
 	}
 	return command, h, path, true
+}
+
+func helpPath(registry *Registry, name string, args []string) (Command, Help, string, bool) {
+	return resolveHelpPath(registry, name, args)
 }
 
 func contains(values []string, value string) bool {
@@ -124,55 +135,89 @@ func contains(values []string, value string) bool {
 	return false
 }
 
-// PrintHelp renders either the top-level or one command's help. The renderer
-// deliberately uses an 80-column width when stdout is not a terminal.
+// PrintHelp renders either the top-level or one command's help. It detects
+// stdout's terminal width and falls back to 80 columns for pipes and tests.
 func PrintHelp(stdout io.Writer, registry *Registry, name string, args []string) {
+	PrintHelpWithWidth(stdout, registry, name, args, terminalWidth(stdout))
+}
+
+// PrintHelpWithWidth is the deterministic rendering seam used by tests and
+// callers that already know their terminal width.
+func PrintHelpWithWidth(stdout io.Writer, registry *Registry, name string, args []string, width int) {
 	if stdout == nil {
 		return
 	}
+	if width < 1 {
+		width = 80
+	}
 	if name == "" {
-		printTopHelp(stdout, registry)
+		printTopHelp(stdout, registry, width)
 		return
 	}
-	command, h, path, ok := helpPath(registry, name, args)
-	if !ok || command == nil {
-		printTopHelp(stdout, registry)
+	_, h, path, ok := helpPath(registry, name, args)
+	if !ok {
+		printTopHelp(stdout, registry, width)
 		return
 	}
-	printCommandHelp(stdout, path, h)
+	printCommandHelp(stdout, path, h, width)
 }
 
-func printTopHelp(out io.Writer, registry *Registry) {
-	_, _ = fmt.Fprintln(out, "Usage: nexo [flags] <command> [args]")
+func terminalWidth(stdout io.Writer) int {
+	file, ok := stdout.(interface{ Fd() uintptr })
+	if !ok || !term.IsTerminal(file.Fd()) {
+		return 80
+	}
+	width, _, err := term.GetSize(file.Fd())
+	if err != nil || width <= 0 {
+		return 80
+	}
+	return width
+}
+
+type tableRow struct {
+	label       string
+	description string
+}
+
+func printTopHelp(out io.Writer, registry *Registry, width int) {
+	writeWrapped(out, "Usage: nexo [flags] <command> [args]", width, "       ")
 	_, _ = fmt.Fprintln(out, "\nCommands:")
 	if registry != nil {
+		rows := make([]tableRow, 0, len(registry.Names()))
 		for _, name := range registry.Names() {
 			command, _ := registry.Lookup(name)
-			h, ok := commandHelp(command)
-			if !ok || h.Hidden {
+			h, _ := commandHelp(command)
+			if h.Hidden {
 				continue
 			}
 			label := name
 			if len(h.Aliases) > 0 {
 				label += " (aliases: " + strings.Join(h.Aliases, ", ") + ")"
 			}
-			printTableRow(out, "  "+label, h.Summary)
+			rows = append(rows, tableRow{label: "  " + label, description: h.Summary})
 		}
+		printTable(out, rows, width)
 	}
 	_, _ = fmt.Fprintln(out, "\nGlobal flags:")
+	rows := make([]tableRow, 0, len(globalFlags))
 	for _, flag := range sortedFlags(globalFlags) {
-		printTableRow(out, "  "+flagLabel(flag)+valueSuffix(flag), flag.Description)
+		rows = append(rows, tableRow{label: "  " + flagLabel(flag) + valueSuffix(flag), description: flag.Description})
 	}
-	_, _ = fmt.Fprintln(out, "\nRun 'nexo <command> --help' for more.")
+	printTable(out, rows, width)
+	_, _ = fmt.Fprintln(out)
+	writeWrapped(out, "Run 'nexo <command> --help' for more.", width, "")
 }
 
-func printCommandHelp(out io.Writer, path string, h Help) {
-	_, _ = fmt.Fprintf(out, "Usage: %s\n\n%s\n", h.Usage, h.Summary)
+func printCommandHelp(out io.Writer, path string, h Help, width int) {
+	writeWrapped(out, "Usage: "+h.Usage, width, "       ")
+	writeWrapped(out, h.Summary, width, "")
 	if h.Description != "" {
-		_, _ = fmt.Fprintf(out, "\n%s\n", h.Description)
+		_, _ = fmt.Fprintln(out)
+		writeWrapped(out, h.Description, width, "")
 	}
 	if subs := sortedSubcommands(h); len(subs) > 0 {
 		_, _ = fmt.Fprintln(out, "\nSubcommands:")
+		rows := make([]tableRow, 0, len(subs))
 		for _, sub := range subs {
 			if sub.Hidden {
 				continue
@@ -181,22 +226,28 @@ func printCommandHelp(out io.Writer, path string, h Help) {
 			if len(sub.Aliases) > 0 {
 				label += " (aliases: " + strings.Join(sub.Aliases, ", ") + ")"
 			}
-			printTableRow(out, label, sub.Summary)
+			rows = append(rows, tableRow{label: label, description: sub.Summary})
 		}
+		printTable(out, rows, width)
 	}
 	if flags := sortedFlags(h.Flags); len(flags) > 0 {
 		_, _ = fmt.Fprintln(out, "\nFlags:")
+		rows := make([]tableRow, 0, len(flags))
 		for _, flag := range flags {
-			printTableRow(out, "  "+flagLabel(flag)+valueSuffix(flag), flag.Description)
+			rows = append(rows, tableRow{label: "  " + flagLabel(flag) + valueSuffix(flag), description: flag.Description})
 		}
+		printTable(out, rows, width)
 	}
 	if len(h.Examples) > 0 {
 		_, _ = fmt.Fprintln(out, "\nExamples:")
 		for _, example := range h.Examples {
-			_, _ = fmt.Fprintf(out, "  %s\n", example)
+			writeWrapped(out, "  "+example, width, "  ")
 		}
 	}
-	_, _ = fmt.Fprintf(out, "\nRun 'nexo %s --help' for more.\n", path)
+	if len(h.Subcommands) > 0 {
+		_, _ = fmt.Fprintln(out)
+		writeWrapped(out, fmt.Sprintf("Run 'nexo %s <subcommand> --help' for more.", path), width, "")
+	}
 }
 
 func valueSuffix(flag FlagHelp) string {
@@ -206,22 +257,49 @@ func valueSuffix(flag FlagHelp) string {
 	return " " + flag.Value
 }
 
-func printTableRow(out io.Writer, label, description string) {
-	const width = 80
-	const gap = 2
-	if description == "" {
-		_, _ = fmt.Fprintln(out, label)
+func printTable(out io.Writer, rows []tableRow, width int) {
+	if len(rows) == 0 {
 		return
 	}
-	maxLabel := 28
-	if len(label) > maxLabel {
-		maxLabel = len(label)
+	const gap = 2
+	maxLabel := 0
+	for _, row := range rows {
+		if len(row.label) > maxLabel {
+			maxLabel = len(row.label)
+		}
 	}
 	if maxLabel+gap >= width {
-		_, _ = fmt.Fprintf(out, "%s\n", label)
+		for _, row := range rows {
+			writeWrapped(out, row.label, width, "  ")
+			if row.description != "" {
+				writeWrapped(out, row.description, width, "  ")
+			}
+		}
 		return
 	}
-	_, _ = fmt.Fprintf(out, "%-*s%s\n", maxLabel, label, wrapText(description, width-maxLabel-gap, strings.Repeat(" ", maxLabel+gap)))
+	indent := strings.Repeat(" ", maxLabel+gap)
+	for _, row := range rows {
+		if row.description == "" {
+			_, _ = fmt.Fprintln(out, row.label)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "%-*s%s%s\n", maxLabel, row.label, strings.Repeat(" ", gap), wrapText(row.description, width-maxLabel-gap, indent))
+	}
+}
+
+func writeWrapped(out io.Writer, text string, width int, continuation string) {
+	if text == "" {
+		return
+	}
+	for _, paragraph := range strings.Split(text, "\n") {
+		leading := paragraph[:len(paragraph)-len(strings.TrimLeft(paragraph, " "))]
+		wrapped := wrapText(strings.TrimLeft(paragraph, " "), width-len(leading), continuation)
+		if wrapped == "" {
+			_, _ = fmt.Fprintln(out)
+			continue
+		}
+		_, _ = fmt.Fprintln(out, leading+wrapped)
+	}
 }
 
 func wrapText(text string, width int, indent string) string {
@@ -229,54 +307,121 @@ func wrapText(text string, width int, indent string) string {
 	if len(words) == 0 {
 		return ""
 	}
+	if width < 1 {
+		width = 1
+	}
 	var lines []string
-	line := words[0]
-	for _, word := range words[1:] {
-		if len(line)+1+len(word) > width {
+	line := ""
+	for _, word := range words {
+		for len(word) > width {
+			if line != "" {
+				lines = append(lines, line)
+				line = ""
+			}
+			lines = append(lines, word[:width])
+			word = word[width:]
+		}
+		if word == "" {
+			continue
+		}
+		if line == "" {
+			line = word
+		} else if len(line)+1+len(word) > width {
 			lines = append(lines, line)
 			line = word
 		} else {
 			line += " " + word
 		}
 	}
-	lines = append(lines, line)
+	if line != "" {
+		lines = append(lines, line)
+	}
 	return strings.Join(lines, "\n"+indent)
 }
 
-// HelpPathExists reports whether name and its optional subcommand are documented.
+// HelpPathExists reports whether name and all of its nested subcommands are
+// documented.
 func HelpPathExists(registry *Registry, name string, args []string) bool {
-	command, ok := registry.Lookup(name)
-	if !ok {
-		return false
-	}
-	h, ok := commandHelp(command)
-	if !ok || len(args) == 0 || len(h.Subcommands) == 0 {
-		return ok
-	}
-	for _, sub := range h.Subcommands {
-		if args[0] == sub.Name || contains(sub.Aliases, args[0]) {
-			return true
-		}
-	}
-	return false
+	_, _, _, ok := helpPath(registry, name, args)
+	return ok
 }
 
-// HelpUsage returns the canonical usage line for an invocation path.
+// HelpUsage returns the canonical usage line for an invocation path. For an
+// unknown suffix it returns the deepest known parent's usage.
 func HelpUsage(registry *Registry, name string, args []string) string {
 	_, h, _, ok := helpPath(registry, name, args)
-	if !ok {
+	if h.Usage == "" || (!ok && h.Summary == "") {
 		return "Usage: nexo [flags] <command> [args]"
 	}
-	return h.Usage
+	return ensureUsagePrefix(h.Usage)
 }
 
-// HelpCommandPath returns the command path used by the --help hint.
+// HelpCommandPath returns the command path used by the --help hint. For an
+// unknown suffix it returns the deepest known parent's path.
 func HelpCommandPath(registry *Registry, name string, args []string) string {
 	_, _, path, ok := helpPath(registry, name, args)
-	if !ok {
+	if path == "" || (!ok && path == "") {
 		return "nexo"
 	}
 	return "nexo " + path
+}
+
+func ensureUsagePrefix(usage string) string {
+	if strings.HasPrefix(usage, "Usage: ") {
+		return usage
+	}
+	return "Usage: " + usage
+}
+
+func validateCommandHelp(name string, h Help) error {
+	if strings.TrimSpace(h.Summary) == "" {
+		return fmt.Errorf("command %q has no help summary", name)
+	}
+	if strings.TrimSpace(h.Usage) == "" {
+		return fmt.Errorf("command %q has no help usage", name)
+	}
+	if err := validateFlags(name, h.Flags); err != nil {
+		return err
+	}
+	if err := validateSubcommands(name, h.Subcommands); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateFlags(path string, flags []FlagHelp) error {
+	seen := make(map[string]struct{}, len(flags))
+	for _, flag := range flags {
+		label := flagLabel(flag)
+		if label == "" || strings.TrimSpace(flag.Description) == "" {
+			return fmt.Errorf("command %q has incomplete help flag %q", path, label)
+		}
+		if _, ok := seen[label]; ok {
+			return fmt.Errorf("command %q repeats help flag %q", path, label)
+		}
+		seen[label] = struct{}{}
+	}
+	return nil
+}
+
+func validateSubcommands(path string, subs []SubcommandHelp) error {
+	seen := make(map[string]struct{}, len(subs))
+	for _, sub := range subs {
+		if strings.TrimSpace(sub.Name) == "" || strings.TrimSpace(sub.Summary) == "" || strings.TrimSpace(sub.Usage) == "" {
+			return fmt.Errorf("command %q has an incomplete help subcommand", path)
+		}
+		if _, ok := seen[sub.Name]; ok {
+			return fmt.Errorf("command %q repeats help subcommand %q", path, sub.Name)
+		}
+		seen[sub.Name] = struct{}{}
+		if err := validateFlags(path+" "+sub.Name, sub.Flags); err != nil {
+			return err
+		}
+		if err := validateSubcommands(path+" "+sub.Name, sub.Subcommands); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateHelp(registry *Registry) error {
@@ -284,12 +429,10 @@ func validateHelp(registry *Registry) error {
 		command, _ := registry.Lookup(name)
 		h, ok := commandHelp(command)
 		if !ok {
-			return fmt.Errorf("command %q has no help summary", name)
+			return fmt.Errorf("command %q has no help metadata", name)
 		}
-		for _, sub := range h.Subcommands {
-			if sub.Name == "" || sub.Summary == "" {
-				return fmt.Errorf("command %q has an incomplete help subcommand", name)
-			}
+		if err := validateCommandHelp(name, h); err != nil {
+			return err
 		}
 	}
 	return nil

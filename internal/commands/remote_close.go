@@ -44,7 +44,7 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 	}
 	identity, err := proxyidentity.ParseTarget(target)
 	if err != nil {
-		return err
+		return UsageError{Err: fmt.Errorf("remote close requires MACHINE/CONTAINER: %w", err)}
 	}
 	// Closing is local-only. Do not probe the remote machine: links are often
 	// down precisely when a stale local proxy needs to be removed.

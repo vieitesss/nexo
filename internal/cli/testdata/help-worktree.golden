@@ -1,0 +1,12 @@
+Usage: nexo worktree <subcommand>
+Create or extract Git worktrees.
+
+Subcommands:
+  create   Create and open a Git worktree.
+  extract  Move a checkout's branch into a new worktree.
+
+Examples:
+  nexo worktree create --new-branch ~/src/api feature/api ~/worktrees/api
+  nexo worktree extract --return-branch main ~/src/api ~/worktrees/api
+
+Run 'nexo worktree <subcommand> --help' for more.

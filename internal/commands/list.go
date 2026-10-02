@@ -25,7 +25,7 @@ func init() {
 
 func (listCommand) Name() string { return "list" }
 func (listCommand) Help() Help {
-	return Help{Summary: "List configured project candidates.", Usage: "nexo list [--places]", Flags: []FlagHelp{{Long: "--places", Description: "Include open local and remote containers."}}, Examples: []string{"nexo list", "nexo list --places --json"}}
+	return Help{Summary: "List configured project candidates.", Usage: "nexo list [--places]", Flags: []FlagHelp{{Long: "--places", Description: "Include discovered projects plus open local and remote containers."}}, Examples: []string{"nexo list", "nexo list --places --json"}}
 }
 
 func (listCommand) Run(ctx context.Context, invocation Invocation) error {
