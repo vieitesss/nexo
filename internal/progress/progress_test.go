@@ -22,7 +22,7 @@ func TestEventsBecomeStableRows(t *testing.T) {
 	model.Apply(Event{Machine: "local", State: StateDone, Step: StepInstalling, Old: "v1", New: "v2", At: started.Add(2 * time.Second)})
 	model.Apply(Event{Machine: "devbox", State: StateFailed, Step: StepProbing, Err: errors.New("offline"), At: started.Add(3 * time.Second)})
 
-	rows := model.Rows()
+	rows := model.snapshot()
 	if len(rows) != 2 || rows[0].Machine != "local" || rows[1].Machine != "devbox" {
 		t.Fatalf("rows = %#v", rows)
 	}

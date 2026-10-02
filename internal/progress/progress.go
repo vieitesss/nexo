@@ -75,9 +75,9 @@ type CompleteMsg struct{}
 
 // Model is an inline, non-alt-screen progress view.
 type Model struct {
-	Header string
+	header string
 
-	rows   []Row
+	rows   []row
 	spin   spinner.Model
 	cancel func()
 	width  int
@@ -85,8 +85,8 @@ type Model struct {
 	done   bool
 }
 
-// Row is the public snapshot of one machine's state.
-type Row struct {
+// row is one machine's state snapshot.
+type row struct {
 	Machine string
 	State   State
 	Step    Step
@@ -101,8 +101,8 @@ type Row struct {
 // the given order so the display remains stable as concurrent events arrive.
 func NewModel(header string, machines []string) Model {
 	model := Model{
-		Header: header,
-		rows:   make([]Row, 0, len(machines)),
+		header: header,
+		rows:   make([]row, 0, len(machines)),
 		spin:   spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 	}
 	model.spin.Style = accentStyle
@@ -114,7 +114,7 @@ func NewModel(header string, machines []string) Model {
 		if model.rowIndex(name) >= 0 {
 			continue
 		}
-		model.rows = append(model.rows, Row{Machine: name, State: StateRunning, Step: StepProbing})
+		model.rows = append(model.rows, row{Machine: name, State: StateRunning, Step: StepProbing})
 	}
 	return model
 }
@@ -123,67 +123,61 @@ func NewModel(header string, machines []string) Model {
 // intentionally separate from the Bubble Tea context: workers get a chance
 // to publish their cancelled result and the final view remains visible.
 func (m *Model) SetCancel(cancel func()) {
-	if m == nil {
-		return
-	}
 	m.cancel = cancel
 }
 
 // Apply applies an event and is useful to non-Bubble-Tea callers and tests.
 func (m *Model) Apply(event Event) {
-	if m == nil {
-		return
-	}
 	name := strings.TrimSpace(event.Machine)
 	if name == "" {
 		return
 	}
 	index := m.rowIndex(name)
-	row := Row{Machine: name}
+	next := row{Machine: name}
 	if index >= 0 {
-		row = m.rows[index]
+		next = m.rows[index]
 	}
 	at := event.At
 	if at.IsZero() {
 		at = time.Now()
 	}
-	if row.Started.IsZero() {
-		row.Started = at
+	if next.Started.IsZero() {
+		next.Started = at
 	}
 	if event.State != "" {
-		row.State = event.State
-	} else if row.State == "" {
-		row.State = StateRunning
+		next.State = event.State
+	} else if next.State == "" {
+		next.State = StateRunning
 	}
 	if event.Step != "" {
-		row.Step = event.Step
+		next.Step = event.Step
 	}
 	if event.Old != "" {
-		row.Old = event.Old
+		next.Old = event.Old
 	}
 	if event.New != "" {
-		row.New = event.New
+		next.New = event.New
 	}
 	if event.State == StateCancelled {
-		row.Err = nil
+		next.Err = nil
 	} else if event.Err != nil {
-		row.Err = event.Err
+		next.Err = event.Err
 	}
 	if event.Elapsed > 0 {
-		row.Elapsed = event.Elapsed
-	} else if row.State != StateRunning && row.Elapsed == 0 {
-		row.Elapsed = at.Sub(row.Started)
+		next.Elapsed = event.Elapsed
+	} else if next.State != StateRunning && next.Elapsed == 0 {
+		next.Elapsed = at.Sub(next.Started)
 	}
 	if index < 0 {
-		m.rows = append(m.rows, row)
+		m.rows = append(m.rows, next)
 	} else {
-		m.rows[index] = row
+		m.rows[index] = next
 	}
 }
 
-// Rows returns a stable snapshot suitable for assertions or another renderer.
-func (m Model) Rows() []Row {
-	return append([]Row(nil), m.rows...)
+// snapshot returns a stable copy suitable for assertions or a renderer.
+func (m Model) snapshot() []row {
+	return append([]row(nil), m.rows...)
 }
 
 func (m Model) rowIndex(name string) int {
@@ -249,7 +243,7 @@ type tableLayout struct {
 }
 
 func (m Model) render(final bool) string {
-	rows := m.Rows()
+	rows := m.snapshot()
 	rendered := make([]renderedRow, len(rows))
 	nameWidth, statusWidth := lipgloss.Width("MACHINE"), lipgloss.Width("STATUS")
 	stepWidth, elapsedWidth := lipgloss.Width("STEP"), lipgloss.Width("ELAPSED")
@@ -302,7 +296,7 @@ func (m Model) render(final bool) string {
 		// Reserve one line for the column header and one for the overflow
 		// marker. The header itself consumes one line when present.
 		available := m.height - 1
-		if m.Header != "" {
+		if m.header != "" {
 			available--
 		}
 		if available < 0 {
@@ -319,8 +313,8 @@ func (m Model) render(final bool) string {
 	}
 
 	var b strings.Builder
-	if m.Header != "" {
-		header := m.Header
+	if m.header != "" {
+		header := m.header
 		if m.width > 0 {
 			header = ansi.Truncate(header, m.width, "…")
 		}
@@ -424,31 +418,24 @@ func tableWidth(layout tableLayout) int {
 	return width + 2*(columns-1)
 }
 
+type tableColumn struct {
+	value int
+	width int
+}
+
 func writeTableRow(b *strings.Builder, values []string, layout tableLayout) {
-	columns := []struct {
-		value int
-		width int
-	}{
+	columns := []tableColumn{
 		{value: 0, width: layout.machine},
 		{value: 1, width: layout.status},
 	}
 	if layout.showStep {
-		columns = append(columns, struct {
-			value int
-			width int
-		}{value: 2, width: layout.step})
+		columns = append(columns, tableColumn{value: 2, width: layout.step})
 	}
 	if layout.showElapsed {
-		columns = append(columns, struct {
-			value int
-			width int
-		}{value: 3, width: layout.elapsed})
+		columns = append(columns, tableColumn{value: 3, width: layout.elapsed})
 	}
 	if layout.showDetail {
-		columns = append(columns, struct {
-			value int
-			width int
-		}{value: 4, width: layout.detail})
+		columns = append(columns, tableColumn{value: 4, width: layout.detail})
 	}
 	for index, column := range columns {
 		if index > 0 {
@@ -464,10 +451,10 @@ func writeTableRow(b *strings.Builder, values []string, layout tableLayout) {
 	b.WriteByte('\n')
 }
 
-func fullErrorLines(row Row, width int) []string {
-	text := row.Machine + ": "
-	if row.Err != nil {
-		text += row.Err.Error()
+func fullErrorLines(item row, width int) []string {
+	text := item.Machine + ": "
+	if item.Err != nil {
+		text += item.Err.Error()
 	}
 	if width <= 0 {
 		return strings.Split(text, "\n")
@@ -508,16 +495,16 @@ func wrapText(value string, width int) []string {
 	return lines
 }
 
-func detailForRow(row Row) string {
-	if row.State == StateCancelled {
+func detailForRow(item row) string {
+	if item.State == StateCancelled {
 		return ""
 	}
-	if row.Err != nil {
-		return shortError(row.Err)
+	if item.Err != nil {
+		return shortError(item.Err)
 	}
-	oldVersion := abbreviateVersion(row.Old)
-	newVersion := abbreviateVersion(row.New)
-	switch row.State {
+	oldVersion := abbreviateVersion(item.Old)
+	newVersion := abbreviateVersion(item.New)
+	switch item.State {
 	case StateDone:
 		if oldVersion != "" && newVersion != "" {
 			return oldVersion + " → " + newVersion

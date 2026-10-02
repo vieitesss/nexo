@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/install"
+	"github.com/vieitesss/nexo/internal/progress"
 	upgradeversion "github.com/vieitesss/nexo/internal/upgrade"
 )
 
@@ -175,6 +177,33 @@ func TestUpgradeReportsFailedMachineAndReturnsError(t *testing.T) {
 	}
 }
 
+func TestUpgradePlainCancellationPrintsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	var once sync.Once
+	fake := funcRunner(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name != "ssh" {
+			return nil, errors.New("unexpected command")
+		}
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		return nil, errors.New("signal: killed")
+	})
+	go func() {
+		<-started
+		cancel()
+	}()
+	var output strings.Builder
+	err := runUpgradePlain(ctx, Invocation{Runner: fake, Stdout: &output}, []upgradeMachine{{Name: "slowhost", Remote: true}}, upgradeversion.Version{Release: "v2.0.0", Ref: "v2.0.0"}, false)
+	if err == nil || err.Error() != "upgrade cancelled" {
+		t.Fatalf("runUpgradePlain() error = %v, want upgrade cancelled", err)
+	}
+	if got := output.String(); !strings.Contains(got, "slowhost: cancelled") || strings.Contains(got, "error:") {
+		t.Fatalf("output = %q, want a cancelled line and no error line", got)
+	}
+}
+
 func TestUpgradeMachineSelection(t *testing.T) {
 	machines, err := upgradeMachines(config.RemoteConfig{Machines: []string{"devbox", "gpu1"}}, upgradeOptions{machines: []string{"GPU1", "local"}})
 	if err != nil {
@@ -194,12 +223,35 @@ func TestUpgradeResultLines(t *testing.T) {
 		{upgradeResult{machine: "dev", old: "v2", skipped: true}, "dev: v2 (skipped; already on target)"},
 		{upgradeResult{machine: "dev", old: "v1", new: "v2", dryRun: true}, "dev: v1 -> v2 (dry-run)"},
 		{upgradeResult{machine: "dev", old: "unknown", err: errors.New("offline")}, "dev: unknown -> error: offline"},
+		{upgradeResult{machine: "dev", old: "v1", cancelled: true, err: errors.New("signal: killed")}, "dev: cancelled"},
 	}
 	for _, testCase := range cases {
 		if got := testCase.result.line(); got != testCase.want {
 			t.Errorf("line() = %q, want %q", got, testCase.want)
 		}
 	}
+}
+
+func TestUpgradeProgressStepMapping(t *testing.T) {
+	cases := []struct {
+		in   install.ProgressStep
+		want progress.Step
+	}{
+		{install.ProgressBuilding, progress.StepBuilding},
+		{install.ProgressCopying, progress.StepCopying},
+		{install.ProgressInstalling, progress.StepInstalling},
+	}
+	for _, testCase := range cases {
+		if got := upgradeProgressStep(testCase.in); got != testCase.want {
+			t.Errorf("upgradeProgressStep(%q) = %q, want %q", testCase.in, got, testCase.want)
+		}
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("upgradeProgressStep accepted an unknown install step")
+		}
+	}()
+	upgradeProgressStep(install.ProgressStep("mystery"))
 }
 
 func TestAlreadyOnTarget(t *testing.T) {

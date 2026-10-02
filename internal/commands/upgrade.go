@@ -371,7 +371,7 @@ func runUpgradeMachine(parent context.Context, invocation Invocation, machine up
 		Ref:   requested.Ref,
 		Local: &install.LocalBuilder{Runner: invocation.Runner},
 		Progress: func(step install.ProgressStep) {
-			currentStep = progress.Step(step)
+			currentStep = upgradeProgressStep(step)
 			notify(progress.Event{State: progress.StateRunning, Step: currentStep, Old: result.old})
 		},
 	})
@@ -384,6 +384,22 @@ func runUpgradeMachine(parent context.Context, invocation Invocation, machine up
 		result.err = fmt.Errorf("installed %s, want %s", result.new, requested.Release)
 	}
 	return result
+}
+
+// upgradeProgressStep maps an install phase onto the progress vocabulary. The
+// two packages cannot import each other, so an unmapped phase is a programming
+// error and must fail loudly rather than render silently.
+func upgradeProgressStep(step install.ProgressStep) progress.Step {
+	switch step {
+	case install.ProgressBuilding:
+		return progress.StepBuilding
+	case install.ProgressCopying:
+		return progress.StepCopying
+	case install.ProgressInstalling:
+		return progress.StepInstalling
+	default:
+		panic(fmt.Sprintf("upgrade: unknown install progress step %q", step))
+	}
 }
 
 func alreadyOnTarget(current string, requested upgradeversion.Version) bool {
@@ -412,6 +428,9 @@ func sameRevision(current, commit string) bool {
 }
 
 func (r upgradeResult) line() string {
+	if r.cancelled {
+		return fmt.Sprintf("%s: cancelled", r.machine)
+	}
 	if r.err != nil {
 		return fmt.Sprintf("%s: %s -> error: %v", r.machine, r.old, r.err)
 	}
