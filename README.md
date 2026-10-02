@@ -341,7 +341,7 @@ See [docs/usage.md](docs/usage.md) for the full command reference and examples.
 | --- | --- |
 | `nexo tui [agents\|containers\|projects]` | Open the tabbed terminal UI. |
 | `nexo list [--places]` | List project candidates; `--places` adds open local and remote containers, each local one with a screen preview. |
-| `nexo agents [watch\|seen PANE_ID]` | List agent panes, run the watcher, or mark one pane seen. |
+| `nexo agents [watch]` | List agent panes or run the watcher. |
 | `nexo previous` | Open the last non-proxy local container. |
 | `nexo remote list\|open\|new\|close\|previous\|paste\|passthrough` | List, open, create, close, and attach to remote containers. |
 | `nexo open PATH` | Open a discovered project candidate. |

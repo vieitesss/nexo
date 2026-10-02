@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
@@ -46,31 +45,6 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 				return watcher.WatchAgents(ctx)
 			}
 			return errors.New("selected backend does not support agent watching")
-		case "seen":
-			if len(invocation.Args) != 2 || strings.TrimSpace(invocation.Args[1]) == "" {
-				return errors.New("agents seen requires a pane id")
-			}
-			paneID := invocation.Args[1]
-			var failures []error
-			recorded := false
-			if recorder, ok := invocation.Adapter.(interface {
-				RecordFocusedPane(context.Context, string) error
-			}); ok {
-				recorded = true
-				if err := recorder.RecordFocusedPane(ctx, paneID); err != nil {
-					failures = append(failures, err)
-				}
-			}
-			if marker, ok := invocation.Adapter.(interface {
-				MarkAgentSeen(context.Context, string) error
-			}); ok {
-				if err := marker.MarkAgentSeen(ctx, paneID); err != nil {
-					failures = append(failures, err)
-				}
-			} else if !recorded {
-				return errors.New("selected backend does not support marking agents seen")
-			}
-			return errors.Join(failures...)
 		default:
 			return fmt.Errorf("unknown agents command %q", invocation.Args[0])
 		}

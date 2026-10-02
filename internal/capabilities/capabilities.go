@@ -21,6 +21,9 @@ func Names(backend any) []string {
 	if _, ok := backend.(ContainerOpener); ok {
 		names = append(names, "ContainerOpener")
 	}
+	if _, ok := backend.(FocusEventRecorder); ok {
+		names = append(names, "FocusEventRecorder")
+	}
 	if _, ok := backend.(ContainerLister); ok {
 		names = append(names, "ContainerLister")
 	}

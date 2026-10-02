@@ -12,7 +12,7 @@ are equivalent.
 | `nexo backend` | Print the selected backend and its capabilities; add `--json` for structured output. |
 | `nexo list` | List configured project candidates; use `--places` to include local and configured remote containers, each local container with a screen preview. |
 | `nexo tui [agents\|containers\|projects]` | Render the TUI in the terminal supplied by your binding. With no tab, open Agents for unseen-stopped agents, otherwise Containers. |
-| `nexo agents` | List agent panes; add `watch` or `seen PANE_ID`. |
+| `nexo agents` | List agent panes; add `watch`. |
 | `nexo previous` | Open the last non-proxy container on this machine other than the current one; it skips proxies, stale containers, and the current container, and is a no-op when nothing else is live. |
 | `nexo open PATH` | Open a discovered project candidate; add `--no-focus` to create or reuse its container without switching to it. Herdr also accepts `--workspace-id ID`. |
 | `nexo clone [--add-parent] SOURCE [DESTINATION]` | Clone a repository with Git; the optional flag adds the destination parent to project paths. Add `--json` for structured output. |
@@ -45,7 +45,6 @@ nexo --backend=tmux list --places --json
 nexo --backend=herdr agents --json
 nexo --backend=tmux tui agents
 nexo --backend=tmux agents watch
-nexo --backend=tmux agents seen %4
 
 # Open a project already found by `list`.
 nexo --backend=tmux open ~/src/api

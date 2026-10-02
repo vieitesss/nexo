@@ -722,11 +722,16 @@ func (s *Source) installHooksWithWarning(ctx context.Context, warnFocusEvents bo
 const focusHookMarker = "NEXO_AGENT_FOCUS_HOOK=1"
 
 func focusHookCommand(binary, configPath string) string {
-	command := focusHookMarker + " " + shellQuote(binary) + " --backend=" + shellQuote("tmux")
+	// run-shell does not provide TMUX_PANE to child processes, so pass the
+	// focused pane explicitly. Keep the marker first so init can replace its
+	// own hook without accumulating duplicates.
+	command := focusHookMarker + " TMUX_PANE=#{pane_id} " + shellQuote(binary) + " --backend=" + shellQuote("tmux")
 	if configPath != "" {
 		command += " --config-file=" + shellQuote(configPath)
 	}
-	command += " agents seen #{pane_id}"
+	// The focus command records both container history and the agent's seen
+	// transition in one backend path.
+	command += " focus"
 	// -b keeps the durable history write off the synchronous hook queue; the
 	// store's flock preserves ordering between concurrent focus events.
 	return "run-shell -b " + shellQuote(command)

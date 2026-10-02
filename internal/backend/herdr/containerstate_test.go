@@ -48,7 +48,9 @@ func TestRecordFocusEventClassifiesProxyWorkspace(t *testing.T) {
 }
 
 func TestRecordFocusEventIgnoresPayloadWithoutWorkspace(t *testing.T) {
-	runner := &fakeRunner{}
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"api"}]}}`),
+	}}
 	backend := New(runner)
 	backend.usageStateDir = t.TempDir()
 

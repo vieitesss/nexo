@@ -216,6 +216,7 @@ func herdrPathContains(project, candidate string) bool {
 }
 
 var _ capabilities.AgentSource = (*Backend)(nil)
+var _ capabilities.FocusEventRecorder = (*Backend)(nil)
 var _ capabilities.PaneFocuser = (*Backend)(nil)
 var _ capabilities.ProjectUseChecker = (*Backend)(nil)
 
@@ -501,7 +502,10 @@ func (b *Backend) RecordFocusEvent(ctx context.Context, payload []byte) error {
 	if b == nil || b.Runner == nil {
 		return errors.New("herdr container history requires a command runner")
 	}
-	workspaceID := focusEventWorkspace(payload)
+	workspaceID, isFocusEvent := focusEventWorkspace(payload)
+	if !isFocusEvent && strings.TrimSpace(string(payload)) != "" {
+		return nil
+	}
 	if workspaceID == "" {
 		workspaceID = strings.TrimSpace(os.Getenv("HERDR_WORKSPACE_ID"))
 	}
@@ -511,23 +515,31 @@ func (b *Backend) RecordFocusEvent(ctx context.Context, payload []byte) error {
 	return b.recordWorkspace(ctx, workspaceID)
 }
 
-// focusEventWorkspace extracts the workspace id from a Herdr event payload,
+// focusEventWorkspace extracts a workspace id from a Herdr focus event,
 // accepting both the event data itself and a wrapper with an event field.
-func focusEventWorkspace(payload []byte) string {
+// Unrelated events are rejected so a payload that happens to carry a
+// workspace_id cannot create a false history entry.
+func focusEventWorkspace(payload []byte) (string, bool) {
 	if len(payload) == 0 {
-		return ""
+		return "", false
 	}
 	var event struct {
+		Type        string          `json:"type"`
 		WorkspaceID string          `json:"workspace_id"`
 		Event       json.RawMessage `json:"event"`
 	}
 	if err := json.Unmarshal(payload, &event); err != nil {
-		return ""
+		return "", false
 	}
 	if len(event.Event) != 0 && string(event.Event) != "null" {
 		return focusEventWorkspace(event.Event)
 	}
-	return strings.TrimSpace(event.WorkspaceID)
+	switch event.Type {
+	case "workspace_focused", "pane_focused":
+		return strings.TrimSpace(event.WorkspaceID), true
+	default:
+		return "", false
+	}
 }
 
 func (b *Backend) openProjectNative(ctx context.Context, path string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {

@@ -237,6 +237,7 @@ func (c *blockingProxyClock) Sleep(ctx context.Context, _ time.Duration) error {
 }
 
 func TestProxyHistorySurvivesReconnectWithChangedNativeID(t *testing.T) {
+	t.Setenv("TMUX_PANE", "%2")
 	stateDir := t.TempDir()
 	socket := "/tmp/tmux-1000/default"
 	runner := &fakeRunner{outputs: map[string][]byte{
@@ -257,7 +258,7 @@ func TestProxyHistorySurvivesReconnectWithChangedNativeID(t *testing.T) {
 	if err := proxy.RunReconnect(context.Background(), transport, &fakeProxyClock{}, nil, "devbox", "api", time.Second, time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if err := backend.RecordFocusedPane(context.Background(), "%2"); err != nil {
+	if err := backend.RecordFocusEvent(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 
