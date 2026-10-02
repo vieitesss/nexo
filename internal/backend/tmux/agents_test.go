@@ -164,6 +164,46 @@ func TestWatchReportsExistingWatcher(t *testing.T) {
 	}
 }
 
+// Init replaces a watcher with SIGTERM, and tmux reports a non-zero exit from
+// the run-shell that started it, so a signaled stop must succeed.
+func TestWatchSucceedsWhenStoppedBySignal(t *testing.T) {
+	runner := funcRunner(func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "tmux" {
+			return []byte("/tmp/tmux-test\n"), nil
+		}
+		return nil, nil
+	})
+	source := NewAgentSource(runner)
+	setStateDir(source, t.TempDir())
+	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, PollInterval: 1})
+	done := make(chan error, 1)
+	go func() { done <- source.Watch(context.Background()) }()
+
+	// The owner record is written after Watch subscribes to signals, so the
+	// SIGTERM below cannot reach the default handler and kill the test.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(source.watcherPIDPath()); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("watcher did not record its owner")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("signal watcher: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Watch() error = %v, want nil after SIGTERM", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher did not stop after SIGTERM")
+	}
+}
+
 func TestReplaceWatcherDoesNotSignalUnrelatedPID(t *testing.T) {
 	lockDir := t.TempDir()
 	unrelated := exec.Command("sleep", "30")

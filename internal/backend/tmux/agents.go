@@ -803,9 +803,16 @@ func (s *Source) MarkSeen(ctx context.Context, paneID string) error {
 
 // Watch polls until ctx is canceled. A kernel-held file lock makes concurrent
 // watchers for one server explicit and releases automatically on crashes.
-func (s *Source) Watch(ctx context.Context) error {
+func (s *Source) Watch(ctx context.Context) (err error) {
 	watchCtx, stopSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
+	// A signal is an orderly stop: Init replaces watchers with SIGTERM, and
+	// tmux reports any non-zero exit of the run-shell that started this one.
+	defer func() {
+		if err != nil && ctx.Err() == nil && watchCtx.Err() != nil {
+			err = nil
+		}
+	}()
 	watch := s.binary
 	if watch == nil {
 		watch = newBinaryWatch()
