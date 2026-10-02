@@ -124,7 +124,6 @@ func listPlaces(ctx context.Context, invocation Invocation, trace *startup.Trace
 		trace.Mark("screens-read")
 	}
 	catalog := picker.NewCatalog(picker.ProjectPlaces(discovery.Candidates), containers, nil)
-	catalog.SetRemoteMachines(invocation.Config.Remote.ConfiguredMachines())
 	remoteResults := <-remoteResultsCh
 	for _, result := range remoteResults {
 		if result.Error != "" {
