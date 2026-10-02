@@ -97,9 +97,6 @@ func ProjectPlaces(candidates []projects.Candidate) []Place {
 	return places
 }
 
-// LocalMachine returns the machine identity used to group local containers.
-func LocalMachine() string { return containerstate.LocalMachine() }
-
 // ContainerPlaces converts backend containers to machine-grouped picker
 // places. The machine field is deliberately separate from the group so remote
 // sources can add more machines without changing the row model.
@@ -108,7 +105,7 @@ func ContainerPlaces(containers []capabilities.Container) []Place {
 	for _, container := range containers {
 		machine := container.Machine
 		if machine == "" {
-			machine = LocalMachine()
+			machine = containerstate.LocalMachine()
 		}
 		places = append(places, Place{
 			Kind:             ContainerKind,

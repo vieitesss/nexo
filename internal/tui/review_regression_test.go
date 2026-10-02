@@ -15,6 +15,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
 )
@@ -108,7 +109,7 @@ func TestGitDiscoveryRevealsSelectedWorktreeAndRendersStates(t *testing.T) {
 }
 
 func TestReloadDropsOlderSourceResults(t *testing.T) {
-	local := picker.LocalMachine()
+	local := containerstate.LocalMachine()
 	model := NewModel(context.Background(), Deps{
 		Containers:     []capabilities.Container{{ID: "old", Name: "old", Machine: local}},
 		Agents:         []capabilities.Agent{{PaneID: "old", Target: "old", Harness: "pi", State: "working"}},
@@ -161,7 +162,7 @@ func TestProjectSnapshotUpdatesOnlyAfterGenerationAcceptance(t *testing.T) {
 }
 
 func TestPassiveSourcesKeepTheTypedTab(t *testing.T) {
-	local := picker.LocalMachine()
+	local := containerstate.LocalMachine()
 	model := NewModel(context.Background(), Deps{}, ContainersTab)
 	model = updateModel(t, model, keyMsg(tea.KeyRunes, 'a'))
 	model = updateModel(t, model, keyMsg(tea.KeyRunes, 'p'))
@@ -178,7 +179,7 @@ func TestPassiveSourcesKeepTheTypedTab(t *testing.T) {
 }
 
 func TestFirstContainerSnapshotSelectsAnItem(t *testing.T) {
-	local := picker.LocalMachine()
+	local := containerstate.LocalMachine()
 	model := NewModel(context.Background(), Deps{}, ContainersTab)
 	model.source.containerSource = fixedContainerSource{containers: []capabilities.Container{{ID: "api", Name: "api", Machine: local}}}
 	model.source.generations.containers = 1
@@ -219,7 +220,7 @@ func TestOpeningTabFallsBackToContainersOnLocalError(t *testing.T) {
 }
 
 func TestContainerRefreshErrorAfterKillIsRetryable(t *testing.T) {
-	local := picker.LocalMachine()
+	local := containerstate.LocalMachine()
 	deps := Deps{
 		Containers:      []capabilities.Container{{ID: "one", Name: "one", Machine: local}},
 		ContainerSource: fixedContainerSource{},
@@ -254,7 +255,7 @@ func TestContainerRefreshErrorAfterKillIsRetryable(t *testing.T) {
 }
 
 func TestBulkKillAtBottomKeepsNearestRemainingCursor(t *testing.T) {
-	local := picker.LocalMachine()
+	local := containerstate.LocalMachine()
 	deps := Deps{
 		Containers: []capabilities.Container{
 			{ID: "one", Name: "one", Machine: local},
@@ -326,7 +327,7 @@ func TestRemoteLoadCompletionAndMachineScopedAgents(t *testing.T) {
 	if got := len(snapshotAgents(model, "dev", "1")); got != 1 {
 		t.Fatalf("remote association count = %d", got)
 	}
-	if got := len(snapshotAgents(model, picker.LocalMachine(), "1")); got != 1 {
+	if got := len(snapshotAgents(model, containerstate.LocalMachine(), "1")); got != 1 {
 		t.Fatalf("local association count = %d", got)
 	}
 	model.SetSize(100, 12)
@@ -354,7 +355,7 @@ func TestAgentsAreGroupedByMachineAndSearchKeepsHeader(t *testing.T) {
 	}, AgentsTab)
 	model = updateModel(t, model, picker.RemoteBatch{Machine: "dev", Agents: []capabilities.Agent{{PaneID: "remote", Container: "remote-box", Harness: "pi", State: "working"}}})
 	rows := model.Rows()
-	if rows[0] != "machine:"+picker.LocalMachine() || !strings.Contains(strings.Join(rows, "\x00"), "machine:dev") {
+	if rows[0] != "machine:"+containerstate.LocalMachine() || !strings.Contains(strings.Join(rows, "\x00"), "machine:dev") {
 		t.Fatalf("machine order = %v", rows)
 	}
 	model.SetQuery("remote-box")
@@ -502,7 +503,7 @@ func TestAgentRankingAndAttentionOrder(t *testing.T) {
 		{PaneID: "z-harness", Harness: "priority", Container: "one", Target: "one:4", State: "working"},
 	}
 	model := NewModel(context.Background(), Deps{Agents: agents}, AgentsTab)
-	want := []string{"agent:" + picker.LocalMachine() + ":unseen", "agent:" + picker.LocalMachine() + ":a-target", "agent:" + picker.LocalMachine() + ":a-working"}
+	want := []string{"agent:" + containerstate.LocalMachine() + ":unseen", "agent:" + containerstate.LocalMachine() + ":a-target", "agent:" + containerstate.LocalMachine() + ":a-working"}
 	got := make([]string, 0, len(want))
 	for _, row := range model.Rows() {
 		if strings.HasPrefix(row, "agent:") {
@@ -519,7 +520,7 @@ func TestAgentRankingAndAttentionOrder(t *testing.T) {
 			got = append(got, row)
 		}
 	}
-	want = []string{"agent:" + picker.LocalMachine() + ":z-harness", "agent:" + picker.LocalMachine() + ":a-target"}
+	want = []string{"agent:" + containerstate.LocalMachine() + ":z-harness", "agent:" + containerstate.LocalMachine() + ":a-target"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("query-ranked agents = %v, want %v", got, want)
 	}

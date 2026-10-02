@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/startup"
 )
@@ -365,7 +366,7 @@ func (s *sourceState) syncCatalog() {
 		return
 	}
 	snapshot := s.catalog.Snapshot()
-	local := picker.LocalMachine()
+	local := containerstate.LocalMachine()
 	s.agents = nil
 	s.remoteAgents = nil
 	for _, record := range snapshot.Agents {

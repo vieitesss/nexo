@@ -21,6 +21,7 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	cloneflow "github.com/vieitesss/nexo/internal/clone"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/deletion"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/startup"
@@ -357,7 +358,7 @@ func NewModel(ctx context.Context, deps Deps, tab Tab) Model {
 	seenRemoteMachines := make(map[string]bool, len(deps.RemoteMachines))
 	for _, machine := range deps.RemoteMachines {
 		machine = picker.NormalizeMachine(machine)
-		if machine == "" || machine == picker.LocalMachine() || seenRemoteMachines[machine] {
+		if machine == "" || machine == containerstate.LocalMachine() || seenRemoteMachines[machine] {
 			continue
 		}
 		seenRemoteMachines[machine] = true

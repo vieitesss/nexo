@@ -10,14 +10,11 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 )
 
-// InitInput contains the tmux adapter settings for one invocation.
-type InitInput = capabilities.InitInput
-
 var _ capabilities.TmuxInitializer = (*Backend)(nil)
 
 // Init installs hooks and starts the per-server agent watcher. Key bindings
 // belong to the user's tmux.conf.
-func (b *Backend) Init(ctx context.Context, input InitInput) error {
+func (b *Backend) Init(ctx context.Context, input capabilities.InitInput) error {
 	if b == nil || b.Runner == nil {
 		return errors.New("tmux adapter requires a command runner")
 	}

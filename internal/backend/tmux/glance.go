@@ -36,24 +36,15 @@ const (
 	tmuxStatusFormat2SessionListDefault = "#[align=left]#{R: ,#{n:#{session_name}}}S: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{S:#[range=session|#{session_id} #{E:session-status-style}]#[push-default]#S#{session_alert}#[pop-default]#[norange list=on default]  ,#[range=session|#{session_id} list=focus #{?#{!=:#{E:session-status-current-style},default},#{E:session-status-current-style},#{E:session-status-style}}]#[push-default]#S*#{session_alert}#[pop-default]#[norange list=on default] }"
 )
 
-// GlanceAction is one user-bound glance command.
-type GlanceAction = capabilities.GlanceAction
-
-const (
-	GlanceOn     = capabilities.GlanceOn
-	GlanceOff    = capabilities.GlanceOff
-	GlanceToggle = capabilities.GlanceToggle
-)
-
 // ParseGlanceAction validates the glance subcommand argument.
-func ParseGlanceAction(value string) (GlanceAction, error) {
-	switch GlanceAction(strings.TrimSpace(value)) {
-	case GlanceOn:
-		return GlanceOn, nil
-	case GlanceOff:
-		return GlanceOff, nil
-	case GlanceToggle:
-		return GlanceToggle, nil
+func ParseGlanceAction(value string) (capabilities.GlanceAction, error) {
+	switch capabilities.GlanceAction(strings.TrimSpace(value)) {
+	case capabilities.GlanceOn:
+		return capabilities.GlanceOn, nil
+	case capabilities.GlanceOff:
+		return capabilities.GlanceOff, nil
+	case capabilities.GlanceToggle:
+		return capabilities.GlanceToggle, nil
 	default:
 		return "", fmt.Errorf("unknown glance action %q (want on, off or toggle)", value)
 	}
@@ -70,7 +61,7 @@ func (s *Source) ConfigureGlance(cfg config.GlanceConfig) {
 }
 
 // Glance implements the user-bound `nexo tmux glance` command on this server.
-func (s *Source) Glance(ctx context.Context, action GlanceAction) error {
+func (s *Source) Glance(ctx context.Context, action capabilities.GlanceAction) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	release, err := s.lockGlance(ctx)
@@ -92,17 +83,17 @@ func (s *Source) lockGlance(ctx context.Context) (func(), error) {
 	return acquireFileLock(s.statePath("glance"), false)
 }
 
-func (s *Source) glanceLocked(ctx context.Context, action GlanceAction) error {
+func (s *Source) glanceLocked(ctx context.Context, action capabilities.GlanceAction) error {
 	state, err := s.readGlanceState(ctx)
 	if err != nil {
 		return err
 	}
 	switch action {
-	case GlanceOn:
+	case capabilities.GlanceOn:
 		return s.glanceOnLocked(ctx, state)
-	case GlanceOff:
+	case capabilities.GlanceOff:
 		return s.glanceOffLocked(ctx, state)
-	case GlanceToggle:
+	case capabilities.GlanceToggle:
 		if state.Index > 0 {
 			return s.glanceOffLocked(ctx, state)
 		}

@@ -46,7 +46,7 @@ func runTmuxInit(ctx context.Context, invocation Invocation) error {
 	if !ok {
 		return errors.New("selected backend does not support tmux adapter initialization")
 	}
-	return initializer.Init(ctx, tmuxbackend.InitInput{ConfigPath: invocation.ConfigPath})
+	return initializer.Init(ctx, capabilities.InitInput{ConfigPath: invocation.ConfigPath})
 }
 
 func runTmuxGlance(ctx context.Context, invocation Invocation) error {

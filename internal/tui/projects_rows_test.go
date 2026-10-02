@@ -12,6 +12,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
 )
@@ -473,7 +474,7 @@ func TestProjectDivergenceUsesItsOwnColour(t *testing.T) {
 func TestSelectedRowPaintsTheBodyWidthForEveryRowKind(t *testing.T) {
 	deps := Deps{
 		Projects:   projectFixture(),
-		Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: picker.LocalMachine()}},
+		Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: containerstate.LocalMachine()}},
 		Agents:     []capabilities.Agent{{PaneID: "pane", ContainerID: "one", Container: "one", Harness: "pi", Target: "one:0.1", State: "working"}},
 	}
 	background := regexp.MustCompile(`\x1b\[[0-9;:]*([47][0-9]|10[0-7]|48)[^m]*m`)

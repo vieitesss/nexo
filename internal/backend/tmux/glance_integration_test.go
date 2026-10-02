@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 )
 
@@ -41,7 +42,7 @@ func TestTmuxGlanceRow(t *testing.T) {
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 1, PollInterval: 1})
 	source.ConfigureGlance(config.GlanceConfig{Fields: []string{"dot", "target"}})
 
-	if err := source.Glance(ctx, GlanceOn); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOn); err != nil {
 		t.Fatalf("Glance(on) error = %v", err)
 	}
 	if got := readGlanceOption(t, runTmux, "status"); got != "2" {
@@ -75,7 +76,7 @@ func TestTmuxGlanceRow(t *testing.T) {
 		t.Fatalf("rendered row = %q, want the glance label and an entry", rendered)
 	}
 
-	if err := source.Glance(ctx, GlanceOff); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOff); err != nil {
 		t.Fatalf("Glance(off) error = %v", err)
 	}
 	if got := readGlanceOption(t, runTmux, "status"); got != originalStatus {
@@ -162,7 +163,7 @@ func TestTmuxGlancePreservesACustomSecondRow(t *testing.T) {
 	source := NewAgentSource(throwawayRunner(server))
 	setStateDir(source, t.TempDir())
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}})
-	if err := source.Glance(ctx, GlanceOn); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOn); err != nil {
 		t.Fatalf("Glance(on) error = %v", err)
 	}
 	if got := readGlanceOption(t, runTmux, "status"); got != "3" {
@@ -175,7 +176,7 @@ func TestTmuxGlancePreservesACustomSecondRow(t *testing.T) {
 		t.Fatalf("status-format[2] = %q, want the glance row", got)
 	}
 
-	if err := source.Glance(ctx, GlanceOff); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOff); err != nil {
 		t.Fatalf("Glance(off) error = %v", err)
 	}
 	if got := readGlanceOption(t, runTmux, "status"); got != "2" {
@@ -217,7 +218,7 @@ func TestTmuxGlanceSkipsAHiddenCustomRow(t *testing.T) {
 	source := NewAgentSource(throwawayRunner(server))
 	setStateDir(source, t.TempDir())
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}})
-	if err := source.Glance(ctx, GlanceOn); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOn); err != nil {
 		t.Fatalf("Glance(on) error = %v", err)
 	}
 	if got := readGlanceOption(t, runTmux, "status"); got != "3" {
@@ -230,7 +231,7 @@ func TestTmuxGlanceSkipsAHiddenCustomRow(t *testing.T) {
 		t.Fatalf("status-format[2] = %q, want the glance row", got)
 	}
 
-	if err := source.Glance(ctx, GlanceOff); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOff); err != nil {
 		t.Fatalf("Glance(off) error = %v", err)
 	}
 	if got := readGlanceOption(t, runTmux, "status"); got != "on" {
@@ -276,7 +277,7 @@ func TestTmuxGlanceSessionLocalOverride(t *testing.T) {
 	source := NewAgentSource(throwawayRunner(server))
 	setStateDir(source, t.TempDir())
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}})
-	if err := source.Glance(ctx, GlanceOn); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOn); err != nil {
 		t.Fatalf("Glance(on) error = %v", err)
 	}
 	if got := readGlanceOption(t, runTmux, "status"); got != "4" {
@@ -292,7 +293,7 @@ func TestTmuxGlanceSessionLocalOverride(t *testing.T) {
 		t.Fatalf("status-format[3] = %q, want the glance row", got)
 	}
 
-	if err := source.Glance(ctx, GlanceOff); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOff); err != nil {
 		t.Fatalf("Glance(off) error = %v", err)
 	}
 	if got := readGlanceOption(t, runTmux, "status"); got != "on" {
@@ -336,13 +337,13 @@ func TestTmuxGlanceRoundTripsExactRowValues(t *testing.T) {
 			source := NewAgentSource(throwawayRunner(server))
 			setStateDir(source, t.TempDir())
 			source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}})
-			if err := source.Glance(ctx, GlanceOn); err != nil {
+			if err := source.Glance(ctx, capabilities.GlanceOn); err != nil {
 				t.Fatalf("Glance(on) error = %v", err)
 			}
 			if got := readGlanceOptionRaw(t, runTmux, "status-format[1]"); got != value {
 				t.Fatalf("status-format[1] during on = %q, want %q", got, value)
 			}
-			if err := source.Glance(ctx, GlanceOff); err != nil {
+			if err := source.Glance(ctx, capabilities.GlanceOff); err != nil {
 				t.Fatalf("Glance(off) error = %v", err)
 			}
 			listing, err := runTmux("show-options", "-g", "status-format")

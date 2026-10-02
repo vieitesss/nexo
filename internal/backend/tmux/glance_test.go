@@ -19,7 +19,7 @@ import (
 )
 
 func TestParseGlanceAction(t *testing.T) {
-	for input, want := range map[string]GlanceAction{"on": GlanceOn, "off": GlanceOff, "toggle": GlanceToggle, " on ": GlanceOn} {
+	for input, want := range map[string]capabilities.GlanceAction{"on": capabilities.GlanceOn, "off": capabilities.GlanceOff, "toggle": capabilities.GlanceToggle, " on ": capabilities.GlanceOn} {
 		got, err := ParseGlanceAction(input)
 		if err != nil {
 			t.Fatalf("ParseGlanceAction(%q) error = %v", input, err)
@@ -133,7 +133,7 @@ func TestGlanceOnAddsExtraRowAndRaisesStatus(t *testing.T) {
 	fake := newFakeTmuxServer()
 	source := glanceSource(t, fake)
 
-	if err := source.Glance(context.Background(), GlanceOn); err != nil {
+	if err := source.Glance(context.Background(), capabilities.GlanceOn); err != nil {
 		t.Fatalf("Glance(on) error = %v", err)
 	}
 	if got := fake.option("status"); got != "2" {
@@ -165,7 +165,7 @@ func TestGlanceOnSkipsAHiddenCustomRow(t *testing.T) {
 	fake.setOption("status-format[1]", "USER-ROW")
 	source := glanceSource(t, fake)
 
-	if err := source.Glance(context.Background(), GlanceOn); err != nil {
+	if err := source.Glance(context.Background(), capabilities.GlanceOn); err != nil {
 		t.Fatalf("Glance(on) error = %v", err)
 	}
 	if got := fake.option("status"); got != "3" {
@@ -178,7 +178,7 @@ func TestGlanceOnSkipsAHiddenCustomRow(t *testing.T) {
 		t.Fatalf("status-format[2] = %q, want the glance row", got)
 	}
 
-	if err := source.Glance(context.Background(), GlanceOff); err != nil {
+	if err := source.Glance(context.Background(), capabilities.GlanceOff); err != nil {
 		t.Fatalf("Glance(off) error = %v", err)
 	}
 	if got := fake.option("status"); got != "on" {
@@ -199,7 +199,7 @@ func TestGlanceOnRefusesWhenEveryRowIsCustom(t *testing.T) {
 	}
 	source := glanceSource(t, fake)
 
-	if err := source.Glance(context.Background(), GlanceOn); err == nil {
+	if err := source.Glance(context.Background(), capabilities.GlanceOn); err == nil {
 		t.Fatal("Glance(on) error = nil, want all-rows-in-use error")
 	}
 	if got := fake.option("status"); got != "on" {
@@ -217,13 +217,13 @@ func TestGlanceOffPreservesPaddedAndExplicitlyEmptyRows(t *testing.T) {
 			fake.setOption("status-format[1]", value)
 			source := glanceSource(t, fake)
 
-			if err := source.Glance(context.Background(), GlanceOn); err != nil {
+			if err := source.Glance(context.Background(), capabilities.GlanceOn); err != nil {
 				t.Fatalf("Glance(on) error = %v", err)
 			}
 			if got := fake.option("status-format[1]"); got != value {
 				t.Fatalf("status-format[1] during on = %q, want %q", got, value)
 			}
-			if err := source.Glance(context.Background(), GlanceOff); err != nil {
+			if err := source.Glance(context.Background(), capabilities.GlanceOff); err != nil {
 				t.Fatalf("Glance(off) error = %v", err)
 			}
 			if !fake.hasOption("status-format[1]") {
@@ -243,7 +243,7 @@ func TestGlanceOnRaisesSessionLocalStatus(t *testing.T) {
 	fake.setSessionOption("$1", "status-format[1]", "LOCAL")
 	source := glanceSource(t, fake)
 
-	if err := source.Glance(context.Background(), GlanceOn); err != nil {
+	if err := source.Glance(context.Background(), capabilities.GlanceOn); err != nil {
 		t.Fatalf("Glance(on) error = %v", err)
 	}
 	if got := fake.option("status"); got != "4" {
@@ -259,7 +259,7 @@ func TestGlanceOnRaisesSessionLocalStatus(t *testing.T) {
 		t.Fatalf("global status-format[3] = %q, want the glance row", got)
 	}
 
-	if err := source.Glance(context.Background(), GlanceOff); err != nil {
+	if err := source.Glance(context.Background(), capabilities.GlanceOff); err != nil {
 		t.Fatalf("Glance(off) error = %v", err)
 	}
 	if got := fake.option("status"); got != "on" {
@@ -282,7 +282,7 @@ func TestGlanceLeavesAHiddenSessionStatusOff(t *testing.T) {
 	source := glanceSource(t, fake)
 	ctx := context.Background()
 
-	if err := source.Glance(ctx, GlanceOn); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOn); err != nil {
 		t.Fatalf("Glance(on) error = %v", err)
 	}
 	if err := source.reconcileGlanceLocked(ctx, nil); err != nil {
@@ -295,7 +295,7 @@ func TestGlanceLeavesAHiddenSessionStatusOff(t *testing.T) {
 		t.Fatalf("hidden session row = %q, want unset", got)
 	}
 
-	if err := source.Glance(ctx, GlanceOff); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOff); err != nil {
 		t.Fatal(err)
 	}
 	if got := fake.sessionOption("$1", "status"); got != "off" {
@@ -307,7 +307,7 @@ func TestGlanceReconcileHandlesANewSession(t *testing.T) {
 	fake := newFakeTmuxServer()
 	source := glanceSource(t, fake)
 	ctx := context.Background()
-	if err := source.Glance(ctx, GlanceOn); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOn); err != nil {
 		t.Fatal(err)
 	}
 	fake.addSession("$1", "late")
@@ -324,7 +324,7 @@ func TestGlanceReconcileHandlesANewSession(t *testing.T) {
 		t.Fatal("new session missing from the saved state")
 	}
 
-	if err := source.Glance(ctx, GlanceOff); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOff); err != nil {
 		t.Fatal(err)
 	}
 	if got := fake.sessionOption("$1", "status"); got != "1" {
@@ -336,7 +336,7 @@ func TestGlanceReconcileOverridesASessionLocalRow(t *testing.T) {
 	fake := newFakeTmuxServer()
 	source := glanceSource(t, fake)
 	ctx := context.Background()
-	if err := source.Glance(ctx, GlanceOn); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOn); err != nil {
 		t.Fatal(err)
 	}
 	fake.addSession("$1", "late")
@@ -354,7 +354,7 @@ func TestGlanceReconcileOverridesASessionLocalRow(t *testing.T) {
 		t.Fatalf("saved session format = %+v, want SHADOW", saved)
 	}
 
-	if err := source.Glance(ctx, GlanceOff); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOff); err != nil {
 		t.Fatal(err)
 	}
 	if got := fake.sessionOption("$1", "status-format[1]"); got != "SHADOW" {
@@ -367,7 +367,7 @@ func TestGlanceReconcileSkipsUnchangedWrites(t *testing.T) {
 	dir := t.TempDir()
 	source := glanceSourceIn(t, fake, dir)
 	ctx := context.Background()
-	if err := source.Glance(ctx, GlanceOn); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOn); err != nil {
 		t.Fatal(err)
 	}
 	agents := []capabilities.Agent{{PaneID: "%1", Target: "zeta:1.0", Harness: "pi", State: "stopped"}}
@@ -421,7 +421,7 @@ func TestGlanceOnRetriesAfterAnInterruptedActivation(t *testing.T) {
 	ctx := context.Background()
 	fake.listError = errors.New("boom")
 
-	if err := source.Glance(ctx, GlanceOn); err == nil {
+	if err := source.Glance(ctx, capabilities.GlanceOn); err == nil {
 		t.Fatal("Glance(on) error = nil, want the listing error")
 	}
 	if fake.hasOption(glanceStateOption) {
@@ -432,7 +432,7 @@ func TestGlanceOnRetriesAfterAnInterruptedActivation(t *testing.T) {
 	}
 
 	fake.listError = nil
-	if err := source.Glance(ctx, GlanceOn); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOn); err != nil {
 		t.Fatalf("retry Glance(on) error = %v", err)
 	}
 	if got := fake.option("status"); got != "2" {
@@ -445,7 +445,7 @@ func TestGlanceOnRetriesAfterAnInterruptedActivation(t *testing.T) {
 	// A retry after a later interruption (status lowered externally) also
 	// finishes activation instead of only refreshing the row.
 	fake.setOption("status", "on")
-	if err := source.Glance(ctx, GlanceOn); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOn); err != nil {
 		t.Fatalf("Glance(on) refresh error = %v", err)
 	}
 	if got := fake.option("status"); got != "2" {
@@ -456,7 +456,7 @@ func TestGlanceOnRetriesAfterAnInterruptedActivation(t *testing.T) {
 func TestGlanceOffWithoutStateIsNoop(t *testing.T) {
 	fake := newFakeTmuxServer()
 	source := glanceSource(t, fake)
-	if err := source.Glance(context.Background(), GlanceOff); err != nil {
+	if err := source.Glance(context.Background(), capabilities.GlanceOff); err != nil {
 		t.Fatalf("Glance(off) error = %v", err)
 	}
 	if got := fake.option("status"); got != "on" {
@@ -467,13 +467,13 @@ func TestGlanceOffWithoutStateIsNoop(t *testing.T) {
 func TestGlanceToggleFlipsTheRow(t *testing.T) {
 	fake := newFakeTmuxServer()
 	source := glanceSource(t, fake)
-	if err := source.Glance(context.Background(), GlanceToggle); err != nil {
+	if err := source.Glance(context.Background(), capabilities.GlanceToggle); err != nil {
 		t.Fatal(err)
 	}
 	if !fake.hasOption(glanceStateOption) {
 		t.Fatal("toggle on left no state")
 	}
-	if err := source.Glance(context.Background(), GlanceToggle); err != nil {
+	if err := source.Glance(context.Background(), capabilities.GlanceToggle); err != nil {
 		t.Fatal(err)
 	}
 	if fake.hasOption(glanceStateOption) {
@@ -491,10 +491,10 @@ func TestGlanceIndependentTogglesRestoreTheOriginal(t *testing.T) {
 	second := glanceSourceIn(t, fake, dir)
 	ctx := context.Background()
 
-	if err := first.Glance(ctx, GlanceToggle); err != nil {
+	if err := first.Glance(ctx, capabilities.GlanceToggle); err != nil {
 		t.Fatalf("first toggle error = %v", err)
 	}
-	if err := second.Glance(ctx, GlanceToggle); err != nil {
+	if err := second.Glance(ctx, capabilities.GlanceToggle); err != nil {
 		t.Fatalf("second toggle error = %v", err)
 	}
 	if fake.hasOption(glanceStateOption) {
@@ -514,7 +514,7 @@ func TestGlanceOffWaitsForAConcurrentWatcherPoll(t *testing.T) {
 	watcher := glanceSourceIn(t, fake, dir)
 	cli := glanceSourceIn(t, fake, dir)
 	ctx := context.Background()
-	if err := cli.Glance(ctx, GlanceOn); err != nil {
+	if err := cli.Glance(ctx, capabilities.GlanceOn); err != nil {
 		t.Fatal(err)
 	}
 
@@ -539,7 +539,7 @@ func TestGlanceOffWaitsForAConcurrentWatcherPoll(t *testing.T) {
 	}
 
 	offErr := make(chan error, 1)
-	go func() { offErr <- cli.Glance(ctx, GlanceOff) }()
+	go func() { offErr <- cli.Glance(ctx, capabilities.GlanceOff) }()
 	time.Sleep(50 * time.Millisecond)
 	close(release)
 

@@ -500,7 +500,7 @@ func (b *Backend) ConfigureGlance(cfg config.GlanceConfig) {
 }
 
 // Glance implements the user-bound `nexo tmux glance` command.
-func (b *Backend) Glance(ctx context.Context, action GlanceAction) error {
+func (b *Backend) Glance(ctx context.Context, action capabilities.GlanceAction) error {
 	if b == nil || b.agents == nil {
 		return errors.New("tmux glance requires an agent source")
 	}

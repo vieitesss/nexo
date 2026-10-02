@@ -13,6 +13,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
 )
@@ -29,7 +30,7 @@ func keyMsg(key tea.KeyType, runes ...rune) tea.KeyMsg {
 
 func testContainerDeps() Deps {
 	return Deps{Containers: []capabilities.Container{
-		{ID: "one", Name: "one", Machine: picker.LocalMachine()},
+		{ID: "one", Name: "one", Machine: containerstate.LocalMachine()},
 		{ID: "two", Name: "two", Machine: "remote"},
 	}}
 }
@@ -225,10 +226,10 @@ func TestSelectedRowBackgroundCoversEveryCell(t *testing.T) {
 		{
 			name: "matched pill container",
 			model: NewModel(context.Background(), Deps{
-				Containers: []capabilities.Container{{ID: "one", Name: "東京😀", Machine: picker.LocalMachine()}},
+				Containers: []capabilities.Container{{ID: "one", Name: "東京😀", Machine: containerstate.LocalMachine()}},
 				Agents:     []capabilities.Agent{{ContainerID: "one", Container: "東京😀", Harness: "pi", Target: "one:0.1", State: "working"}},
 			}, ContainersTab),
-			selected: "container:" + picker.LocalMachine() + ":one",
+			selected: "container:" + containerstate.LocalMachine() + ":one",
 			query:    "東京",
 		},
 	}
@@ -289,7 +290,7 @@ func TestSelectedStateColoursMatchUnselected(t *testing.T) {
 	previous := lipgloss.HasDarkBackground()
 	t.Cleanup(func() { lipgloss.SetHasDarkBackground(previous) })
 	since := time.Now().Add(-2 * time.Hour)
-	deps := Deps{Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: picker.LocalMachine()}}, Agents: []capabilities.Agent{
+	deps := Deps{Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: containerstate.LocalMachine()}}, Agents: []capabilities.Agent{
 		{PaneID: "red", ContainerID: "one", Container: "one", Harness: "pi", State: "stopped", StoppedSince: &since},
 		{PaneID: "grey", ContainerID: "one", Container: "one", Harness: "pi", State: "stopped", Seen: true, StoppedSince: &since},
 		{PaneID: "amber", ContainerID: "one", Container: "one", Harness: "pi", State: "working"},
@@ -390,7 +391,7 @@ func BenchmarkContainerRowsMultiMachine(b *testing.B) {
 	containers := make([]capabilities.Container, 0, 30)
 	for index := 0; index < 30; index++ {
 		id := "local-" + strconv.Itoa(index)
-		containers = append(containers, capabilities.Container{ID: id, Name: id, Machine: picker.LocalMachine()})
+		containers = append(containers, capabilities.Container{ID: id, Name: id, Machine: containerstate.LocalMachine()})
 	}
 	model := NewModel(context.Background(), Deps{Containers: containers, RemoteMachines: machines}, ContainersTab)
 	for _, machine := range machines {

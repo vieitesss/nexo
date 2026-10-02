@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vieitesss/nexo/internal/capabilities"
 )
 
 func TestTmuxAdapterInitIsIdempotentAndPreservesIndexedHooks(t *testing.T) {
@@ -35,7 +37,7 @@ func TestTmuxAdapterInitIsIdempotentAndPreservesIndexedHooks(t *testing.T) {
 	})
 	backend := New(tmuxRunner, true)
 	for i := 0; i < 2; i++ {
-		if err := backend.Init(context.Background(), InitInput{ConfigPath: ""}); err != nil {
+		if err := backend.Init(context.Background(), capabilities.InitInput{ConfigPath: ""}); err != nil {
 			t.Fatalf("Init() #%d error = %v", i+1, err)
 		}
 	}

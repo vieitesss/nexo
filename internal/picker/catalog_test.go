@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 )
 
 func TestCatalogSnapshotMergesSourcesAndAssociatesAgents(t *testing.T) {
@@ -82,7 +83,7 @@ func TestCatalogKeepsDistinctContainersWithSharedLabel(t *testing.T) {
 			t.Fatalf("container %q agents = %#v, want only %q", id, place.Agents, want)
 		}
 	}
-	local := LocalMachine()
+	local := containerstate.LocalMachine()
 	marked := catalog.Marked(map[ContainerRef]bool{
 		{Machine: local, ID: "one"}: true,
 		{Machine: local, ID: "two"}: true,

@@ -13,6 +13,7 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	cloneflow "github.com/vieitesss/nexo/internal/clone"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/deletion"
 	"github.com/vieitesss/nexo/internal/destination"
 	gitops "github.com/vieitesss/nexo/internal/git"
@@ -232,7 +233,7 @@ func tuiDependencies(ctx context.Context, invocation Invocation) (tui.Deps, erro
 			remoteGroups[index].ids = append(remoteGroups[index].ids, ref.ID)
 		}
 		if len(localIDs) > 0 {
-			actions, resolveErr := (localContainerResolver{adapter: invocation.Adapter}).ResolveContainerActions(actionCtx, picker.LocalMachine())
+			actions, resolveErr := (localContainerResolver{adapter: invocation.Adapter}).ResolveContainerActions(actionCtx, containerstate.LocalMachine())
 			if resolveErr != nil {
 				return resolveErr
 			}
@@ -266,7 +267,7 @@ func tuiDependencies(ctx context.Context, invocation Invocation) (tui.Deps, erro
 		return remoteOrchestrator.New(actionCtx, remote.MachineResult{Machine: target.Machine, Kind: remote.Kind(target.Backend)}, name)
 	}
 	deps.FocusAgent = func(focusCtx context.Context, ref tui.AgentRef) error {
-		if ref.Machine != "" && ref.Machine != picker.LocalMachine() {
+		if ref.Machine != "" && ref.Machine != containerstate.LocalMachine() {
 			return remoteOrchestrator.FocusAgent(focusCtx, remote.MachineResult{
 				Machine: ref.Machine,
 				Kind:    remote.Kind(ref.Backend),

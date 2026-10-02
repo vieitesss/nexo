@@ -7,25 +7,25 @@ import (
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/backend"
-	tmuxbackend "github.com/vieitesss/nexo/internal/backend/tmux"
+	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 )
 
 type fakeTmuxInitializer struct{ configPath string }
 
-func (f *fakeTmuxInitializer) Init(_ context.Context, input tmuxbackend.InitInput) error {
+func (f *fakeTmuxInitializer) Init(_ context.Context, input capabilities.InitInput) error {
 	f.configPath = input.ConfigPath
 	return nil
 }
 
 type fakeGlanceController struct {
-	action tmuxbackend.GlanceAction
+	action capabilities.GlanceAction
 	config config.GlanceConfig
 }
 
 func (f *fakeGlanceController) ConfigureGlance(cfg config.GlanceConfig) { f.config = cfg }
 
-func (f *fakeGlanceController) Glance(_ context.Context, action tmuxbackend.GlanceAction) error {
+func (f *fakeGlanceController) Glance(_ context.Context, action capabilities.GlanceAction) error {
 	f.action = action
 	return nil
 }
@@ -63,7 +63,7 @@ func TestTmuxGlanceDispatchesActionAndConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if controller.action != tmuxbackend.GlanceToggle {
+	if controller.action != capabilities.GlanceToggle {
 		t.Fatalf("action = %q, want toggle", controller.action)
 	}
 	if controller.config.Tint != "red" {

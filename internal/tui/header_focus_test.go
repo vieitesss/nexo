@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
 )
@@ -35,7 +36,7 @@ func machineHeaderScreenY(t *testing.T, model Model, machine string) int {
 // section header is not a selectable row: no keyboard step and no click may
 // land the cursor on it.
 func TestMachineHeadersAreSkippedByKeyboardAndMouse(t *testing.T) {
-	local := picker.LocalMachine()
+	local := containerstate.LocalMachine()
 	model := NewModel(context.Background(), Deps{Containers: []capabilities.Container{
 		{ID: "one", Name: "one", Machine: local},
 		{ID: "two", Name: "two", Machine: local},
@@ -82,7 +83,7 @@ func TestAgentMachineHeadersAreSkippedByKeyboardAndMouse(t *testing.T) {
 	}
 
 	cursor := model.Cursor()
-	y := machineHeaderScreenY(t, model, picker.LocalMachine())
+	y := machineHeaderScreenY(t, model, containerstate.LocalMachine())
 	model = updateModel(t, model, tea.MouseMsg{X: 4, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	if model.Cursor() != cursor {
 		t.Fatalf("click on agent machine header moved cursor: %q -> %q", cursor, model.Cursor())
