@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vieitesss/nexo/internal/runner"
 )
@@ -139,6 +140,24 @@ type Installation struct {
 	Version  string
 }
 
+// ProgressStep identifies a real phase of an installation.
+type ProgressStep string
+
+const (
+	ProgressBuilding   ProgressStep = "building"
+	ProgressCopying    ProgressStep = "copying"
+	ProgressInstalling ProgressStep = "installing"
+)
+
+// ProgressEvent reports a phase transition without exposing target details.
+// The caller associates events with its machine when work is concurrent.
+type ProgressEvent struct {
+	Step ProgressStep
+}
+
+// ProgressFunc receives installation phase transitions.
+type ProgressFunc func(ProgressEvent)
+
 // Request identifies the source to install. Ref is a release tag or the
 // resolved commit of a nightly.
 type Request struct {
@@ -146,6 +165,15 @@ type Request struct {
 	Repository string
 	// Local builds the ref on the command's machine when the target cannot.
 	Local *LocalBuilder
+	// Progress receives real installation phase transitions. It may be called
+	// from a worker goroutine.
+	Progress ProgressFunc
+}
+
+func (r Request) report(step ProgressStep) {
+	if r.Progress != nil {
+		r.Progress(ProgressEvent{Step: step})
+	}
 }
 
 func (r Request) repository() string {
@@ -429,10 +457,14 @@ func Install(ctx context.Context, target Target, request Request) (Installation,
 		return Installation{}, fmt.Errorf("close build staging file: %w", err)
 	}
 	defer func() { _ = os.Remove(stagedPath) }()
+	request.report(ProgressBuilding)
 	if err := request.Local.Build(ctx, request.repository(), ref, current.Platform, stagedPath); err != nil {
 		return Installation{}, err
 	}
-	if err := CopyAtomic(ctx, target, stagedPath, current.RealPath); err != nil {
+	request.report(ProgressCopying)
+	if err := copyAtomic(ctx, target, stagedPath, current.RealPath, func() {
+		request.report(ProgressInstalling)
+	}); err != nil {
 		return Installation{}, err
 	}
 	updated, err := Detect(ctx, target)
@@ -450,33 +482,48 @@ func Install(ctx context.Context, target Target, request Request) (Installation,
 // a locally built binary: a replacement either lands whole or leaves the old
 // executable untouched.
 func CopyAtomic(ctx context.Context, target Target, source, destination string) error {
+	return copyAtomic(ctx, target, source, destination, nil)
+}
+
+func copyAtomic(ctx context.Context, target Target, source, destination string, beforePublish func()) error {
 	contents, err := os.ReadFile(source)
 	if err != nil {
 		return fmt.Errorf("read built nexo binary: %w", err)
 	}
 	if !target.IsRemote() {
-		return writeAtomic(destination, contents)
+		return writeAtomic(destination, contents, beforePublish)
 	}
 	digest := sha256.Sum256(contents)
-	script := copyScript(destination, len(contents), hex.EncodeToString(digest[:]))
+	// Transfer and publish are separate remote actions so the installing
+	// event denotes the actual atomic rename rather than verification after it.
+	temporary := fmt.Sprintf("%s.nexo-copy.%d.tmp", destination, time.Now().UnixNano())
+	script := copyTransferScript(destination, temporary, len(contents), hex.EncodeToString(digest[:]))
 	if _, err := target.runInput(ctx, contents, "sh", "-c", script); err != nil {
 		return fmt.Errorf("copy nexo binary to %s: %w", target.Machine, err)
+	}
+	if beforePublish != nil {
+		beforePublish()
+	}
+	if _, err := target.run(ctx, "mv", temporary, destination); err != nil {
+		_, _ = target.run(context.WithoutCancel(ctx), "rm", "-f", temporary)
+		return fmt.Errorf("install nexo binary on %s: %w", target.Machine, err)
 	}
 	return nil
 }
 
-// copyScript is the remote receiver for CopyAtomic. It refuses to publish a
-// truncated or altered transfer, so the existing executable stays intact when
-// the connection drops.
-func copyScript(destination string, size int, digest string) string {
+// copyTransferScript is the remote receiver for CopyAtomic. It refuses to
+// stage a truncated or altered transfer and leaves the staged file for the
+// caller's publish action, so the existing executable stays intact when the
+// connection drops.
+func copyTransferScript(destination, temporary string, size int, digest string) string {
 	count := strconv.Itoa(size)
 	return fmt.Sprintf(
-		"set -eu; dest=%s; dir=$(dirname \"$dest\"); mkdir -p \"$dir\"; tmp=$(mktemp \"$dir/.nexo-copy.XXXXXX\"); trap 'rm -f \"$tmp\"' EXIT; cat >\"$tmp\"; size=$(wc -c <\"$tmp\" | tr -d ' '); [ \"$size\" = %s ] || { echo \"nexo: transfer truncated at $size of %s bytes\" >&2; exit 1; }; if command -v sha256sum >/dev/null 2>&1; then sum=$(sha256sum \"$tmp\" | cut -d' ' -f1); else sum=$(shasum -a 256 \"$tmp\" | cut -d' ' -f1); fi; [ \"$sum\" = %s ] || { echo \"nexo: transfer checksum mismatch\" >&2; exit 1; }; chmod 0755 \"$tmp\"; mv -f \"$tmp\" \"$dest\"; trap - EXIT",
-		shellQuote(destination), shellQuote(count), shellQuote(count), shellQuote(digest),
+		"set -eu; dest=%s; tmp=%s; dir=$(dirname \"$dest\"); mkdir -p \"$dir\"; trap 'rm -f \"$tmp\"' EXIT; : >\"$tmp\"; cat >\"$tmp\"; size=$(wc -c <\"$tmp\" | tr -d ' '); [ \"$size\" = %s ] || { echo \"nexo: transfer truncated at $size of %s bytes\" >&2; exit 1; }; if command -v sha256sum >/dev/null 2>&1; then sum=$(sha256sum \"$tmp\" | cut -d' ' -f1); else sum=$(shasum -a 256 \"$tmp\" | cut -d' ' -f1); fi; [ \"$sum\" = %s ] || { echo \"nexo: transfer checksum mismatch\" >&2; exit 1; }; chmod 0755 \"$tmp\"; trap - EXIT",
+		shellQuote(destination), shellQuote(temporary), shellQuote(count), shellQuote(count), shellQuote(digest),
 	)
 }
 
-func writeAtomic(path string, contents []byte) error {
+func writeAtomic(path string, contents []byte, beforePublish func()) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -500,6 +547,9 @@ func writeAtomic(path string, contents []byte) error {
 	}
 	if err := file.Close(); err != nil {
 		return err
+	}
+	if beforePublish != nil {
+		beforePublish()
 	}
 	return os.Rename(temporary, path)
 }
