@@ -89,6 +89,48 @@ func TestTmuxGlanceRow(t *testing.T) {
 	}
 }
 
+// TestTmuxGlanceOnBeforeAnySession pins enabling glance from a config file:
+// tmux sources it on a fresh server before the first session exists, so on
+// must succeed with no panes and the later session must show the row.
+func TestTmuxGlanceOnBeforeAnySession(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	for _, name := range []string{"TMUX", "TMUX_PANE", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"} {
+		t.Setenv(name, "")
+	}
+	ctx := context.Background()
+	server := "nexo-test-glance-" + strings.ReplaceAll(t.Name(), "/", "-")
+	runTmux := throwawayTmux(server)
+	t.Cleanup(func() { _, _ = runTmux("kill-server") })
+
+	if output, err := runTmux("start-server", ";", "set-option", "-s", "exit-empty", "off"); err != nil {
+		t.Fatalf("start empty server: %v: %s", err, output)
+	}
+
+	source := NewAgentSource(throwawayRunner(server))
+	setStateDir(source, t.TempDir())
+	source.ConfigureGlance(config.GlanceConfig{Fields: []string{"dot", "target"}})
+
+	if err := source.Glance(ctx, GlanceOn); err != nil {
+		t.Fatalf("Glance(on) error = %v", err)
+	}
+	if output, err := runTmux("new-session", "-d", "-s", "work"); err != nil {
+		t.Fatalf("create session: %v: %s", err, output)
+	}
+	effective, err := runTmux("display-message", "-p", "-t", "work", "#{status}\t#{status-format[1]}")
+	if err != nil {
+		t.Fatalf("read session options: %v: %s", err, effective)
+	}
+	status, row, _ := strings.Cut(strings.TrimRight(string(effective), "\n"), "\t")
+	if status != "2" {
+		t.Fatalf("session status = %q, want 2", status)
+	}
+	if !strings.Contains(row, "nexo │") {
+		t.Fatalf("session status-format[1] = %q, want the glance row", row)
+	}
+}
+
 // TestTmuxGlancePreservesACustomSecondRow pins that enabling glance with a
 // two-line status bar takes a third row instead of overwriting the user's.
 func TestTmuxGlancePreservesACustomSecondRow(t *testing.T) {

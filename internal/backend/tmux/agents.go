@@ -205,6 +205,11 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 	format := "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{session_id}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_index}\t#{window_id}\t#{&&:#{session_attached},#{&&:#{window_active},#{pane_active}}}\t#{pane_current_path}"
 	output, err := s.runTmux(ctx, "list-panes", "-a", "-F", format)
 	if err != nil {
+		// tmux sources its config on a fresh server before the first session
+		// exists, and `list-panes -a` then fails instead of listing nothing.
+		if strings.Contains(interactiveStderr(err), "no current target") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("list tmux panes: %w", err)
 	}
 	allow := make(map[string]struct{}, len(cfg.Processes))
