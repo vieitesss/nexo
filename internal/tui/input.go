@@ -411,21 +411,21 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 		if s.tab == ProjectsTab {
 			if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ProjectKind {
 				s.form = newCloneForm(s.deps, s.ctx)
-				return inputEffect{rebuild: true}
+				return inputEffect{rebuild: true, cmd: s.form.initialFocusCmd()}
 			}
 		}
 		return inputEffect{}
 	case tea.KeyCtrlD:
 		if s.tab == ProjectsTab {
 			s.form = newDirectoryForm(s.deps, s.ctx)
-			return inputEffect{rebuild: true}
+			return inputEffect{rebuild: true, cmd: s.form.initialFocusCmd()}
 		}
 		return inputEffect{}
 	case tea.KeyCtrlE:
 		if s.tab == ProjectsTab {
 			if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ProjectKind && current.place.Git {
 				s.form = newExtractForm(s.deps, current.place, s.ctx)
-				return inputEffect{rebuild: true}
+				return inputEffect{rebuild: true, cmd: s.form.initialFocusCmd()}
 			}
 		}
 		return inputEffect{}
@@ -704,7 +704,7 @@ func (s *inputState) accept(rows []row) inputEffect {
 		target := RemoteTarget{Machine: current.machine, Backend: current.backend}
 		if name == "" {
 			s.form = newRemoteNewForm(s.ctx, target, "")
-			return inputEffect{rebuild: true}
+			return inputEffect{rebuild: true, cmd: s.form.initialFocusCmd()}
 		}
 		if message := remoteContainerNameError(name); message != "" {
 			// A multiline paste is a search query, not a valid name. Prefill a

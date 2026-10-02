@@ -548,7 +548,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.input.actionInFlight = false
 			m.rebuild(false)
-			return m, nil
+			var focus tea.Cmd
+			if m.input.form != nil {
+				focus = m.input.form.focusCurrent()
+			}
+			return m, focus
 		}
 		if msg.kind == "clone" || msg.kind == "mkdir" || msg.kind == "extract" || msg.kind == "delete" {
 			if msg.generation != 0 && msg.generation != m.input.actionGeneration {
@@ -666,6 +670,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.form = nil
 		m.cancelBackgroundLoads()
 		return m, tea.Quit
+	case stagedFormMsg:
+		if m.input.form == nil || msg.generation != m.input.form.generation {
+			return m, nil
+		}
+		effect := m.input.form.updateMsg(msg)
+		if effect.Changed {
+			m.rebuild(false)
+		}
+		return m, effect.Cmd
 	}
 	if update, ok := m.source.Accept(msg); ok {
 		if _, projectError := msg.(projectsMsg); projectError && update.projects == nil {

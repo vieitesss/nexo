@@ -28,8 +28,8 @@ func newExtractForm(deps Deps, place picker.Place, ctx context.Context) *stagedF
 		returnBranch = strings.TrimSpace(returnBranch)
 	}
 	form := newStagedForm(ctx, []formStage{
-		{ID: "destination", Title: "destination", Fields: []formField{{ID: "destination", Label: "path", Value: destinationSuggestion}}},
-		{ID: "return-branch", Title: "return branch", Fields: []formField{{ID: "return-branch", Label: "branch", Value: returnBranch}}},
+		{ID: "destination", Title: "destination", Fields: []formField{{ID: "destination", Label: "path", Default: destinationSuggestion, Kind: formText, Placeholder: "worktree directory", AbbreviateHome: true}}},
+		{ID: "return-branch", Title: "return branch", Fields: []formField{{ID: "return-branch", Label: "branch", Default: returnBranch, Kind: formText, Placeholder: "optional branch"}}},
 	}, extractFormValidation(deps), extractFormSubmit(deps, place.Path))
 	form.busyLabel = "extracting…"
 	if suggestionErr != nil {
@@ -64,10 +64,10 @@ func extractFormValidation(deps Deps) func(*stagedForm) formValidation {
 	}
 }
 
-func extractFormSubmit(deps Deps, repo string) func(context.Context, map[string]string, uint64) tea.Cmd {
-	return func(actionCtx context.Context, values map[string]string, generation uint64) tea.Cmd {
-		destinationValue := strings.TrimSpace(values["destination"])
-		returnBranch := strings.TrimSpace(values["return-branch"])
+func extractFormSubmit(deps Deps, repo string) func(context.Context, formValues, uint64) tea.Cmd {
+	return func(actionCtx context.Context, values formValues, generation uint64) tea.Cmd {
+		destinationValue := strings.TrimSpace(values.String("destination"))
+		returnBranch := strings.TrimSpace(values.String("return-branch"))
 		extract := deps.ExtractWorktree
 		return func() tea.Msg {
 			if extract == nil {

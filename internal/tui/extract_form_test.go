@@ -82,7 +82,7 @@ func TestExtractFormKeepsInlineDestinationError(t *testing.T) {
 		Home:     root,
 	}
 	model := openExtractForm(t, extractTestModel(t, deps))
-	model.input.form.stages[0].Fields[0].Value = existing
+	model.input.form.setFieldValue("destination", existing)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	want := `destination "` + existing + `" already exists`

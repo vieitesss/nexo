@@ -84,17 +84,8 @@ func TestCloneFormKeepsInlineDestinationError(t *testing.T) {
 
 func TestCloneFormNormalizesWhitespacePrefixBeforeDefaultSelection(t *testing.T) {
 	form := newCloneForm(Deps{}, context.Background())
-	for stageIndex := range form.stages {
-		for fieldIndex := range form.stages[stageIndex].Fields {
-			field := &form.stages[stageIndex].Fields[fieldIndex]
-			switch field.ID {
-			case "source":
-				field.Value = "owner/repo"
-			case "prefix":
-				field.Value = "   "
-			}
-		}
-	}
+	form.setFieldValue("source", "owner/repo")
+	form.setFieldValue("prefix", "   ")
 	if !form.applyValidation() {
 		t.Fatalf("validation error = %q", form.stageError)
 	}
@@ -105,19 +96,9 @@ func TestCloneFormNormalizesWhitespacePrefixBeforeDefaultSelection(t *testing.T)
 
 func TestCloneFormReplacesOppositeProtocolDefaultAfterWhitespace(t *testing.T) {
 	form := newCloneForm(Deps{}, context.Background())
-	for stageIndex := range form.stages {
-		for fieldIndex := range form.stages[stageIndex].Fields {
-			field := &form.stages[stageIndex].Fields[fieldIndex]
-			switch field.ID {
-			case "protocol":
-				field.Value = "https"
-			case "source":
-				field.Value = "owner/repo"
-			case "prefix":
-				field.Value = "  git@github.com:  "
-			}
-		}
-	}
+	form.setFieldValue("protocol", "https")
+	form.setFieldValue("source", "owner/repo")
+	form.setFieldValue("prefix", "  git@github.com:  ")
 	if !form.applyValidation() {
 		t.Fatalf("validation error = %q", form.stageError)
 	}

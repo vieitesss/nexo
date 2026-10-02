@@ -42,16 +42,19 @@ func newDeleteForm(deps Deps, ctx context.Context, path string) *deleteForm {
 	}
 	state.stagedForm = newStagedForm(ctx, []formStage{
 		{ID: "target", Title: "delete project", Fields: []formField{
-			{ID: "path", Label: "path", Value: path, ReadOnly: true},
+			{ID: "path", Label: "path", Kind: formDisplay, Default: path, AbbreviateHome: true},
 		}},
 		{ID: "preflight", Title: "preflight", Fields: nil},
 		{ID: "confirmation", Title: "confirm deletion", Fields: []formField{
-			{ID: "mode", Label: "mode (trash/permanent)", Value: "trash"},
-			{ID: "force", Label: "accept warnings (yes/no)", Value: "no"},
-			{ID: "confirm", Label: "type yes to delete", Value: "no"},
+			{ID: "mode", Label: "mode", Default: "trash", Kind: formChoice, Options: []string{"trash", "permanent"}},
+			{ID: "force", Label: "accept warnings", Default: "no", Kind: formToggle},
+			{ID: "confirm", Label: "type yes to delete", Default: "no", Kind: formText, Placeholder: "yes"},
 		}},
 	}, state.validate, nil)
 	state.keyHook = state.key
+	state.fieldVisibilityHook = func(_ formStage, field formField) bool {
+		return field.ID != "force" || state.plan == nil || len(state.plan.Warnings) > 0
+	}
 	state.stageLinesHook = state.stageLines
 	state.viewportHook = state.viewport
 	state.submit = deleteFormSubmit(deps, state)
@@ -69,8 +72,9 @@ func (d *deleteForm) preflightStage() int {
 }
 
 func (d *deleteForm) validate(form *stagedForm) formValidation {
-	result := formValidation{Values: map[string]string{}}
-	path := formValue(form, "path")
+	result := formValidation{}
+	values := form.values()
+	path := values.String("path")
 	if path == "" {
 		result.Error = "path is required"
 		return result
@@ -96,22 +100,11 @@ func (d *deleteForm) validate(form *stagedForm) formValidation {
 		}
 		return result
 	}
-	mode := strings.ToLower(formValue(form, "mode"))
-	if mode != "trash" && mode != "permanent" {
-		result.Error = "mode must be trash or permanent"
-		return result
-	}
-	force := strings.ToLower(formValue(form, "force"))
-	if force != "yes" && force != "no" {
-		result.Error = "accept warnings must be yes or no"
-		return result
-	}
-	confirm := strings.ToLower(formValue(form, "confirm"))
-	if confirm != "yes" {
+	if strings.ToLower(values.String("confirm")) != "yes" {
 		result.Error = "type yes to confirm deletion"
 		return result
 	}
-	if len(d.plan.Warnings) > 0 && force != "yes" {
+	if len(d.plan.Warnings) > 0 && !values.Bool("force") {
 		result.Error = "accept warnings must be yes"
 		return result
 	}
@@ -119,11 +112,11 @@ func (d *deleteForm) validate(form *stagedForm) formValidation {
 	return result
 }
 
-func deleteFormSubmit(deps Deps, form *deleteForm) func(context.Context, map[string]string, uint64) tea.Cmd {
-	return func(actionCtx context.Context, values map[string]string, generation uint64) tea.Cmd {
-		path := values["path"]
-		permanent := strings.EqualFold(values["mode"], "permanent")
-		force := strings.EqualFold(values["force"], "yes")
+func deleteFormSubmit(deps Deps, form *deleteForm) func(context.Context, formValues, uint64) tea.Cmd {
+	return func(actionCtx context.Context, values formValues, generation uint64) tea.Cmd {
+		path := values.String("path")
+		permanent := strings.EqualFold(values.String("mode"), "permanent")
+		force := values.Bool("force")
 		plan := form.plan
 		return func() tea.Msg {
 			if deps.DeleteProjectPlan == nil || plan == nil {

@@ -16,7 +16,7 @@ func newRemoteNewForm(ctx context.Context, target RemoteTarget, initialName stri
 	form := newStagedForm(ctx, []formStage{{
 		ID:     "name",
 		Title:  "new container on " + target.Machine,
-		Fields: []formField{{ID: "name", Label: "name", Value: initialName}},
+		Fields: []formField{{ID: "name", Label: "name", Default: initialName, Kind: formText, Placeholder: "container name"}},
 	}}, remoteNewFormValidation(), remoteNewFormSubmit(target))
 	form.busyLabel = "creating…"
 	return form
@@ -50,9 +50,9 @@ func remoteNewFormValidation() func(*stagedForm) formValidation {
 // policy never fights the still-painted interface. The message carries the
 // submitted generation and the command honors cancellation, so a late result
 // from a canceled or replaced form can never run the action.
-func remoteNewFormSubmit(target RemoteTarget) func(context.Context, map[string]string, uint64) tea.Cmd {
-	return func(actionCtx context.Context, values map[string]string, generation uint64) tea.Cmd {
-		name := strings.TrimSpace(values["name"])
+func remoteNewFormSubmit(target RemoteTarget) func(context.Context, formValues, uint64) tea.Cmd {
+	return func(actionCtx context.Context, values formValues, generation uint64) tea.Cmd {
+		name := strings.TrimSpace(values.String("name"))
 		return func() tea.Msg {
 			if actionCtx != nil && actionCtx.Err() != nil {
 				return nil
