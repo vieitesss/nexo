@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/picker"
 )
 
 type agentsCommand struct{}
@@ -28,14 +28,17 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 	if configurable, ok := invocation.Adapter.(interface{ ConfigureAgents(config.AgentsConfig) }); ok {
 		configurable.ConfigureAgents(invocation.Config.Agents)
 	}
-	if configurable, ok := invocation.Adapter.(interface {
-		ConfigureGlance(config.GlanceConfig)
-	}); ok {
-		configurable.ConfigureGlance(invocation.Config.Glance)
-	}
 	if len(invocation.Args) > 0 {
 		switch invocation.Args[0] {
 		case "watch":
+			if len(invocation.Args) != 1 {
+				return UsageError{Err: errors.New("usage: nexo agents watch")}
+			}
+			if configurable, ok := invocation.Adapter.(interface {
+				ConfigureGlance(config.GlanceConfig)
+			}); ok {
+				configurable.ConfigureGlance(invocation.Config.Glance)
+			}
 			if configurable, ok := invocation.Adapter.(interface {
 				ConfigureAgentCommand(string, string)
 			}); ok {
@@ -61,15 +64,7 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	sort.SliceStable(agents, func(i, j int) bool {
-		if agents[i].State != agents[j].State {
-			return agents[i].State == "stopped"
-		}
-		if agents[i].State == "stopped" && agents[i].Seen != agents[j].Seen {
-			return !agents[i].Seen
-		}
-		return agents[i].Target < agents[j].Target
-	})
+	agents = picker.SortAgents(agents)
 	if invocation.JSON {
 		return json.NewEncoder(invocation.Stdout).Encode(agents)
 	}

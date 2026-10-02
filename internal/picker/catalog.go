@@ -199,7 +199,7 @@ func (c *Catalog) Snapshot() CatalogSnapshot {
 		} else if remote, ok := c.remote[machine]; ok {
 			source = remote.agents
 		}
-		places = applyAgentDots(places, source, machine)
+		places = associateAgents(places, source, machine)
 	}
 
 	status := make(map[string]MachineStatus, len(c.remote)+1)

@@ -3,7 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -19,14 +19,15 @@ func (f fakeAgentSource) ListAgents(context.Context) ([]capabilities.Agent, erro
 	return f.agents, nil
 }
 
-func TestAgentsPickIsRemoved(t *testing.T) {
+func TestAgentsWatchRejectsArguments(t *testing.T) {
 	command, ok := NewRegistry().Lookup("agents")
 	if !ok {
 		t.Fatal("agents command is not registered")
 	}
-	err := command.Run(context.Background(), Invocation{Args: []string{"pick"}, Adapter: fakeAgentSource{}, Stdout: io.Discard})
-	if err == nil || !strings.Contains(err.Error(), `unknown agents command "pick"`) {
-		t.Fatalf("Run() error = %v, want removed entry point error", err)
+	err := command.Run(context.Background(), Invocation{Args: []string{"watch", "extra"}, Adapter: fakeAgentSource{}})
+	var usage UsageError
+	if !errors.As(err, &usage) || usage.Error() != "usage: nexo agents watch" {
+		t.Fatalf("Run() error = %v, want usage error", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package picker
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -35,5 +36,20 @@ func TestAgentHelpers(t *testing.T) {
 	}
 	if StoppedAge(time.Unix(0, 0), time.Unix(-23*60*60, 0)) != "23h" {
 		t.Fatal("sub-day age should use hours")
+	}
+}
+
+func TestSortAgentsUsesOneCanonicalAttentionOrder(t *testing.T) {
+	agents := []capabilities.Agent{
+		{PaneID: "%3", Target: "zeta", State: "working"},
+		{PaneID: "%2", Target: "alpha", State: "stopped", Seen: true},
+		{PaneID: "%4", Target: "alpha", State: "stopped", Seen: false},
+	}
+	ordered := SortAgents(agents)
+	if got := []string{ordered[0].PaneID, ordered[1].PaneID, ordered[2].PaneID}; strings.Join(got, ",") != "%4,%3,%2" {
+		t.Fatalf("ordered pane IDs = %v, want %%4,%%3,%%2", got)
+	}
+	if agents[0].PaneID != "%3" {
+		t.Fatal("SortAgents mutated its input")
 	}
 }

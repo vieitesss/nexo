@@ -22,7 +22,6 @@ func TestRenderHighlightStyle(t *testing.T) {
 		{name: "palette name", colour: "colour123", want: "fg=colour123"},
 		{name: "hex colour", colour: "#ff0000", want: "fg=#ff0000"},
 		{name: "full style verbatim", colour: "bg=red,bold", want: "bg=red,bold"},
-		{name: "empty falls back to red", colour: "", want: "fg=red"},
 		{name: "whitespace is trimmed", colour: "  red  ", want: "fg=red"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

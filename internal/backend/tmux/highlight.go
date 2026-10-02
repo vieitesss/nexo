@@ -29,9 +29,6 @@ var highlightWindowOptions = [...]string{"window-status-style", "window-status-c
 // user may configure either "red" or a full style such as "bg=red,bold".
 func renderHighlightStyle(colour string) string {
 	colour = strings.TrimSpace(colour)
-	if colour == "" {
-		colour = "red"
-	}
 	if strings.Contains(colour, "=") {
 		return colour
 	}

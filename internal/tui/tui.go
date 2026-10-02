@@ -14,7 +14,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -208,7 +207,7 @@ func DefaultTab(agents []capabilities.Agent) Tab { return defaultTab(agents) }
 
 func defaultTab(agents []capabilities.Agent) Tab {
 	for _, agent := range agents {
-		if strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && !agent.Seen {
+		if picker.AttentionRank(agent) == 0 {
 			return AgentsTab
 		}
 	}

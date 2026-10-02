@@ -5,13 +5,12 @@
 package glance
 
 import (
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/shell"
 )
 
@@ -54,13 +53,8 @@ const unknownAge = "-"
 // zero or less means the width is unknown and no truncation is applied; tmux
 // clips the row itself in that case.
 func Render(agents []capabilities.Agent, cfg config.GlanceConfig, width int, now time.Time) string {
-	return render(agents, cfg, width, now)
-}
-
-func render(agents []capabilities.Agent, cfg config.GlanceConfig, width int, now time.Time) string {
 	cfg = cfg.WithDefaults()
-	ordered := append([]capabilities.Agent(nil), agents...)
-	sort.SliceStable(ordered, func(i, j int) bool { return less(ordered[i], ordered[j]) })
+	ordered := picker.SortAgents(agents)
 
 	fields := cfg.OrderedFields()
 	entries := make([]entry, 0, len(ordered))
@@ -161,13 +155,11 @@ func stateDot(state agentState, cfg config.GlanceConfig) (string, string) {
 // agentStateOf classifies an agent for drawing. Anything that is neither
 // working nor an unseen stopped agent is drawn as seen stopped.
 func agentStateOf(agent capabilities.Agent) agentState {
-	switch strings.ToLower(strings.TrimSpace(agent.State)) {
-	case "working":
+	if picker.AttentionRank(agent) == 0 {
+		return stateUnseenStopped
+	}
+	if strings.EqualFold(strings.TrimSpace(agent.State), "working") {
 		return stateWorking
-	case "stopped":
-		if !agent.Seen {
-			return stateUnseenStopped
-		}
 	}
 	return stateSeenStopped
 }
@@ -176,54 +168,7 @@ func age(agent capabilities.Agent, now time.Time) string {
 	if !strings.EqualFold(strings.TrimSpace(agent.State), "stopped") || agent.StoppedSince == nil {
 		return unknownAge
 	}
-	return formatAge(now, *agent.StoppedSince)
-}
-
-// formatAge renders a compact duration for the stopped age.
-func formatAge(now, since time.Time) string {
-	seconds := int(now.Sub(since) / time.Second)
-	if seconds < 0 {
-		seconds = 0
-	}
-	if seconds < 60 {
-		return strconv.Itoa(seconds) + "s"
-	}
-	minutes := seconds / 60
-	if minutes < 60 {
-		return strconv.Itoa(minutes) + "m"
-	}
-	hours := minutes / 60
-	if hours < 24 {
-		return strconv.Itoa(hours) + "h"
-	}
-	return strconv.Itoa(hours/24) + "d"
-}
-
-// less orders agents the way the row reads: unseen stopped first, then
-// working, then seen stopped, with a stable tie-break.
-func less(a, b capabilities.Agent) bool {
-	rankA, rankB := attentionRank(a), attentionRank(b)
-	if rankA != rankB {
-		return rankA < rankB
-	}
-	if a.Target != b.Target {
-		return a.Target < b.Target
-	}
-	return a.PaneID < b.PaneID
-}
-
-func attentionRank(agent capabilities.Agent) int {
-	switch strings.ToLower(strings.TrimSpace(agent.State)) {
-	case "stopped":
-		if !agent.Seen {
-			return 0
-		}
-		return 2
-	case "working":
-		return 1
-	default:
-		return 3
-	}
+	return picker.StoppedAge(now, *agent.StoppedSince)
 }
 
 // colourStyle turns a configured colour into a tmux style for attribute, fg
