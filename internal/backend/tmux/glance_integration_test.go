@@ -113,7 +113,7 @@ func TestTmuxGlanceOnBeforeAnySession(t *testing.T) {
 	setStateDir(source, t.TempDir())
 	source.ConfigureGlance(config.GlanceConfig{Fields: []string{"dot", "target"}})
 
-	if err := source.Glance(ctx, GlanceOn); err != nil {
+	if err := source.Glance(ctx, capabilities.GlanceOn); err != nil {
 		t.Fatalf("Glance(on) error = %v", err)
 	}
 	if output, err := runTmux("new-session", "-d", "-s", "work"); err != nil {
