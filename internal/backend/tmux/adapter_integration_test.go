@@ -12,6 +12,9 @@ import (
 )
 
 func TestTmuxAdapterInitIsIdempotentAndPreservesIndexedHooks(t *testing.T) {
+	// A legacy hook is one an older nexo installed without -b and with a
+	// command the current binary no longer accepts.
+	const legacyHook = `run-shell "NEXO_AGENT_FOCUS_HOOK=1 'nexo' --backend='tmux' agents seen #{pane_id}"`
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")
 	}
@@ -27,7 +30,7 @@ func TestTmuxAdapterInitIsIdempotentAndPreservesIndexedHooks(t *testing.T) {
 		t.Fatalf("create throwaway tmux server: %v\n%s", err, output)
 	}
 	defer func() { _, _ = run("kill-server") }()
-	for _, command := range [][]string{{"set-option", "-g", "focus-events", "on"}, {"set-hook", "-g", "pane-focus-in[3]", "display-message user-focus"}, {"set-hook", "-g", "client-session-changed[4]", "display-message user-session"}} {
+	for _, command := range [][]string{{"set-option", "-g", "focus-events", "on"}, {"set-hook", "-g", "pane-focus-in[3]", "display-message user-focus"}, {"set-hook", "-g", "client-session-changed[4]", "display-message user-session"}, {"set-hook", "-g", "pane-focus-in[0]", legacyHook}, {"set-hook", "-g", "client-session-changed[0]", legacyHook}} {
 		if output, err := run(command...); err != nil {
 			t.Fatalf("%v: %v\n%s", command, err, output)
 		}
@@ -45,6 +48,9 @@ func TestTmuxAdapterInitIsIdempotentAndPreservesIndexedHooks(t *testing.T) {
 		output := string(mustRun(t, run, "show-hooks", "-g", hook))
 		if strings.Count(output, "NEXO_AGENT_FOCUS_HOOK=1") != 1 {
 			t.Fatalf("%s hooks = %q, want one nexo hook after repeated init", hook, output)
+		}
+		if strings.Contains(output, "agents seen") {
+			t.Fatalf("%s hooks = %q, want the legacy nexo hook replaced", hook, output)
 		}
 	}
 	focus := string(mustRun(t, run, "show-hooks", "-g", "pane-focus-in"))

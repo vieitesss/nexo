@@ -905,10 +905,17 @@ func (s *Source) installHooksWithWarning(ctx context.Context, warnFocusEvents bo
 		if err != nil {
 			return fmt.Errorf("read tmux %s hooks: %w", hook, err)
 		}
-		index := nexoHookIndex(string(output), hook)
-		if index >= 0 {
-			if _, err := s.runTmux(ctx, "set-hook", "-g", fmt.Sprintf("%s[%d]", hook, index), command); err != nil {
+		indices := nexoHookIndices(string(output), hook)
+		if len(indices) > 0 {
+			if _, err := s.runTmux(ctx, "set-hook", "-g", fmt.Sprintf("%s[%d]", hook, indices[0]), command); err != nil {
 				return err
+			}
+			// Hooks left by older nexo versions may run commands this binary no
+			// longer accepts, so keep only the one just rewritten.
+			for _, index := range indices[1:] {
+				if _, err := s.runTmux(ctx, "set-hook", "-gu", fmt.Sprintf("%s[%d]", hook, index)); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -943,7 +950,11 @@ func focusHookCommand(binary, configPath string) string {
 	return "run-shell -b " + shellQuote(command)
 }
 
-func nexoHookIndex(output, hook string) int {
+// nexoHookIndices returns the index of every focus hook any nexo version
+// installed, in tmux's display order. Older versions ran the hook without -b,
+// so match the marker inside any run-shell command rather than one exact form.
+func nexoHookIndices(output, hook string) []int {
+	var indices []int
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		prefix := hook + "["
@@ -955,12 +966,13 @@ func nexoHookIndex(output, hook string) int {
 			continue
 		}
 		index, err := strconv.Atoi(line[len(prefix) : len(prefix)+end])
-		if err != nil || !strings.HasPrefix(strings.TrimSpace(line[len(prefix)+end+1:]), `run-shell -b "`+focusHookMarker+" ") {
+		command := strings.TrimSpace(line[len(prefix)+end+1:])
+		if err != nil || !strings.HasPrefix(command, "run-shell ") || !strings.Contains(command, `"`+focusHookMarker+" ") {
 			continue
 		}
-		return index
+		indices = append(indices, index)
 	}
-	return -1
+	return indices
 }
 
 func acquireWatcherLock(path string) (func(), error) {
