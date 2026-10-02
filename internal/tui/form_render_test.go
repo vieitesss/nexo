@@ -17,7 +17,7 @@ func TestCompletedSummaryFitsDialogInnerWidth(t *testing.T) {
 	t.Setenv("HOME", home)
 	path := filepath.Join(home, "scratchpad", "verify", "forms", "sandbox", "home", "src", "gamma")
 	form := newStagedForm(context.Background(), []formStage{
-		{ID: "target", Title: "\x1b[1mdelete project\x1b[0m", Fields: []formField{{ID: "path", Label: "path", Kind: formDisplay, Display: path}}},
+		{ID: "target", Title: "\x1b[1mdelete project\x1b[0m", Fields: []formField{{ID: "path", Label: "path", Kind: formDisplay, Default: path, AbbreviateHome: true}}},
 		{ID: "next", Title: "next"},
 	}, nil, nil)
 	form.stage = 1
@@ -45,7 +45,7 @@ func TestSummaryAbbreviatesHomePath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	form := newStagedForm(context.Background(), []formStage{
-		{ID: "target", Title: "delete project", Fields: []formField{{ID: "path", Label: "path", Kind: formDisplay, Display: filepath.Join(home, "src")}}},
+		{ID: "target", Title: "delete project", Fields: []formField{{ID: "path", Label: "path", Kind: formDisplay, Default: filepath.Join(home, "src"), AbbreviateHome: true}}},
 		{ID: "next", Title: "next"},
 	}, nil, nil)
 	form.stage = 1

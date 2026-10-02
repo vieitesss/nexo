@@ -14,7 +14,7 @@ import (
 
 func newCloneForm(deps Deps, ctx context.Context) *stagedForm {
 	clone := deps.CloneConfig.WithDefaults()
-	destinationFields := []formField{{ID: "destination", Label: "path", Default: "", Kind: formText, Placeholder: "project directory"}}
+	destinationFields := []formField{{ID: "destination", Label: "path", Default: "", Kind: formText, Placeholder: "project directory", AbbreviateHome: true}}
 	if deps.AddProjectPath != nil {
 		destinationFields = append(destinationFields, formField{ID: "add-parent", Label: "add parent", Default: "no", Kind: formToggle})
 	}
@@ -67,19 +67,8 @@ func cloneFormValidation(deps Deps) func(*stagedForm) formValidation {
 			return result
 		}
 		result.Values["destination"] = request.Destination
-		if deps.AddProjectPath != nil {
-			choice := strings.ToLower(strings.TrimSpace(formValue(form, "add-parent")))
-			if choice == "" {
-				choice = "no"
-				result.Values["add-parent"] = choice
-			}
-			if choice != "yes" && choice != "no" {
-				result.Error = "add parent must be yes or no"
-				return result
-			}
-			if resolved.AddParent {
-				result.Notice = fmt.Sprintf("parent %q is not in project paths; choose whether to add it", resolved.Parent)
-			}
+		if deps.AddProjectPath != nil && resolved.AddParent {
+			result.Notice = fmt.Sprintf("parent %q is not in project paths; choose whether to add it", resolved.Parent)
 		}
 		return result
 	}
@@ -97,7 +86,7 @@ func cloneFormSubmit(deps Deps) func(context.Context, formValues, uint64) tea.Cm
 		source := strings.TrimSpace(values.String("source"))
 		prefix := strings.TrimSpace(values.String("prefix"))
 		destinationValue := strings.TrimSpace(values.String("destination"))
-		addParent := strings.EqualFold(strings.TrimSpace(values.String("add-parent")), "yes")
+		addParent := values.Bool("add-parent")
 		cloneProject := deps.CloneProject
 		return func() tea.Msg {
 			if cloneProject == nil {
@@ -114,11 +103,4 @@ func cloneFormSubmit(deps Deps) func(context.Context, formValues, uint64) tea.Cm
 			return actionMsg{kind: "clone", destination: destinationValue, generation: generation}
 		}
 	}
-}
-
-func formValue(form *stagedForm, id string) string {
-	if form == nil {
-		return ""
-	}
-	return form.values().String(id)
 }

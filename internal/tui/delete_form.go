@@ -42,7 +42,7 @@ func newDeleteForm(deps Deps, ctx context.Context, path string) *deleteForm {
 	}
 	state.stagedForm = newStagedForm(ctx, []formStage{
 		{ID: "target", Title: "delete project", Fields: []formField{
-			{ID: "path", Label: "path", Kind: formDisplay, Display: path},
+			{ID: "path", Label: "path", Kind: formDisplay, Default: path, AbbreviateHome: true},
 		}},
 		{ID: "preflight", Title: "preflight", Fields: nil},
 		{ID: "confirmation", Title: "confirm deletion", Fields: []formField{
@@ -72,8 +72,9 @@ func (d *deleteForm) preflightStage() int {
 }
 
 func (d *deleteForm) validate(form *stagedForm) formValidation {
-	result := formValidation{Values: map[string]string{}}
-	path := formValue(form, "path")
+	result := formValidation{}
+	values := form.values()
+	path := values.String("path")
 	if path == "" {
 		result.Error = "path is required"
 		return result
@@ -99,22 +100,11 @@ func (d *deleteForm) validate(form *stagedForm) formValidation {
 		}
 		return result
 	}
-	mode := strings.ToLower(formValue(form, "mode"))
-	if mode != "trash" && mode != "permanent" {
-		result.Error = "mode must be trash or permanent"
-		return result
-	}
-	force := strings.ToLower(formValue(form, "force"))
-	if force != "yes" && force != "no" {
-		result.Error = "accept warnings must be yes or no"
-		return result
-	}
-	confirm := strings.ToLower(formValue(form, "confirm"))
-	if confirm != "yes" {
+	if strings.ToLower(values.String("confirm")) != "yes" {
 		result.Error = "type yes to confirm deletion"
 		return result
 	}
-	if len(d.plan.Warnings) > 0 && force != "yes" {
+	if len(d.plan.Warnings) > 0 && !values.Bool("force") {
 		result.Error = "accept warnings must be yes"
 		return result
 	}
@@ -126,7 +116,7 @@ func deleteFormSubmit(deps Deps, form *deleteForm) func(context.Context, formVal
 	return func(actionCtx context.Context, values formValues, generation uint64) tea.Cmd {
 		path := values.String("path")
 		permanent := strings.EqualFold(values.String("mode"), "permanent")
-		force := strings.EqualFold(values.String("force"), "yes")
+		force := values.Bool("force")
 		plan := form.plan
 		return func() tea.Msg {
 			if deps.DeleteProjectPlan == nil || plan == nil {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,22 +33,27 @@ const (
 )
 
 type formValues struct {
-	strings map[string]string
-	lists   map[string][]string
+	text  map[string]string
+	lists map[string][]string
 }
 
 func (v formValues) String(id string) string {
-	return v.strings[id]
+	return v.text[id]
 }
 
 func (v formValues) List(id string) []string {
 	return append([]string(nil), v.lists[id]...)
 }
 
+func (v formValues) Bool(id string) bool {
+	return strings.EqualFold(strings.TrimSpace(v.text[id]), "yes")
+}
+
 // formField describes one focused control. Mutable state belongs to the
 // control for its kind: textinput owns text, choice owns its selected index,
 // toggle owns its boolean, and a checklist owns selected bits plus its cursor.
-// Default and InitialSelected are construction inputs, not a second value.
+// Default seeds text/toggle/choice state or holds a display value, and
+// InitialSelected seeds a checklist; neither is a second value.
 type formField struct {
 	ID         string
 	Label      string
@@ -59,7 +65,7 @@ type formField struct {
 	Placeholder     string
 	Default         string
 	InitialSelected []string
-	Display         string
+	AbbreviateHome  bool
 	Validate        func(string, formValues) error
 
 	input          textinput.Model
@@ -68,6 +74,35 @@ type formField struct {
 	toggleValue    bool
 	multiSelected  []bool
 	multiCursor    int
+}
+
+// setValue applies a string to the control that owns this kind's state.
+func (field *formField) setValue(value string) {
+	switch field.Kind {
+	case formText:
+		field.invalidDefault = ""
+		field.input.SetValue(value)
+	case formChoice:
+		field.choiceIndex = optionIndex(field.Options, value)
+	case formToggle:
+		field.toggleValue = strings.EqualFold(strings.TrimSpace(value), "yes")
+	case formDisplay:
+		field.Default = value
+	}
+}
+
+// setError keeps a textinput's own validation state in lockstep with the error
+// the staged form displays, so editing after a cross-field change cannot
+// surface a stale message.
+func (field *formField) setError(message string) {
+	field.Error = message
+	if field.Kind != formText {
+		return
+	}
+	field.input.Err = nil
+	if message != "" {
+		field.input.Err = errors.New(message)
+	}
 }
 
 type formStage struct {
@@ -162,10 +197,8 @@ func newStagedForm(ctx context.Context, stages []formStage, validate func(*stage
 				if field.input.Err != nil {
 					field.Error = field.input.Err.Error()
 				}
-			case formChoice:
-				field.choiceIndex = optionIndex(field.Options, field.Default)
-			case formToggle:
-				field.toggleValue = strings.EqualFold(strings.TrimSpace(field.Default), "yes")
+			case formChoice, formToggle:
+				field.setValue(field.Default)
 			case formMultiSelect:
 				field.multiSelected = make([]bool, len(field.Options))
 				for _, selected := range field.InitialSelected {
@@ -173,8 +206,6 @@ func newStagedForm(ctx context.Context, stages []formStage, validate func(*stage
 						field.multiSelected[index] = true
 					}
 				}
-			case formDisplay:
-				// Display fields have no keyboard-editable state.
 			}
 		}
 	}
@@ -316,36 +347,33 @@ func (f *stagedForm) moveField(delta int) formEffect {
 }
 
 func (f *stagedForm) values() formValues {
-	values := formValues{strings: make(map[string]string), lists: make(map[string][]string)}
+	values := formValues{text: make(map[string]string), lists: make(map[string][]string)}
 	for _, stage := range f.stages {
 		for _, field := range stage.Fields {
 			if field.Kind == formMultiSelect {
 				values.lists[field.ID] = f.selectedOptions(field)
 				continue
 			}
-			values.strings[field.ID] = f.fieldStringValue(field)
+			values.text[field.ID] = f.fieldStringValue(field)
 		}
 	}
 	return values
 }
 
+// formValue reads one field's current value. Validators and submits use it so
+// they do not need to know a form's stage layout.
+func formValue(form *stagedForm, id string) string {
+	if form == nil {
+		return ""
+	}
+	return form.values().String(id)
+}
+
 func (f *stagedForm) setFieldValue(id, value string) {
 	for stageIndex := range f.stages {
 		for fieldIndex := range f.stages[stageIndex].Fields {
-			field := &f.stages[stageIndex].Fields[fieldIndex]
-			if field.ID != id {
-				continue
-			}
-			switch field.Kind {
-			case formText:
-				field.invalidDefault = ""
-				field.input.SetValue(value)
-			case formChoice:
-				field.choiceIndex = optionIndex(field.Options, value)
-			case formToggle:
-				field.toggleValue = strings.EqualFold(strings.TrimSpace(value), "yes")
-			case formDisplay:
-				field.Display = value
+			if field := &f.stages[stageIndex].Fields[fieldIndex]; field.ID == id {
+				field.setValue(value)
 			}
 		}
 	}
@@ -463,12 +491,15 @@ func (f *stagedForm) key(msg tea.KeyMsg) formEffect {
 		return f.previousField()
 	}
 	if field != nil && field.Kind == formText {
-		return f.updateText(msg)
+		return f.updateInput(msg)
 	}
 	return formEffect{}
 }
 
-func (f *stagedForm) updateText(msg tea.KeyMsg) formEffect {
+// updateInput forwards a key or component message to the focused textinput.
+// Only the current form's text field accepts it, so a blink or paste result
+// from a canceled form can never mutate a replacement one.
+func (f *stagedForm) updateInput(msg tea.Msg) formEffect {
 	field := f.currentField()
 	if field == nil || field.Kind != formText {
 		return formEffect{}
@@ -487,31 +518,14 @@ func (f *stagedForm) updateText(msg tea.KeyMsg) formEffect {
 	return formEffect{Changed: true, Cmd: f.wrapComponentCmd(cmd)}
 }
 
-// updateMsg forwards a command result to the focused textinput. Only wrapped
-// component messages are accepted, and their generation must still belong to
-// this form; that keeps blink/paste results from a canceled or replaced form
-// from mutating the next one.
+// updateMsg unwraps a command result whose generation still belongs to this
+// form before forwarding it to the focused textinput.
 func (f *stagedForm) updateMsg(msg tea.Msg) formEffect {
 	component, ok := msg.(stagedFormMsg)
 	if !ok || component.generation != f.generation {
 		return formEffect{}
 	}
-	field := f.currentField()
-	if field == nil || field.Kind != formText {
-		return formEffect{}
-	}
-	before := field.input.Value()
-	updated, cmd := field.input.Update(component.msg)
-	field.input = updated
-	if before != updated.Value() {
-		field.invalidDefault = ""
-	}
-	field.Error = ""
-	if updated.Err != nil {
-		field.Error = updated.Err.Error()
-	}
-	f.stageError = ""
-	return formEffect{Changed: true, Cmd: f.wrapComponentCmd(cmd)}
+	return f.updateInput(component.msg)
 }
 
 func optionIndex(options []string, value string) int {
@@ -667,12 +681,12 @@ func (f stagedForm) renderLines() []string {
 			}
 			if field.Kind == formMultiSelect {
 				lines = append(lines, prefix+field.Label)
-				for optionIndex, option := range field.Options {
+				for index, option := range field.Options {
 					marker := "○"
-					if optionIndex < len(field.multiSelected) && field.multiSelected[optionIndex] {
+					if index < len(field.multiSelected) && field.multiSelected[index] {
 						marker = "●"
 					}
-					if active && field.multiCursor == optionIndex {
+					if active && field.multiCursor == index {
 						lines = append(lines, "    ▸ "+marker+" "+option)
 					} else {
 						lines = append(lines, "      "+marker+" "+option)
@@ -721,19 +735,10 @@ func (f stagedForm) renderLines() []string {
 
 func (f stagedForm) summaryFieldValue(field formField) string {
 	value := f.fieldStringValue(field)
-	if isPathField(field.ID) {
+	if field.AbbreviateHome {
 		value = abbreviatePathList(value)
 	}
 	return value
-}
-
-func isPathField(id string) bool {
-	switch id {
-	case "path", "paths", "destination":
-		return true
-	default:
-		return false
-	}
 }
 
 func (f stagedForm) fieldStringValue(field formField) string {
@@ -752,9 +757,16 @@ func (f stagedForm) fieldStringValue(field formField) string {
 	case formMultiSelect:
 		return strings.Join(f.selectedOptions(field), ", ")
 	case formDisplay:
-		return field.Display
+		return field.Default
 	}
 	return ""
+}
+
+func boolLabel(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }
 
 func (f stagedForm) selectedOptions(field formField) []string {

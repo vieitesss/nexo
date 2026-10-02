@@ -38,12 +38,7 @@ func overlayForm(lines []string, form *stagedForm, width, height int) []string {
 	if len(body) > maxBody {
 		if !customStart {
 			// Keep the active field visible on every ordinary stage.
-			for index, line := range body {
-				if strings.HasPrefix(line, "▸ ") {
-					start = max(0, index-maxBody/2)
-					break
-				}
-			}
+			start = max(0, activeFormLine(body)-maxBody/2)
 		}
 		start = min(start, len(body)-maxBody)
 		body = body[start : start+maxBody]
@@ -70,6 +65,23 @@ func overlayForm(lines []string, form *stagedForm, width, height int) []string {
 		lines[lineIndex] = strings.Repeat(" ", startX) + modalLine + strings.Repeat(" ", max(0, width-startX-modalWidth))
 	}
 	return lines
+}
+
+// activeFormLine returns the index of the line the cursor is on, preferring
+// the checklist option marker over the focused-field marker. It returns -1
+// when neither is present.
+func activeFormLine(lines []string) int {
+	for index, line := range lines {
+		if strings.HasPrefix(line, "    ▸ ") {
+			return index
+		}
+	}
+	for index, line := range lines {
+		if strings.HasPrefix(line, "▸ ") {
+			return index
+		}
+	}
+	return -1
 }
 
 func formLinesForWidth(lines []string, width int) []string {

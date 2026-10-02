@@ -16,7 +16,7 @@ import (
 // optional add-parent field. Creation is a plain filesystem action; it never
 // touches Git or a multiplexer and never opens or focuses a container.
 func newDirectoryForm(deps Deps, ctx context.Context) *stagedForm {
-	fields := []formField{{ID: "destination", Label: "path", Default: "", Kind: formText, Placeholder: "project directory"}}
+	fields := []formField{{ID: "destination", Label: "path", Default: "", Kind: formText, Placeholder: "project directory", AbbreviateHome: true}}
 	if deps.AddProjectPath != nil {
 		fields = append(fields, formField{ID: "add-parent", Label: "add parent", Default: "no", Kind: formToggle})
 	}
@@ -44,19 +44,8 @@ func directoryFormValidation(deps Deps) func(*stagedForm) formValidation {
 			return result
 		}
 		result.Values["destination"] = resolved.Path
-		if deps.AddProjectPath != nil {
-			choice := strings.ToLower(strings.TrimSpace(formValue(form, "add-parent")))
-			if choice == "" {
-				choice = "no"
-				result.Values["add-parent"] = choice
-			}
-			if choice != "yes" && choice != "no" {
-				result.Error = "add parent must be yes or no"
-				return result
-			}
-			if resolved.AddParent {
-				result.Notice = fmt.Sprintf("parent %q is not in project paths; choose whether to add it", resolved.Parent)
-			}
+		if deps.AddProjectPath != nil && resolved.AddParent {
+			result.Notice = fmt.Sprintf("parent %q is not in project paths; choose whether to add it", resolved.Parent)
 		}
 		return result
 	}
@@ -65,7 +54,7 @@ func directoryFormValidation(deps Deps) func(*stagedForm) formValidation {
 func directoryFormSubmit(deps Deps) func(context.Context, formValues, uint64) tea.Cmd {
 	return func(actionCtx context.Context, values formValues, generation uint64) tea.Cmd {
 		target := strings.TrimSpace(values.String("destination"))
-		addParent := strings.EqualFold(strings.TrimSpace(values.String("add-parent")), "yes")
+		addParent := values.Bool("add-parent")
 		createDirectory, addPath := deps.CreateDirectory, deps.AddProjectPath
 		return func() tea.Msg {
 			if createDirectory == nil {

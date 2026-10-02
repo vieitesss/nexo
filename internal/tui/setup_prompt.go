@@ -56,7 +56,7 @@ type setupPromptModel struct {
 func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, defaults SetupPromptDefaults) (SetupPromptValues, error) {
 	stages := []formStage{
 		{ID: "backend", Title: "backend", Fields: []formField{{ID: "backend", Label: "backend", Default: defaults.Backend, Kind: formChoice, Options: []string{"tmux", "herdr"}}}},
-		{ID: "paths", Title: "project roots", Fields: []formField{{ID: "paths", Label: "paths (comma-separated)", Default: abbreviatePathList(strings.Join(defaults.Paths, ", ")), Kind: formText, Placeholder: "~/src, ~/work"}}},
+		{ID: "paths", Title: "project roots", Fields: []formField{{ID: "paths", Label: "paths (comma-separated)", Default: abbreviatePathList(strings.Join(defaults.Paths, ", ")), Kind: formText, Placeholder: "~/src, ~/work", AbbreviateHome: true}}},
 		{ID: "notify", Title: "agents", Fields: []formField{{ID: "notify", Label: "desktop notifications", Default: boolLabel(defaults.Notify), Kind: formToggle}}},
 		{ID: "bindings", Title: bindingTitle(defaults.Backend), Fields: []formField{{ID: "tui-key", Label: "TUI key (blank keeps opt-in)", Default: defaults.TUIKey, Kind: formText, Placeholder: "C-s", Validate: setupBindingValidator(defaults.Backend)}, {ID: "agents-key", Label: "agents key (blank keeps opt-in)", Default: defaults.AgentsKey, Kind: formText, Placeholder: "a", Validate: setupBindingValidator(defaults.Backend)}}},
 	}
@@ -89,7 +89,7 @@ func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, default
 		return validateSetupForm(f, defaults.Backend)
 	}, func(_ context.Context, values formValues, _ uint64) tea.Cmd {
 		return func() tea.Msg {
-			answer := SetupPromptValues{Backend: strings.ToLower(strings.TrimSpace(values.String("backend"))), Notify: values.String("notify") == "yes"}
+			answer := SetupPromptValues{Backend: strings.ToLower(strings.TrimSpace(values.String("backend"))), Notify: values.Bool("notify")}
 			for _, raw := range strings.Split(values.String("paths"), ",") {
 				if path := strings.TrimSpace(raw); path != "" {
 					answer.Paths = append(answer.Paths, path)
@@ -199,35 +199,35 @@ func validateSetupForm(f *stagedForm, defaultBackend string) formValidation {
 			field := &stage.Fields[index]
 			switch {
 			case field.ID == "backend":
-				field.Error = ""
 				if backend != "tmux" && backend != "herdr" {
-					field.Error = "choose tmux or herdr"
+					field.setError("choose tmux or herdr")
 					if result.Error == "" {
 						result.Error = "backend must be tmux or herdr"
 					}
+				} else {
+					field.setError("")
 				}
 			case field.ID == "tui-key" || field.ID == "agents-key":
-				// Backend changes do not edit the input. Revalidate both fields
-				// and keep bubbles/textinput.Err in lockstep with the displayed
-				// staged-form error.
+				// A backend change does not edit the input, so revalidate here and
+				// let setError keep the textinput in lockstep with the field.
 				err := config.ValidateBindingKeyForBackend(backend, values.String(field.ID))
-				field.Error = ""
-				field.input.Err = nil
 				if err != nil {
-					field.Error = err.Error()
-					field.input.Err = err
+					field.setError(err.Error())
 					if result.Error == "" {
 						result.Error = "choose a valid binding key or leave it blank"
 					}
+				} else {
+					field.setError("")
 				}
 			case strings.HasPrefix(field.ID, "remote-backend:"):
-				field.Error = ""
 				remoteBackend := strings.ToLower(strings.TrimSpace(values.String(field.ID)))
 				if remoteBackend != "tmux" && remoteBackend != "herdr" {
-					field.Error = "choose tmux or herdr"
+					field.setError("choose tmux or herdr")
 					if result.Error == "" {
 						result.Error = "each remote backend must be tmux or herdr"
 					}
+				} else {
+					field.setError("")
 				}
 			}
 		}
@@ -251,18 +251,11 @@ func bindingTitle(backend string) string {
 	return "optional bindings (suggested Herdr keys: ctrl+s, prefix+a)"
 }
 
-func bindingPlaceholder(backend string) string {
+func bindingPlaceholders(backend string) (tuiKey, agentsKey string) {
 	if strings.EqualFold(strings.TrimSpace(backend), "tmux") {
-		return "C-s"
+		return "C-s", "a"
 	}
-	return "ctrl+s"
-}
-
-func agentsBindingPlaceholder(backend string) string {
-	if strings.EqualFold(strings.TrimSpace(backend), "tmux") {
-		return "a"
-	}
-	return "prefix+a"
+	return "ctrl+s", "prefix+a"
 }
 
 func (m setupPromptModel) refreshBindingPresentation() {
@@ -273,6 +266,7 @@ func (m setupPromptModel) refreshBindingPresentation() {
 	if backend == "" {
 		backend = strings.ToLower(strings.TrimSpace(m.defaultBackend))
 	}
+	tuiPlaceholder, agentsPlaceholder := bindingPlaceholders(backend)
 	for stageIndex := range m.form.stages {
 		stage := &m.form.stages[stageIndex]
 		if stage.ID != "bindings" {
@@ -283,21 +277,14 @@ func (m setupPromptModel) refreshBindingPresentation() {
 			field := &stage.Fields[fieldIndex]
 			switch field.ID {
 			case "tui-key":
-				field.Placeholder = bindingPlaceholder(backend)
-				field.input.Placeholder = field.Placeholder
+				field.Placeholder = tuiPlaceholder
+				field.input.Placeholder = tuiPlaceholder
 			case "agents-key":
-				field.Placeholder = agentsBindingPlaceholder(backend)
-				field.input.Placeholder = field.Placeholder
+				field.Placeholder = agentsPlaceholder
+				field.input.Placeholder = agentsPlaceholder
 			}
 		}
 	}
-}
-
-func boolLabel(value bool) string {
-	if value {
-		return "yes"
-	}
-	return "no"
 }
 
 func (m setupPromptModel) Init() tea.Cmd {
@@ -308,7 +295,6 @@ func (m setupPromptModel) Init() tea.Cmd {
 	return m.form.initialFocusCmd()
 }
 func (m setupPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	m.refreshBindingPresentation()
 	switch typed := msg.(type) {
 	case tea.WindowSizeMsg:
 		if m.form != nil {
@@ -361,21 +347,7 @@ func setupViewportLines(lines []string, height int) []string {
 	if bodyHeight == 0 {
 		return []string{footer}
 	}
-	active := -1
-	for index, line := range body {
-		if strings.HasPrefix(line, "    ▸ ") {
-			active = index
-			break
-		}
-	}
-	if active < 0 {
-		for index, line := range body {
-			if strings.HasPrefix(line, "▸ ") {
-				active = index
-				break
-			}
-		}
-	}
+	active := activeFormLine(body)
 	start := 0
 	if len(body) > bodyHeight {
 		start = shell.ViewportStart(len(body), bodyHeight, active)
