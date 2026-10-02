@@ -62,7 +62,7 @@ Agent rows use one dot and a state that is easy to scan:
 | --- | --- | --- |
 | 🟡 yellow | `working` | The agent's working indicator is live. |
 | 🔴 red | `stopped` / unseen | The agent stopped and its exact pane has not been focused yet. |
-| 🟢 green | `stopped` / seen | The stopped agent has been seen. |
+| ⚪ grey | `stopped` / seen | The stopped agent has been seen. |
 
 Backends are native-first: when a multiplexer provides a capability, nexo uses
 it; nexo only fills gaps such as tmux screen polling or remote attachment.
