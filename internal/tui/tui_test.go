@@ -318,7 +318,7 @@ func TestSelectedStateColoursMatchUnselected(t *testing.T) {
 	since := time.Now().Add(-2 * time.Hour)
 	deps := Deps{Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: containerstate.LocalMachine()}}, Agents: []capabilities.Agent{
 		{PaneID: "red", ContainerID: "one", Container: "one", Harness: "pi", State: "stopped", StoppedSince: &since},
-		{PaneID: "grey", ContainerID: "one", Container: "one", Harness: "pi", State: "stopped", Seen: true, StoppedSince: &since},
+		{PaneID: "seen", ContainerID: "one", Container: "one", Harness: "pi", State: "stopped", Seen: true, StoppedSince: &since},
 		{PaneID: "amber", ContainerID: "one", Container: "one", Harness: "pi", State: "working"},
 	}}
 	for _, dark := range []bool{true, false} {
