@@ -11,7 +11,7 @@ import (
 )
 
 func TestCompleteClearsLiveViewAndFinalViewIsComplete(t *testing.T) {
-	model := NewModel("upgrade", []Target{{Name: "one"}, {Name: "two"}, {Name: "three"}})
+	model := NewModel("upgrade", []string{"one", "two", "three"})
 	for _, name := range []string{"one", "two", "three"} {
 		model.Apply(Event{Machine: name, State: StateDone, New: "v2"})
 	}
@@ -29,7 +29,7 @@ func TestCompleteClearsLiveViewAndFinalViewIsComplete(t *testing.T) {
 }
 
 func TestLiveViewIsHeightBounded(t *testing.T) {
-	model := NewModel("upgrade", []Target{{Name: "one"}, {Name: "two"}, {Name: "three"}, {Name: "four"}})
+	model := NewModel("upgrade", []string{"one", "two", "three", "four"})
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 4})
 	model = updated.(Model)
 	lines := strings.Split(ansi.Strip(model.View()), "\n")
@@ -43,7 +43,7 @@ func TestLiveViewIsHeightBounded(t *testing.T) {
 
 func TestNarrowWidthsKeepStatusAndWrapLongMachineErrors(t *testing.T) {
 	name := "a-machine-name-much-longer-than-any-window"
-	model := NewModel("upgrade", []Target{{Name: name}})
+	model := NewModel("upgrade", []string{name})
 	model.Apply(Event{Machine: name, State: StateFailed, Step: StepProbing, Err: errors.New("connection refused after a long network failure")})
 	for _, width := range []int{20, 40, 80} {
 		updated, _ := model.Update(tea.WindowSizeMsg{Width: width, Height: 20})
@@ -76,7 +76,7 @@ func TestAbbreviatesEveryPseudoVersionForm(t *testing.T) {
 		{"v1.2.3", "v1.2.3"},
 	}
 	for _, testCase := range cases {
-		model := NewModel("upgrade", []Target{{Name: "local"}})
+		model := NewModel("upgrade", []string{"local"})
 		model.Apply(Event{Machine: "local", State: StateDone, New: testCase.version})
 		if got := ansi.Strip(model.FinalView()); !strings.Contains(got, testCase.want) {
 			t.Errorf("version %q FinalView = %q, want %q", testCase.version, got, testCase.want)

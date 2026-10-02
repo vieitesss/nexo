@@ -964,7 +964,7 @@ func applyRemotePlan(ctx context.Context, in Input, options Options, sshConfig s
 				return fmt.Errorf("find local nexo binary: %w", err)
 			}
 		}
-		if err := install.CopyAtomic(ctx, install.NewRemoteTarget(in.Runner, plan.Machine.Machine, sshConfig), source, plan.BinaryAt); err != nil {
+		if err := install.CopyAtomic(ctx, install.NewRemoteTarget(in.Runner, plan.Machine.Machine, sshConfig), source, plan.BinaryAt, nil); err != nil {
 			return err
 		}
 	}
