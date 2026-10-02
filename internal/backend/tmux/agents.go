@@ -68,6 +68,7 @@ type Source struct {
 	notifier     capabilities.Notifier
 	hookBinary   string
 	hookConfig   string
+	binary       *binaryWatch
 	mu           sync.Mutex
 }
 
@@ -77,6 +78,7 @@ func NewAgentSource(r runner.CommandRunner) *Source {
 		runner: r,
 		config: (config.AgentsConfig{}).WithDefaults(),
 		now:    time.Now,
+		binary: newBinaryWatch(),
 	}
 }
 
@@ -804,6 +806,15 @@ func (s *Source) MarkSeen(ctx context.Context, paneID string) error {
 func (s *Source) Watch(ctx context.Context) error {
 	watchCtx, stopSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
+	watch := s.binary
+	if watch == nil {
+		watch = newBinaryWatch()
+	}
+	// Capture before taking the watcher lock or installing hooks. If the
+	// initial stat is transiently unavailable, replaced() retries capture on
+	// a later poll instead of permanently disabling reloads.
+	watch.capture()
+
 	s.mu.Lock()
 	if s.server == "" {
 		s.server = s.serverName(watchCtx)
@@ -814,11 +825,15 @@ func (s *Source) Watch(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// The lock fd is O_CLOEXEC (os.OpenFile sets it), so a re-exec in place
+	// releases the lock automatically and the new process can take it. The
+	// re-exec keeps this PID, so the recorded watcher PID stays valid.
 	if err := s.writeWatcherPID(); err != nil {
 		release()
 		return fmt.Errorf("record tmux agent watcher: %w", err)
 	}
 	pid := os.Getpid()
+	defer watch.clearFailed()
 	defer func() {
 		s.clearWatcherPID(pid)
 		release()
@@ -859,6 +874,7 @@ func (s *Source) Watch(ctx context.Context) error {
 			if err := s.deliverPending(watchCtx); err != nil {
 				return err
 			}
+			s.reexecIfReplaced(watchCtx, watch)
 		}
 	}
 }
