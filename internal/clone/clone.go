@@ -44,6 +44,44 @@ type Result struct {
 	Destination string
 }
 
+var (
+	ErrSourceRequired      = errors.New("clone requires a source")
+	ErrDestinationRequired = errors.New("destination is required")
+)
+
+// ValidateSource trims and validates the source shared by the CLI and the
+// Projects form. It does not interpret the source; SourceOperand owns that
+// conversion at execution time.
+func ValidateSource(source string) (string, error) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return "", ErrSourceRequired
+	}
+	return source, nil
+}
+
+// Validate checks the explicit destination form of a clone request. The CLI
+// derives its optional destination before calling this function; the TUI uses
+// it directly so both surfaces share destination preflight and normalization.
+func Validate(request Request, paths []string, home string) (Request, destination.Result, error) {
+	source, err := ValidateSource(request.Source)
+	if err != nil {
+		return Request{}, destination.Result{}, err
+	}
+	destinationPath := strings.TrimSpace(request.Destination)
+	if destinationPath == "" {
+		return Request{}, destination.Result{}, ErrDestinationRequired
+	}
+	resolved, err := destination.New(destination.Options{Paths: paths, Home: home}).Resolve(destinationPath)
+	if err != nil {
+		return Request{}, destination.Result{}, err
+	}
+	request.Source = source
+	request.Prefix = strings.TrimSpace(request.Prefix)
+	request.Destination = resolved.Path
+	return request, resolved, nil
+}
+
 // Clone resolves and executes one repository clone. The destination parent is
 // added only after Git succeeds, so a failed clone never changes config.
 func Clone(ctx context.Context, options Options, request Request) (Result, error) {
@@ -55,9 +93,9 @@ func Clone(ctx context.Context, options Options, request Request) (Result, error
 	if home == "" {
 		home = os.Getenv("HOME")
 	}
-	source := strings.TrimSpace(request.Source)
-	if source == "" {
-		return Result{}, errors.New("clone requires a source")
+	source, err := ValidateSource(request.Source)
+	if err != nil {
+		return Result{}, err
 	}
 
 	destinationPath := strings.TrimSpace(request.Destination)
@@ -71,12 +109,14 @@ func Clone(ctx context.Context, options Options, request Request) (Result, error
 			return Result{}, err
 		}
 	}
-	resolved, err := destination.New(destination.Options{Paths: options.Paths, Home: home}).Resolve(destinationPath)
+	request.Source = source
+	request.Destination = destinationPath
+	request, resolved, err := Validate(request, options.Paths, home)
 	if err != nil {
 		return Result{}, err
 	}
 
-	operand := SourceOperand(source, request.Prefix, home)
+	operand := SourceOperand(request.Source, request.Prefix, home)
 	if err := gitops.Clone(ctx, options.Runner, operand, resolved.Path); err != nil {
 		if _, statErr := os.Lstat(resolved.Path); statErr == nil {
 			return Result{}, fmt.Errorf("%w (partial destination %q remains; remove it before retrying)", err, resolved.Path)
@@ -89,7 +129,7 @@ func Clone(ctx context.Context, options Options, request Request) (Result, error
 		}
 	}
 
-	return Result{Source: source, Destination: resolved.Path}, nil
+	return Result{Source: request.Source, Destination: resolved.Path}, nil
 }
 
 // SourceOperand converts the TUI's repository shorthand into a complete Git

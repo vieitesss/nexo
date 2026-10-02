@@ -2,6 +2,8 @@ package clone
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -21,6 +23,29 @@ type fakeRunner struct {
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	r.calls = append(r.calls, call{name: name, args: append([]string(nil), args...)})
 	return nil, nil
+}
+
+func TestValidateNormalizesSourceAndDestination(t *testing.T) {
+	root := t.TempDir()
+	request, resolved, err := Validate(Request{Source: " owner/repo ", Prefix: " git@example.test: ", Destination: " " + root + "/repo"}, nil, root)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if request.Source != "owner/repo" || request.Prefix != "git@example.test:" || request.Destination != filepath.Join(root, "repo") {
+		t.Fatalf("Validate() request = %#v", request)
+	}
+	if resolved.Path != request.Destination {
+		t.Fatalf("Validate() result = %#v", resolved)
+	}
+}
+
+func TestValidateKeepsFormErrorsOwnedByClone(t *testing.T) {
+	if _, _, err := Validate(Request{}, nil, t.TempDir()); !errors.Is(err, ErrSourceRequired) {
+		t.Fatalf("Validate() error = %v, want source-required", err)
+	}
+	if _, _, err := Validate(Request{Source: "owner/repo"}, nil, t.TempDir()); !errors.Is(err, ErrDestinationRequired) {
+		t.Fatalf("Validate() error = %v, want destination-required", err)
+	}
 }
 
 func TestSourceOperand(t *testing.T) {

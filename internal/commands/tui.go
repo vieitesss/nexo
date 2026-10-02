@@ -148,7 +148,11 @@ func tuiDependencies(ctx context.Context, invocation Invocation) (tui.Deps, erro
 		if !ok {
 			return capabilities.Worktree{}, fmt.Errorf("backend %q does not support extracting worktrees", invocation.Selection.Kind)
 		}
-		operation, err := worktreeflow.Extract(extractCtx, worktreeflow.Options{Extractor: extractor}, worktreeflow.Request{
+		operation, err := worktreeflow.Extract(extractCtx, worktreeflow.Options{
+			Extractor: extractor,
+			Paths:     deps.ProjectPaths,
+			Home:      deps.Home,
+		}, worktreeflow.Request{
 			Repo:         repo,
 			Destination:  destination,
 			ReturnBranch: returnBranch,

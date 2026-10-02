@@ -8,8 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/vieitesss/nexo/internal/destination"
 	"github.com/vieitesss/nexo/internal/picker"
+	worktreeflow "github.com/vieitesss/nexo/internal/worktree"
 )
 
 func newExtractForm(deps Deps, place picker.Place, ctx context.Context) *stagedForm {
@@ -51,21 +51,15 @@ func extractDestinationSuggestion(repo, branch string) string {
 func extractFormValidation(deps Deps) func(*stagedForm) formValidation {
 	return func(form *stagedForm) formValidation {
 		result := formValidation{Values: map[string]string{}}
-		destinationValue := strings.TrimSpace(formValue(form, "destination"))
-		if destinationValue == "" {
-			result.Error = "destination is required"
-			return result
-		}
-		resolved, err := destination.New(destination.Options{
-			Paths:              deps.ProjectPaths,
-			Home:               deps.Home,
-			AllowMissingParent: true,
-		}).Resolve(destinationValue)
+		destinationValue := formValue(form, "destination")
+		request, err := worktreeflow.Validate(worktreeflow.Request{
+			Destination: destinationValue,
+		}, deps.ProjectPaths, deps.Home)
 		if err != nil {
 			result.Error = err.Error()
 			return result
 		}
-		result.Values["destination"] = resolved.Path
+		result.Values["destination"] = request.Destination
 		return result
 	}
 }
