@@ -41,25 +41,14 @@ func containerActionResolver(invocation Invocation) capabilities.ContainerAction
 	}
 	return configuredContainerResolver{
 		local:  localContainerResolver{adapter: invocation.Adapter},
-		remote: configuredRemoteMachines(invocation.Config.Remote.ConfiguredMachines()),
+		remote: proxyidentity.NewMachineSet(invocation.Config.Remote.ConfiguredMachines()),
 		proxy:  proxy,
 	}
 }
 
-func configuredRemoteMachines(machines []string) map[string]bool {
-	configured := make(map[string]bool, len(machines))
-	for _, machine := range machines {
-		machine = proxyidentity.NormalizeMachineName(machine)
-		if machine != "" {
-			configured[machine] = true
-		}
-	}
-	return configured
-}
-
 type configuredContainerResolver struct {
 	local  localContainerResolver
-	remote map[string]bool
+	remote proxyidentity.MachineSet
 	proxy  capabilities.RemoteProxy
 }
 
@@ -67,7 +56,7 @@ func (r configuredContainerResolver) ResolveContainerActions(ctx context.Context
 	if isLocalContainer(machine) {
 		return r.local.ResolveContainerActions(ctx, machine)
 	}
-	if r.remote[proxyidentity.NormalizeMachineName(machine)] {
+	if r.remote.Contains(machine) {
 		if r.proxy != nil {
 			return remoteContainerActions{machine: machine, proxy: r.proxy}, nil
 		}
@@ -109,9 +98,8 @@ func (a unsupportedRemoteContainerActions) KillContainer(context.Context, string
 	return fmt.Errorf("killing remote containers is not yet supported for machine %q", a.machine)
 }
 
-// ResolveContainerActions wraps the selected backend as the local machine's
-// source. A future remote resolver can be supplied on Invocation without
-// changing TUI action routing.
+// ResolveContainerActions routes local containers through the selected backend
+// and configured remote containers through their proxy capability.
 func (r localContainerResolver) ResolveContainerActions(_ context.Context, machine string) (capabilities.ContainerActions, error) {
 	if !isLocalContainer(machine) {
 		return nil, fmt.Errorf("container machine %q is not supported", machine)

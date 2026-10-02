@@ -15,7 +15,7 @@ import (
 )
 
 func newTestOrchestratorWithConfig(commandRunner runner.CommandRunner, config ListingConfig) Orchestrator {
-	return NewOrchestrator(commandRunner, config, OperationPolicy{Backend: config.Backend})
+	return NewOrchestrator(commandRunner, config, OperationPolicy{})
 }
 
 func newTestOrchestrator(commandRunner runner.CommandRunner, selected backend.Kind, sshConfig string) Orchestrator {
@@ -188,7 +188,7 @@ func TestRemoteAgentShellKeepsListingAndReportsWarning(t *testing.T) {
 		command.Env = env
 		return command.Output()
 	})
-	orchestrator := NewOrchestrator(runner, ListingConfig{Backend: backend.Tmux, Backends: map[string]string{"devbox": "tmux"}}, OperationPolicy{Backend: backend.Tmux})
+	orchestrator := NewOrchestrator(runner, ListingConfig{Backend: backend.Tmux, Backends: map[string]string{"devbox": "tmux"}}, OperationPolicy{})
 	result := orchestrator.ListMachineWithAgents(context.Background(), "devbox")
 	if result.Error != "" || result.Kind != KindTmux || len(result.Containers) != 1 || result.Containers[0].Name != "api" {
 		t.Fatalf("result = %#v, want tmux container from the shell listing", result)
@@ -256,7 +256,7 @@ func TestListRunsMachinesInParallelAndKeepsFastResultIndependent(t *testing.T) {
 			}
 		}
 		return []byte("$1\t" + machine + "\n"), nil
-	}), ListingConfig{Backend: backend.Tmux, Timeout: 50 * time.Millisecond}, OperationPolicy{Backend: backend.Tmux})
+	}), ListingConfig{Backend: backend.Tmux, Timeout: 50 * time.Millisecond}, OperationPolicy{})
 
 	done := make(chan []MachineResult, 1)
 	go func() { done <- orchestrator.List(context.Background(), []string{"slow", "fast"}) }()
@@ -285,7 +285,7 @@ func TestListMachineReportsTimeoutAsMachineError(t *testing.T) {
 	orchestrator := NewOrchestrator(fakeRunner(func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
-	}), ListingConfig{Backend: backend.Tmux, Timeout: 5 * time.Millisecond}, OperationPolicy{Backend: backend.Tmux})
+	}), ListingConfig{Backend: backend.Tmux, Timeout: 5 * time.Millisecond}, OperationPolicy{})
 	result := listMachine(orchestrator, "offline")
 	if !strings.Contains(result.Error, "timed out") {
 		t.Fatalf("error = %q, want timeout reason", result.Error)

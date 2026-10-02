@@ -68,16 +68,21 @@ func (r RemoteConfig) ConfiguredMachines() []string {
 // IsMachineConfigured reports whether machine is named by remote.machines or
 // remote.backends.
 func (r RemoteConfig) IsMachineConfigured(machine string) bool {
-	key := proxyidentity.NormalizeMachineName(machine)
-	if key == "" {
-		return false
+	return proxyidentity.NewMachineSet(r.ConfiguredMachines()).Contains(machine)
+}
+
+// ValidateMachine checks a command target against the configured machine set.
+// The option-prefix check belongs here with the configuration policy so every
+// remote operation rejects the same unsafe target before invoking SSH.
+func (r RemoteConfig) ValidateMachine(machine string) error {
+	machine = strings.TrimSpace(machine)
+	if strings.HasPrefix(machine, "-") {
+		return fmt.Errorf("machine %q starts with '-'", machine)
 	}
-	for _, configured := range r.ConfiguredMachines() {
-		if proxyidentity.NormalizeMachineName(configured) == key {
-			return true
-		}
+	if !r.IsMachineConfigured(machine) {
+		return fmt.Errorf("remote machine %q is not configured", machine)
 	}
-	return false
+	return nil
 }
 
 // ReconnectDelays returns the configured proxy retry bounds with defaults.

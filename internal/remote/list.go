@@ -129,8 +129,8 @@ func (l machineListing) listMachine(ctx context.Context, machine string, withAge
 	}
 	result.Containers = containers
 	if withAgents && len(strings.TrimSpace(string(agentOutput))) > 0 {
-		// Agent discovery is optional. Invalid output, an old remote binary, or
-		// a backend mismatch must not hide otherwise valid containers.
+		// Agent discovery is optional. Invalid output, an unavailable agent
+		// command, or a backend mismatch must not hide valid containers.
 		if agents, agentErr := decodeAgents(agentOutput); agentErr == nil {
 			result.Agents = agents
 		} else {
@@ -398,9 +398,13 @@ func isNoServer(err error, output []byte) bool {
 func ShellCommand(args ...string) string {
 	quoted := make([]string, len(args))
 	for index, arg := range args {
-		quoted[index] = "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
+		quoted[index] = shellQuote(arg)
 	}
 	return strings.Join(quoted, " ")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func normalizeError(message string) string {

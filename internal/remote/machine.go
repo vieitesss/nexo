@@ -2,14 +2,17 @@ package remote
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/proxyidentity"
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
@@ -21,31 +24,26 @@ type ListingConfig struct {
 	Backends  map[string]string
 }
 
-// OperationPolicy is the adapter seam for remote-machine operations. The
-// policy owns kind-aware selection; callbacks retain only backend-specific
-// work that cannot be expressed by a capability interface.
+// OperationPolicy owns kind-aware remote operations. Backend capabilities
+// handle local opening and proxying; SSH-backed creation and native Herdr
+// opening stay here because they are properties of the remote machine.
 type OperationPolicy struct {
-	Backend  backend.Kind
 	Proxy    capabilities.RemoteProxy
 	Resolver capabilities.ContainerActionResolver
-
-	OpenHerdr   func(context.Context, string, string) error
-	CreateTmux  func(context.Context, string, string) (string, error)
-	CreateHerdr func(context.Context, string, string) error
+	Stdout   io.Writer
 }
 
 // Orchestrator is the remote-machine module. Listing, normalization, and
-// operation selection cross this small interface; SSH framing and decoders
-// remain inside machineListing and operation adapters remain behind
-// OperationPolicy.
+// operation selection cross this small interface; SSH framing, decoders, and
+// remote operation construction remain inside this package.
 type Orchestrator struct {
 	listing machineListing
 	policy  OperationPolicy
 }
 
-// NewOrchestrator creates the remote-machine module at the listing seam. The
-// runner and listing configuration stay behind this interface; callers do not
-// construct or configure the listing implementation themselves.
+// NewOrchestrator creates the remote-machine module. The runner and listing
+// configuration stay behind this interface; callers do not construct or
+// configure listing or operation implementations themselves.
 func NewOrchestrator(commandRunner runner.CommandRunner, config ListingConfig, policy OperationPolicy) Orchestrator {
 	return Orchestrator{listing: newMachineListing(commandRunner, config), policy: policy}
 }
@@ -72,7 +70,7 @@ func (o Orchestrator) ListWithAgents(ctx context.Context, machines []string) []M
 func (o Orchestrator) Machine(ctx context.Context, machine string) (MachineResult, error) {
 	machine = strings.TrimSpace(machine)
 	if o.listing.runner == nil {
-		kind := Kind(o.listing.config.Backends[normalizeMachine(machine)])
+		kind := Kind(o.listing.config.Backends[proxyidentity.NormalizeMachineName(machine)])
 		if kind != KindTmux && kind != KindHerdr {
 			kind = KindTmux
 		}
@@ -88,14 +86,14 @@ func (o Orchestrator) Machine(ctx context.Context, machine string) (MachineResul
 // Open selects the native Herdr path or a tmux proxy from the machine result.
 // Tmux names are canonicalized at this seam, after remote kind detection.
 func (o Orchestrator) Open(ctx context.Context, result MachineResult, container string) error {
-	return o.policy.open(ctx, result.Machine, result.Kind, container)
+	return o.policy.open(ctx, o.listing.runner, o.listing.config.Backend, result.Machine, result.Kind, container)
 }
 
 // New creates and opens a container using the operation selected by the
-// resolved remote kind. Creation adapters return only backend-native output;
-// the policy owns which adapter is valid and how its result is opened.
+// resolved remote kind. The policy owns both remote creation and the follow-up
+// open, so callers cannot accidentally diverge between the two paths.
 func (o Orchestrator) New(ctx context.Context, result MachineResult, name string) error {
-	return o.policy.create(ctx, result, name)
+	return o.policy.create(ctx, o.listing.runner, o.listing.config.Backend, o.listing.config.SSHConfig, result, name)
 }
 
 // FocusAgent focuses a remote pane, then opens the containing remote
@@ -109,7 +107,7 @@ func (o Orchestrator) FocusAgent(ctx context.Context, result MachineResult, agen
 	if container == "" {
 		return errors.New("remote agent has no container name")
 	}
-	if err := o.policy.validateKind(result.Machine, result.Kind, "focus"); err != nil {
+	if err := o.policy.validateKind(o.listing.config.Backend, result.Machine, result.Kind, "focus"); err != nil {
 		return err
 	}
 	if err := FocusRemotePane(ctx, o.listing.runner, o.listing.config.SSHConfig, result.Machine, result.Kind, agent.PaneID); err != nil {
@@ -118,14 +116,14 @@ func (o Orchestrator) FocusAgent(ctx context.Context, result MachineResult, agen
 	return o.Open(ctx, result, container)
 }
 
-func (p OperationPolicy) validateKind(machine string, kind Kind, operation string) error {
+func (p OperationPolicy) validateKind(local backend.Kind, machine string, kind Kind, operation string) error {
 	switch kind {
 	case KindTmux:
-		if p.Backend != backend.Tmux && p.Backend != backend.Herdr {
+		if local != backend.Tmux && local != backend.Herdr {
 			return fmt.Errorf("unsupported: %s runs tmux; use tmux or Herdr to %s it", machine, operation)
 		}
 	case KindHerdr:
-		if p.Backend != backend.Herdr {
+		if local != backend.Herdr {
 			return fmt.Errorf("unsupported: %s runs Herdr; use Herdr to %s it", machine, operation)
 		}
 	default:
@@ -134,15 +132,12 @@ func (p OperationPolicy) validateKind(machine string, kind Kind, operation strin
 	return nil
 }
 
-func (p OperationPolicy) open(ctx context.Context, machine string, kind Kind, container string) error {
-	if err := p.validateKind(machine, kind, "open"); err != nil {
+func (p OperationPolicy) open(ctx context.Context, commandRunner runner.CommandRunner, local backend.Kind, machine string, kind Kind, container string) error {
+	if err := p.validateKind(local, machine, kind, "open"); err != nil {
 		return err
 	}
 	if kind == KindHerdr {
-		if p.OpenHerdr == nil {
-			return errors.New("opening a Herdr remote requires a command runner")
-		}
-		return p.OpenHerdr(ctx, machine, container)
+		return p.openHerdr(ctx, commandRunner, machine, container)
 	}
 	container = tmux.CanonicalContainerName(container)
 	if p.Resolver != nil {
@@ -153,43 +148,118 @@ func (p OperationPolicy) open(ctx context.Context, machine string, kind Kind, co
 		return actions.OpenContainer(ctx, container)
 	}
 	if p.Proxy == nil {
-		return fmt.Errorf("backend %q does not support remote proxies", p.Backend)
+		return fmt.Errorf("backend %q does not support remote proxies", local)
 	}
 	return p.Proxy.Proxy(ctx, machine, container)
 }
 
-func (p OperationPolicy) create(ctx context.Context, result MachineResult, name string) error {
-	if err := p.validateKind(result.Machine, result.Kind, "open"); err != nil {
-		// The creation error historically referred to opening Herdr. Keep that
-		// user-facing policy while making operation selection local to this module.
-		if result.Kind == KindHerdr && p.Backend != backend.Herdr {
-			return fmt.Errorf("unsupported: %s runs Herdr; use Herdr to open it", result.Machine)
-		}
+func (p OperationPolicy) create(ctx context.Context, commandRunner runner.CommandRunner, local backend.Kind, sshConfig string, result MachineResult, name string) error {
+	if err := p.validateKind(local, result.Machine, result.Kind, "open"); err != nil {
 		return err
 	}
 	switch result.Kind {
 	case KindHerdr:
-		if p.CreateHerdr == nil {
-			return errors.New("remote new requires a command runner")
-		}
-		if err := p.CreateHerdr(ctx, result.Machine, name); err != nil {
+		if err := createHerdrWorkspace(ctx, commandRunner, sshConfig, result.Machine, name); err != nil {
 			return err
 		}
-		return p.open(ctx, result.Machine, result.Kind, name)
+		return p.open(ctx, commandRunner, local, result.Machine, result.Kind, name)
 	case KindTmux:
-		if p.CreateTmux == nil {
-			return errors.New("remote new requires a command runner")
-		}
-		container, err := p.CreateTmux(ctx, result.Machine, name)
+		container, err := createTmuxContainer(ctx, commandRunner, sshConfig, result.Machine, name)
 		if err != nil {
 			return err
 		}
-		return p.open(ctx, result.Machine, result.Kind, container)
+		return p.open(ctx, commandRunner, local, result.Machine, result.Kind, container)
 	default:
 		return fmt.Errorf("remote machine %q has an unknown multiplexer kind", result.Machine)
 	}
 }
 
-func normalizeMachine(machine string) string {
-	return strings.ToLower(strings.TrimSpace(machine))
+func (p OperationPolicy) openHerdr(ctx context.Context, commandRunner runner.CommandRunner, machine, container string) error {
+	if commandRunner == nil {
+		return errors.New("opening a Herdr remote requires a command runner")
+	}
+	output, err := commandRunner.Run(ctx, "herdr", "machine", "list", "--json")
+	if err != nil {
+		return fmt.Errorf("list Herdr machines: %w", err)
+	}
+	if !herdrMachineSaved(output, machine) {
+		if _, err := commandRunner.Run(ctx, "herdr", "machine", "add", machine, "--label", machine); err != nil {
+			return fmt.Errorf("save Herdr machine %q: %w", machine, err)
+		}
+		if p.Stdout != nil {
+			if _, err := fmt.Fprintf(p.Stdout, "saved Herdr machine %s\n", machine); err != nil {
+				return err
+			}
+		}
+	}
+	if p.Stdout == nil {
+		return nil
+	}
+	_, err = fmt.Fprintf(p.Stdout, "%s is available under %s in Herdr's sidebar\n", container, machine)
+	return err
+}
+
+func herdrMachineSaved(output []byte, machine string) bool {
+	var rows []struct {
+		Target  string `json:"target"`
+		Enabled *bool  `json:"enabled"`
+	}
+	if err := json.Unmarshal(output, &rows); err != nil {
+		return false
+	}
+	for _, row := range rows {
+		enabled := row.Enabled == nil || *row.Enabled
+		if enabled && strings.TrimSpace(row.Target) == machine {
+			return true
+		}
+	}
+	return false
+}
+
+func createTmuxContainer(ctx context.Context, commandRunner runner.CommandRunner, sshConfig, machine, name string) (string, error) {
+	if err := tmux.ValidateProxyIdentity(machine, name); err != nil {
+		return "", err
+	}
+	if commandRunner == nil {
+		return "", errors.New("remote new requires a command runner")
+	}
+	args := []string{"-o", "BatchMode=yes"}
+	if sshConfig = strings.TrimSpace(sshConfig); sshConfig != "" {
+		args = append(args, "-F", sshConfig)
+	}
+	args = append(args, machine, "tmux -u new-session -d -P -F '#{session_name}' -s "+shellQuote(tmux.EscapeSessionName(name)))
+	output, err := commandRunner.Run(ctx, "ssh", args...)
+	if err != nil {
+		if text := strings.TrimSpace(string(output)); text != "" {
+			return "", fmt.Errorf("create remote container: %s", text)
+		}
+		return "", fmt.Errorf("create remote container on %s: %w", machine, err)
+	}
+	canonical := strings.TrimSpace(string(output))
+	if newline := strings.IndexByte(canonical, '\n'); newline >= 0 {
+		canonical = canonical[:newline]
+	}
+	if canonical == "" {
+		canonical = tmux.CanonicalContainerName(name)
+	}
+	return canonical, nil
+}
+
+func createHerdrWorkspace(ctx context.Context, commandRunner runner.CommandRunner, sshConfig, machine, name string) error {
+	if commandRunner == nil {
+		return errors.New("remote new requires a command runner")
+	}
+	args := []string{"-o", "BatchMode=yes"}
+	if sshConfig = strings.TrimSpace(sshConfig); sshConfig != "" {
+		args = append(args, "-F", sshConfig)
+	}
+	args = append(args, machine, "herdr workspace create --label "+shellQuote(name))
+	output, err := commandRunner.Run(ctx, "ssh", args...)
+	if err != nil {
+		if text := strings.TrimSpace(string(output)); text != "" {
+			return fmt.Errorf("create remote Herdr container: %s", text)
+		}
+		return fmt.Errorf("create remote Herdr container on %s: %w", machine, err)
+	}
+	return nil
 }
