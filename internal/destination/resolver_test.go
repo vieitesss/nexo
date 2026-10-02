@@ -64,6 +64,21 @@ func TestDefaultPathDerivesCompleteOperands(t *testing.T) {
 	}
 }
 
+func TestCoveredRecognizesSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	configured := filepath.Join(root, "configured")
+	alias := filepath.Join(root, "alias")
+	if err := os.Mkdir(configured, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(configured, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if !Covered([]string{configured}, alias, root) {
+		t.Fatalf("Covered() = false; want symlinked parent covered")
+	}
+}
+
 func TestResolverExpandsHome(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "projects"), 0o755); err != nil {

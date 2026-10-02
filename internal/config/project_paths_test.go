@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+func TestAddProjectParentUsesDestinationParent(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.toml")
+	destination := filepath.Join(root, "projects", "repo")
+	if _, _, err := AddProjectParent(configPath, destination, root); err != nil {
+		t.Fatalf("AddProjectParent() error = %v", err)
+	}
+	contents, err := os.ReadFile(configPath)
+	if err != nil || string(contents) != "paths = [\""+filepath.Join(root, "projects")+"\"]\n" {
+		t.Fatalf("config = %q, %v", contents, err)
+	}
+}
+
 func TestAddProjectPathPreservesCommentsAndFormatting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	original := "# keep this\nbackend = \"tmux\"\npaths = [\n  \"~/work\", # first\n]\n"

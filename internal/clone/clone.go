@@ -84,11 +84,7 @@ func Clone(ctx context.Context, options Options, request Request) (Result, error
 		return Result{}, err
 	}
 	if request.AddParent && resolved.AddParent {
-		configPath := options.ConfigPath
-		if configPath == "" {
-			configPath = config.DefaultPath()
-		}
-		if _, _, err := config.AddProjectPath(configPath, resolved.Parent, home); err != nil {
+		if _, _, err := config.AddProjectParent(options.ConfigPath, resolved.Path, home); err != nil {
 			return Result{}, fmt.Errorf("clone succeeded but add parent: %w", err)
 		}
 	}

@@ -27,7 +27,7 @@ type Options struct {
 	Paths []string
 	Home  string
 	// AllowMissingParent keeps the destination itself safe to create while
-	// leaving parent-directory policy to a caller such as worktree extraction.
+	// leaving parent-directory policy to the caller's operation flow.
 	AllowMissingParent bool
 }
 
@@ -66,7 +66,7 @@ func (r Resolver) Resolve(path string) (Result, error) {
 	} else if !info.IsDir() {
 		return Result{}, fmt.Errorf("destination parent %q is not a directory", parent)
 	}
-	return Result{Path: absolute, Parent: parent, AddParent: !covered(r.Paths, parent, r.Home)}, nil
+	return Result{Path: absolute, Parent: parent, AddParent: !Covered(r.Paths, parent, r.Home)}, nil
 }
 
 // ResolvePath is a convenience wrapper for callers that do not need to retain
@@ -93,7 +93,10 @@ func ExpandHome(path, home string) string {
 	}
 }
 
-func covered(paths []string, parent, home string) bool {
+// Covered reports whether parent is already represented by one of the
+// configured project paths. Physical aliases are treated as the same path so
+// callers do not make different add-parent decisions for symlinked locations.
+func Covered(paths []string, parent, home string) bool {
 	parent = realAbs(parent)
 	for _, value := range paths {
 		value = strings.TrimSpace(value)
