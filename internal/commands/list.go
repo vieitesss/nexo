@@ -34,11 +34,11 @@ func (listCommand) Run(ctx context.Context, invocation Invocation) error {
 	if invocation.Stdout == nil {
 		return errors.New("list command requires stdout")
 	}
-	placesOnly, err := parseListArgs(invocation.Args)
+	includePlaces, err := parseListArgs(invocation.Args)
 	if err != nil {
 		return UsageError{Err: err}
 	}
-	if placesOnly {
+	if includePlaces {
 		return listPlaces(ctx, invocation, trace)
 	}
 	discovery, err := discoverProjects(invocation, trace)
