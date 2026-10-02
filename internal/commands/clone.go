@@ -27,11 +27,14 @@ type cloneJSON struct {
 func init() { registerBuiltin(func() Command { return cloneCommand{} }) }
 
 func (cloneCommand) Name() string { return "clone" }
+func (cloneCommand) Help() Help {
+	return Help{Summary: "Clone a repository with Git.", Usage: "nexo clone [--add-parent] SOURCE [DESTINATION]", Flags: []FlagHelp{{Long: "--add-parent", Description: "Add the destination parent to project paths."}}, Examples: []string{"nexo clone git@github.com:owner/repo.git ~/src/repo"}}
+}
 
 func (cloneCommand) Run(ctx context.Context, invocation Invocation) error {
 	parsed, err := parseCloneArgs(invocation.Args)
 	if err != nil {
-		return err
+		return UsageError{Err: err}
 	}
 	result, err := cloneflow.Clone(ctx, cloneflow.Options{
 		Runner:     invocation.Runner,

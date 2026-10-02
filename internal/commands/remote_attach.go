@@ -17,7 +17,7 @@ import (
 func runRemoteAttach(ctx context.Context, invocation Invocation) error {
 	fromEnv := len(invocation.Args) == 2 && invocation.Args[1] == "--from-env"
 	if !fromEnv && len(invocation.Args) != 3 {
-		return errors.New("remote attach requires MACHINE CONTAINER")
+		return UsageError{Err: errors.New("remote attach requires MACHINE CONTAINER")}
 	}
 	if fromEnv {
 		if invocation.Selection.Kind != backend.Herdr {

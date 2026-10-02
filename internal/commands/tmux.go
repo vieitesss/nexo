@@ -17,10 +17,16 @@ func init() {
 }
 
 func (tmuxCommand) Name() string { return "tmux" }
+func (tmuxCommand) Help() Help {
+	return Help{Summary: "Install and control the tmux adapter.", Usage: "nexo tmux <subcommand>", Subcommands: []SubcommandHelp{
+		{Name: "glance", Summary: "Show, hide, or toggle the agent glance row.", Usage: "nexo tmux glance on|off|toggle"},
+		{Name: "init", Summary: "Install focus hooks and start the agent watcher.", Usage: "nexo tmux init"},
+	}, Examples: []string{"nexo tmux init", "nexo tmux glance toggle"}}
+}
 
 func (tmuxCommand) Run(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) == 0 {
-		return fmt.Errorf("usage: nexo tmux init|glance on|off|toggle")
+		return UsageError{Err: fmt.Errorf("usage: nexo tmux init|glance on|off|toggle")}
 	}
 	if invocation.Selection.Kind != backend.Tmux {
 		return errors.New("tmux commands require the tmux backend")
@@ -28,16 +34,16 @@ func (tmuxCommand) Run(ctx context.Context, invocation Invocation) error {
 	switch invocation.Args[0] {
 	case "init":
 		if len(invocation.Args) != 1 {
-			return fmt.Errorf("usage: nexo tmux init")
+			return UsageError{Err: fmt.Errorf("usage: nexo tmux init")}
 		}
 		return runTmuxInit(ctx, invocation)
 	case "glance":
 		if len(invocation.Args) != 2 {
-			return fmt.Errorf("usage: nexo tmux glance on|off|toggle")
+			return UsageError{Err: fmt.Errorf("usage: nexo tmux glance on|off|toggle")}
 		}
 		return runTmuxGlance(ctx, invocation)
 	default:
-		return fmt.Errorf("unknown tmux command %q", invocation.Args[0])
+		return UsageError{Err: fmt.Errorf("unknown tmux command %q", invocation.Args[0])}
 	}
 }
 

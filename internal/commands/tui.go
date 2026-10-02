@@ -32,6 +32,9 @@ var runTabbedTUI = tui.Run
 
 func init()                     { registerBuiltin(func() Command { return tuiCommand{} }) }
 func (tuiCommand) Name() string { return "tui" }
+func (tuiCommand) Help() Help {
+	return Help{Summary: "Open the tabbed terminal UI.", Usage: "nexo tui [agents|containers|projects]", Examples: []string{"nexo tui", "nexo tui projects"}}
+}
 
 func (tuiCommand) Run(ctx context.Context, invocation Invocation) error {
 	if err := invocation.Selection.Require(); err != nil {

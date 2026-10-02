@@ -11,7 +11,7 @@ import (
 
 func runRemoteNew(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) < 2 || len(invocation.Args) > 3 {
-		return errors.New("remote new requires MACHINE [NAME]")
+		return UsageError{Err: errors.New("remote new requires MACHINE [NAME]")}
 	}
 	machine := strings.TrimSpace(invocation.Args[1])
 	if err := invocation.Config.Remote.ValidateMachine(machine); err != nil {

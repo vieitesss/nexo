@@ -9,7 +9,7 @@ import (
 
 func runRemoteOpen(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) != 2 {
-		return errors.New("remote open requires MACHINE/CONTAINER")
+		return UsageError{Err: errors.New("remote open requires MACHINE/CONTAINER")}
 	}
 	target, err := proxyidentity.ParseTarget(invocation.Args[1])
 	if err != nil {

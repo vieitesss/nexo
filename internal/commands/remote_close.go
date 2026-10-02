@@ -13,7 +13,7 @@ import (
 
 func runRemoteClose(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) > 2 {
-		return errors.New("remote close accepts at most MACHINE/CONTAINER")
+		return UsageError{Err: errors.New("remote close accepts at most MACHINE/CONTAINER")}
 	}
 	if invocation.Runner == nil {
 		return errors.New("remote close requires a command runner")

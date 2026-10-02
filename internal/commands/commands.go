@@ -70,6 +70,7 @@ type Command interface {
 // Registry maps command names to their implementations.
 type Registry struct {
 	commands map[string]Command
+	aliases  map[string]string
 }
 
 var builtinFactories []func() Command
@@ -84,11 +85,14 @@ func registerBuiltin(factory func() Command) {
 // NewRegistry returns the foundation registry. Feature tasks register their
 // own command implementation in the file that owns it.
 func NewRegistry() *Registry {
-	registry := &Registry{commands: make(map[string]Command)}
+	registry := &Registry{commands: make(map[string]Command), aliases: make(map[string]string)}
 	for _, factory := range builtinFactories {
 		if err := registry.Register(factory()); err != nil {
 			panic(fmt.Sprintf("register builtin command: %v", err))
 		}
+	}
+	if err := validateHelp(registry); err != nil {
+		panic(fmt.Sprintf("validate builtin help: %v", err))
 	}
 	return registry
 }
@@ -105,16 +109,41 @@ func (r *Registry) Register(command Command) error {
 	if r.commands == nil {
 		r.commands = make(map[string]Command)
 	}
+	if r.aliases == nil {
+		r.aliases = make(map[string]string)
+	}
 	if _, exists := r.commands[name]; exists {
 		return fmt.Errorf("command %q is already registered", name)
 	}
 	r.commands[name] = command
+	if metadata, ok := commandHelp(command); ok {
+		for _, alias := range metadata.Aliases {
+			if alias == "" || alias == name {
+				continue
+			}
+			if _, exists := r.commands[alias]; exists {
+				return fmt.Errorf("command alias %q is already registered", alias)
+			}
+			if _, exists := r.aliases[alias]; exists {
+				return fmt.Errorf("command alias %q is already registered", alias)
+			}
+			r.aliases[alias] = name
+		}
+	}
 	return nil
 }
 
 // Lookup finds a command by its subcommand name.
 func (r *Registry) Lookup(name string) (Command, bool) {
 	command, ok := r.commands[name]
+	if ok {
+		return command, true
+	}
+	canonical, ok := r.aliases[name]
+	if !ok {
+		return nil, false
+	}
+	command, ok = r.commands[canonical]
 	return command, ok
 }
 

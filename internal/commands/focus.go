@@ -16,6 +16,9 @@ func init() {
 }
 
 func (focusCommand) Name() string { return "focus" }
+func (focusCommand) Help() Help {
+	return Help{Summary: "Record a container focus event from the backend.", Usage: "nexo focus"}
+}
 
 // Run records the container named by a backend focus event. It is the command
 // declared by the Herdr plugin's [[events]] hook; tmux records focus through
@@ -25,7 +28,7 @@ func (focusCommand) Run(ctx context.Context, invocation Invocation) error {
 		return err
 	}
 	if len(invocation.Args) != 0 {
-		return errors.New("focus accepts no arguments")
+		return UsageError{Err: errors.New("focus accepts no arguments")}
 	}
 	recorder, ok := invocation.Adapter.(capabilities.FocusEventRecorder)
 	if !ok {

@@ -19,8 +19,14 @@ func init() {
 }
 
 func (agentsCommand) Name() string { return "agents" }
+func (agentsCommand) Help() Help {
+	return Help{Summary: "List agent panes, or run the backend watcher.", Usage: "nexo agents [watch]", Subcommands: []SubcommandHelp{{Name: "watch", Summary: "Run the agent watcher until stopped.", Usage: "nexo agents watch"}}, Examples: []string{"nexo agents --json", "nexo agents watch"}}
+}
 
 func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
+	if len(invocation.Args) > 0 && invocation.Args[0] != "watch" {
+		return UsageError{Err: fmt.Errorf("unknown agents command %q", invocation.Args[0])}
+	}
 	if invocation.Adapter == nil {
 		return errors.New("agents requires a backend with the AgentSource capability")
 	}
@@ -43,8 +49,6 @@ func (agentsCommand) Run(ctx context.Context, invocation Invocation) error {
 				return watcher.WatchAgents(ctx)
 			}
 			return errors.New("selected backend does not support agent watching")
-		default:
-			return fmt.Errorf("unknown agents command %q", invocation.Args[0])
 		}
 	}
 

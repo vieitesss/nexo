@@ -8,7 +8,7 @@ import (
 
 func runRemotePassthrough(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) < 2 {
-		return errors.New("remote passthrough requires at least one key")
+		return UsageError{Err: errors.New("remote passthrough requires at least one key")}
 	}
 	paster, paneID, err := remotePaster(invocation, "passthrough")
 	if err != nil {

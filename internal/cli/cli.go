@@ -135,16 +135,53 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		return 2
 	}
 	if len(args) == 0 {
-		printHelp(stdout, registry)
+		commands.PrintHelp(stdout, registry, "", nil)
 		return 0
 	}
 	options, err := Parse(args)
 	if err != nil {
 		writeError(stderr, err)
+		writeHelpHint(stderr, "", "")
 		return 2
 	}
 	if options.Help {
-		printHelp(stdout, registry)
+		switch options.Command {
+		case "":
+			commands.PrintHelp(stdout, registry, "", nil)
+		case "help":
+			if len(options.Args) == 0 {
+				commands.PrintHelp(stdout, registry, "", nil)
+			} else {
+				name, helpArgs := options.Args[0], options.Args[1:]
+				if _, ok := registry.Lookup(name); !ok {
+					writeError(stderr, fmt.Errorf("unknown subcommand %q", name))
+					writeHelpHint(stderr, "", "")
+					return 2
+				}
+				commands.PrintHelp(stdout, registry, name, helpArgs)
+			}
+		default:
+			if _, ok := registry.Lookup(options.Command); !ok {
+				writeError(stderr, fmt.Errorf("unknown subcommand %q", options.Command))
+				writeHelpHint(stderr, "", "")
+				return 2
+			}
+			commands.PrintHelp(stdout, registry, options.Command, options.Args)
+		}
+		return 0
+	}
+	if options.Command == "help" {
+		if len(options.Args) == 0 {
+			commands.PrintHelp(stdout, registry, "", nil)
+			return 0
+		}
+		name, args := options.Args[0], options.Args[1:]
+		if _, ok := registry.Lookup(name); !ok {
+			writeError(stderr, fmt.Errorf("unknown subcommand %q", name))
+			writeHelpHint(stderr, "", "")
+			return 2
+		}
+		commands.PrintHelp(stdout, registry, name, args)
 		return 0
 	}
 	if options.Version {
@@ -155,6 +192,7 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 	command, ok := registry.Lookup(options.Command)
 	if !ok {
 		writeError(stderr, fmt.Errorf("unknown subcommand %q", options.Command))
+		writeHelpHint(stderr, "", "")
 		return 2
 	}
 
@@ -200,6 +238,7 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		writeError(stderr, err)
 		var usageErr commands.UsageError
 		if errors.As(err, &usageErr) {
+			writeHelpHint(stderr, commands.HelpUsage(registry, options.Command, options.Args), commands.HelpCommandPath(registry, options.Command, options.Args))
 			return 2
 		}
 		return 1
@@ -221,22 +260,23 @@ func writeError(stderr io.Writer, err error) {
 	}
 }
 
+func writeHelpHint(stderr io.Writer, usage, path string) {
+	if stderr == nil {
+		return
+	}
+	if usage == "" {
+		_, _ = fmt.Fprintln(stderr, "Run 'nexo --help' for more.")
+		return
+	}
+	if path == "" {
+		path = strings.TrimPrefix(usage, "Usage: ")
+	}
+	_, _ = fmt.Fprintf(stderr, "%s\nRun '%s --help' for more.\n", usage, path)
+}
+
 func printVersion(stdout io.Writer) {
 	if stdout == nil {
 		return
 	}
 	_, _ = fmt.Fprintf(stdout, "nexo %s\n", version.String())
-}
-
-func printHelp(stdout io.Writer, registry *commands.Registry) {
-	if stdout == nil {
-		return
-	}
-	commandsText := "backend"
-	if registry != nil {
-		commandsText = strings.Join(registry.Names(), ", ")
-	}
-	_, _ = fmt.Fprintln(stdout, "Usage: nexo [flags] <command> [args]")
-	_, _ = fmt.Fprintf(stdout, "\nCommands: %s\n", commandsText)
-	_, _ = fmt.Fprintln(stdout, "\nFlags: --backend auto|tmux|herdr, -c/--config-file PATH, --json, --version")
 }

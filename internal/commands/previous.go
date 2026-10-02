@@ -15,6 +15,9 @@ func init() {
 }
 
 func (previousCommand) Name() string { return "previous" }
+func (previousCommand) Help() Help {
+	return Help{Summary: "Open the last non-proxy local container.", Usage: "nexo previous"}
+}
 
 // Run opens the most recent live non-proxy container that is not the current
 // one. It is the scriptable equivalent of tmux's switch-client -l.
@@ -23,7 +26,7 @@ func (previousCommand) Run(ctx context.Context, invocation Invocation) error {
 		return err
 	}
 	if len(invocation.Args) != 0 {
-		return errors.New("previous accepts no arguments")
+		return UsageError{Err: errors.New("previous accepts no arguments")}
 	}
 	opener, ok := invocation.Adapter.(capabilities.ContainerOpener)
 	if !ok {
