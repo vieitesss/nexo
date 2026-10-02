@@ -153,17 +153,25 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 				commands.PrintHelp(stdout, registry, "", nil)
 			} else {
 				name, helpArgs := options.Args[0], options.Args[1:]
-				if _, ok := registry.Lookup(name); !ok {
-					writeError(stderr, fmt.Errorf("unknown subcommand %q", name))
-					writeHelpHint(stderr, "", "")
+				if !commands.HelpPathExists(registry, name, helpArgs) {
+					unknown := name
+					if len(helpArgs) > 0 {
+						unknown = helpArgs[0]
+					}
+					writeError(stderr, fmt.Errorf("unknown subcommand %q", unknown))
+					writeHelpHint(stderr, commands.HelpUsage(registry, name, nil), commands.HelpCommandPath(registry, name, nil))
 					return 2
 				}
 				commands.PrintHelp(stdout, registry, name, helpArgs)
 			}
 		default:
-			if _, ok := registry.Lookup(options.Command); !ok {
-				writeError(stderr, fmt.Errorf("unknown subcommand %q", options.Command))
-				writeHelpHint(stderr, "", "")
+			if !commands.HelpPathExists(registry, options.Command, options.Args) {
+				unknown := options.Command
+				if len(options.Args) > 0 {
+					unknown = options.Args[0]
+				}
+				writeError(stderr, fmt.Errorf("unknown subcommand %q", unknown))
+				writeHelpHint(stderr, commands.HelpUsage(registry, options.Command, nil), commands.HelpCommandPath(registry, options.Command, nil))
 				return 2
 			}
 			commands.PrintHelp(stdout, registry, options.Command, options.Args)
@@ -175,13 +183,17 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 			commands.PrintHelp(stdout, registry, "", nil)
 			return 0
 		}
-		name, args := options.Args[0], options.Args[1:]
-		if _, ok := registry.Lookup(name); !ok {
-			writeError(stderr, fmt.Errorf("unknown subcommand %q", name))
-			writeHelpHint(stderr, "", "")
+		name, helpArgs := options.Args[0], options.Args[1:]
+		if !commands.HelpPathExists(registry, name, helpArgs) {
+			unknown := name
+			if len(helpArgs) > 0 {
+				unknown = helpArgs[0]
+			}
+			writeError(stderr, fmt.Errorf("unknown subcommand %q", unknown))
+			writeHelpHint(stderr, commands.HelpUsage(registry, name, nil), commands.HelpCommandPath(registry, name, nil))
 			return 2
 		}
-		commands.PrintHelp(stdout, registry, name, args)
+		commands.PrintHelp(stdout, registry, name, helpArgs)
 		return 0
 	}
 	if options.Version {

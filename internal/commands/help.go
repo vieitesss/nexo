@@ -243,6 +243,24 @@ func wrapText(text string, width int, indent string) string {
 	return strings.Join(lines, "\n"+indent)
 }
 
+// HelpPathExists reports whether name and its optional subcommand are documented.
+func HelpPathExists(registry *Registry, name string, args []string) bool {
+	command, ok := registry.Lookup(name)
+	if !ok {
+		return false
+	}
+	h, ok := commandHelp(command)
+	if !ok || len(args) == 0 || len(h.Subcommands) == 0 {
+		return ok
+	}
+	for _, sub := range h.Subcommands {
+		if args[0] == sub.Name || contains(sub.Aliases, args[0]) {
+			return true
+		}
+	}
+	return false
+}
+
 // HelpUsage returns the canonical usage line for an invocation path.
 func HelpUsage(registry *Registry, name string, args []string) string {
 	_, h, _, ok := helpPath(registry, name, args)
