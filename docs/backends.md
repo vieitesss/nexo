@@ -1,11 +1,12 @@
-# Future backend capability check
+# Backends
 
 This note checks the retained v1 capability interfaces against the three
 candidate backends, in priority order. It is a design check only: it does not add
 backend code or change backend selection. A single nexo invocation still
-selects exactly one backend.
+selects exactly one backend: nexo never aggregates multiplexers and never
+controls one multiplexer from another backend.
 
-## Shipped backends
+## Backend status
 
 | Backend | Status | Capabilities |
 | --- | --- | --- |
