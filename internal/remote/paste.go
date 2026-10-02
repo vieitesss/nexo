@@ -160,7 +160,9 @@ func isMissingTool(err error) bool {
 // uploadCommand creates a private random directory and writes the uploaded
 // bytes to a mode-0600 file inside it. The directory template ends in Xs so
 // both GNU and BSD mktemp replace them, unlike a template ending in ".png".
-const uploadCommand = `umask 077; dir=$(mktemp -d "${TMPDIR:-/tmp}/nexo-paste-XXXXXXXX") || exit 1; path="$dir/nexo-paste-image.png"; cat > "$path" || { rm -rf "$dir"; exit 1; }; printf '%s\n' "$path"`
+// It runs in the remote login shell, so it avoids zsh's special parameters:
+// assigning $path there would clobber $PATH.
+const uploadCommand = `umask 077; dir=$(mktemp -d "${TMPDIR:-/tmp}/nexo-paste-XXXXXXXX") || exit 1; file="$dir/nexo-paste-image.png"; cat > "$file" || { rm -rf "$dir"; exit 1; }; printf '%s\n' "$file"`
 
 // UploadPNG streams PNG bytes to a securely-created remote temporary file.
 func UploadPNG(ctx context.Context, commandRunner runner.CommandRunner, sshConfig, machine string, png []byte) (string, error) {

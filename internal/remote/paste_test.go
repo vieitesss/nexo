@@ -252,6 +252,25 @@ func TestUploadCommandCreatesPrivateDirectoryAndFile(t *testing.T) {
 	}
 }
 
+// TestUploadCommandRunsUnderZsh guards the remote login shell: zsh ties
+// $path to $PATH, so a variable with that name breaks every later command.
+func TestUploadCommandRunsUnderZsh(t *testing.T) {
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("zsh is not installed")
+	}
+	t.Setenv("TMPDIR", t.TempDir())
+	command := exec.Command("zsh", "-c", uploadCommand)
+	command.Stdin = strings.NewReader("png")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("upload command under zsh error = %v, output %q", err, output)
+	}
+	content, err := os.ReadFile(strings.TrimSuffix(string(output), "\n"))
+	if err != nil || string(content) != "png" {
+		t.Fatalf("upload content = %q, %v", content, err)
+	}
+}
+
 func TestUploadPNGRejectsUnsafeRemotePaths(t *testing.T) {
 	cases := []struct {
 		name   string
