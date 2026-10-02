@@ -1,6 +1,5 @@
 // Package progress provides an inline Bubble Tea view for work performed on
-// several named machines. It deliberately owns no command or installation
-// policy so setup and other commands can reuse it.
+// several named machines. It owns no command or installation policy.
 package progress
 
 import (
@@ -52,14 +51,9 @@ const (
 	StateCancelled State = "cancelled"
 )
 
-// Target is a machine that should appear in the view from its first frame.
-type Target struct {
-	Name string
-}
-
-// Event updates one machine row. At and Elapsed are optional; they are useful
-// to deterministic callers and tests, while normal command events use the
-// current clock and let the view calculate elapsed time.
+// Event updates one machine row. At and Elapsed are optional: running events
+// can leave them zero and let the view read the current clock, while a
+// terminal event carries the measured elapsed time.
 type Event struct {
 	Machine string
 	State   State
@@ -103,17 +97,17 @@ type Row struct {
 	Err     error
 }
 
-// NewModel creates a model with one running row per target. Rows are kept in
-// target order so the display remains stable as concurrent events arrive.
-func NewModel(header string, targets []Target) Model {
+// NewModel creates a model with one running row per machine. Rows are kept in
+// the given order so the display remains stable as concurrent events arrive.
+func NewModel(header string, machines []string) Model {
 	model := Model{
 		Header: header,
-		rows:   make([]Row, 0, len(targets)),
+		rows:   make([]Row, 0, len(machines)),
 		spin:   spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 	}
 	model.spin.Style = accentStyle
-	for _, target := range targets {
-		name := strings.TrimSpace(target.Name)
+	for _, name := range machines {
+		name = strings.TrimSpace(name)
 		if name == "" {
 			continue
 		}
@@ -175,12 +169,10 @@ func (m *Model) Apply(event Event) {
 	} else if event.Err != nil {
 		row.Err = event.Err
 	}
-	if event.Elapsed > 0 || row.State == StateDone || row.State == StateFailed || row.State == StateSkipped || row.State == StateCancelled {
-		if event.Elapsed > 0 {
-			row.Elapsed = event.Elapsed
-		} else if row.Elapsed == 0 {
-			row.Elapsed = at.Sub(row.Started)
-		}
+	if event.Elapsed > 0 {
+		row.Elapsed = event.Elapsed
+	} else if row.State != StateRunning && row.Elapsed == 0 {
+		row.Elapsed = at.Sub(row.Started)
 	}
 	if index < 0 {
 		m.rows = append(m.rows, row)
@@ -397,10 +389,6 @@ func makeTableLayout(machine, status, step, elapsed, detail, width int) tableLay
 			layout.showDetail = false
 			layout.detail = 0
 		}
-	}
-	if tableWidth(layout) > width {
-		layout.showDetail = false
-		layout.detail = 0
 	}
 	if tableWidth(layout) > width && layout.showElapsed {
 		layout.showElapsed = false

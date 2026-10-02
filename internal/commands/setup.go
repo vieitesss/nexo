@@ -42,9 +42,10 @@ func (setupCommand) Help() Help {
 	}
 }
 
-// interactiveTerminal reports whether setup can show its form and ask for
-// confirmation. It checks the file descriptors directly so it also works on
-// macOS, where backend.ControllingTTY cannot resolve the terminal path.
+// interactiveTerminal reports whether the process has a terminal on stdin and
+// stdout, so setup can show its form and upgrade its live table. It checks the
+// file descriptors directly so it also works on macOS, where
+// backend.ControllingTTY cannot resolve the terminal path.
 func interactiveTerminal() bool {
 	return term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd())
 }

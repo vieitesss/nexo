@@ -267,7 +267,7 @@ func TestCopyAtomicReplacesLocalFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	published := false
-	if err := copyAtomic(context.Background(), NewLocalTarget(runner.ExecRunner{}), source, destination, func() {
+	if err := CopyAtomic(context.Background(), NewLocalTarget(runner.ExecRunner{}), source, destination, func() {
 		if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("publish callback observed destination error = %v, want not-exist", err)
 		}
@@ -311,10 +311,10 @@ func TestCopyAtomicRemotePublishesAfterTransferCallback(t *testing.T) {
 		return nil, nil
 	}
 	published := false
-	if err := copyAtomic(context.Background(), NewRemoteTarget(remote, "test", ""), source, "/usr/local/bin/nexo", func() {
+	if err := CopyAtomic(context.Background(), NewRemoteTarget(remote, "test", ""), source, "/usr/local/bin/nexo", func() {
 		published = true
 	}); err != nil {
-		t.Fatalf("copyAtomic() error = %v", err)
+		t.Fatalf("CopyAtomic() error = %v", err)
 	}
 	if !published || len(actions) < 2 {
 		t.Fatalf("actions = %#v, callback = %v", actions, published)
@@ -511,7 +511,7 @@ func TestInstallPublishesReferentAndPreservesSymlink(t *testing.T) {
 	}}
 	got, err := Install(context.Background(), NewLocalTarget(fake), Request{
 		Ref: "abcdef1234567890", Local: &LocalBuilder{Runner: fake},
-		Progress: func(event ProgressEvent) { events = append(events, event.Step) },
+		Progress: func(step ProgressStep) { events = append(events, step) },
 	})
 	if err != nil {
 		t.Fatalf("Install() error = %v", err)

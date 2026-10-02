@@ -149,15 +149,6 @@ const (
 	ProgressInstalling ProgressStep = "installing"
 )
 
-// ProgressEvent reports a phase transition without exposing target details.
-// The caller associates events with its machine when work is concurrent.
-type ProgressEvent struct {
-	Step ProgressStep
-}
-
-// ProgressFunc receives installation phase transitions.
-type ProgressFunc func(ProgressEvent)
-
 // Request identifies the source to install. Ref is a release tag or the
 // resolved commit of a nightly.
 type Request struct {
@@ -167,12 +158,12 @@ type Request struct {
 	Local *LocalBuilder
 	// Progress receives real installation phase transitions. It may be called
 	// from a worker goroutine.
-	Progress ProgressFunc
+	Progress func(ProgressStep)
 }
 
 func (r Request) report(step ProgressStep) {
 	if r.Progress != nil {
-		r.Progress(ProgressEvent{Step: step})
+		r.Progress(step)
 	}
 }
 
@@ -462,7 +453,7 @@ func Install(ctx context.Context, target Target, request Request) (Installation,
 		return Installation{}, err
 	}
 	request.report(ProgressCopying)
-	if err := copyAtomic(ctx, target, stagedPath, current.RealPath, func() {
+	if err := CopyAtomic(ctx, target, stagedPath, current.RealPath, func() {
 		request.report(ProgressInstalling)
 	}); err != nil {
 		return Installation{}, err
@@ -480,12 +471,9 @@ func Install(ctx context.Context, target Target, request Request) (Installation,
 
 // CopyAtomic replaces destination with source on target. It is used to publish
 // a locally built binary: a replacement either lands whole or leaves the old
-// executable untouched.
-func CopyAtomic(ctx context.Context, target Target, source, destination string) error {
-	return copyAtomic(ctx, target, source, destination, nil)
-}
-
-func copyAtomic(ctx context.Context, target Target, source, destination string, beforePublish func()) error {
+// executable untouched. beforePublish, when non-nil, runs once the replacement
+// is staged and immediately before the atomic rename.
+func CopyAtomic(ctx context.Context, target Target, source, destination string, beforePublish func()) error {
 	contents, err := os.ReadFile(source)
 	if err != nil {
 		return fmt.Errorf("read built nexo binary: %w", err)

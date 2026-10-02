@@ -86,15 +86,10 @@ func TestUpgradeDryRunPrintsOneLinePerSelectedMachine(t *testing.T) {
 	}
 }
 
-func TestUpgradeTerminalDryRunUsesLiveProgressTable(t *testing.T) {
-	previous := upgradeInteractiveTerminal
-	upgradeInteractiveTerminal = func() bool { return true }
-	defer func() { upgradeInteractiveTerminal = previous }()
+func TestUpgradeDryRunUsesLiveProgressTable(t *testing.T) {
 	var output strings.Builder
 	fake := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch {
-		case name == "git":
-			return []byte("abc\trefs/tags/v2.0.0\n"), nil
 		case name == "uname" && len(args) == 1 && args[0] == "-s":
 			return []byte("Linux\n"), nil
 		case name == "uname" && len(args) == 1 && args[0] == "-m":
@@ -109,11 +104,11 @@ func TestUpgradeTerminalDryRunUsesLiveProgressTable(t *testing.T) {
 			return nil, errors.New("unexpected command")
 		}
 	})
-	if err := (upgradeCommand{}).Run(context.Background(), Invocation{
-		Config: config.Config{}, Runner: fake, Stdout: &output, Stdin: strings.NewReader(""),
-		Args: []string{"--version", "v2.0.0", "--dry-run", "--local-only"},
-	}); err != nil {
-		t.Fatalf("Run() error = %v", err)
+	err := runUpgradeInteractive(context.Background(), Invocation{
+		Runner: fake, Stdout: &output, Stdin: strings.NewReader(""),
+	}, []upgradeMachine{{Name: "local"}}, upgradeversion.Version{Release: "v2.0.0", Ref: "v2.0.0"}, true)
+	if err != nil {
+		t.Fatalf("runUpgradeInteractive() error = %v", err)
 	}
 	if !strings.Contains(output.String(), "MACHINE") || !strings.Contains(output.String(), "STATUS") || !strings.Contains(output.String(), "DETAIL") {
 		t.Fatalf("output = %q, want the live progress table", output.String())
