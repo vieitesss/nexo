@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vieitesss/nexo/internal/backend"
+	"github.com/charmbracelet/x/term"
 	tmuxbackend "github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/setup"
@@ -42,12 +42,19 @@ func (setupCommand) Help() Help {
 	}
 }
 
+// interactiveTerminal reports whether setup can show its form and ask for
+// confirmation. It checks the file descriptors directly so it also works on
+// macOS, where backend.ControllingTTY cannot resolve the terminal path.
+func interactiveTerminal() bool {
+	return term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd())
+}
+
 func (setupCommand) Run(ctx context.Context, invocation Invocation) error {
 	opts, err := parseSetupArgs(invocation.Args)
 	if err != nil {
 		return UsageError{Err: err}
 	}
-	input := setup.Input{Runner: invocation.Runner, Stdout: invocation.Stdout, Stderr: invocation.Stderr, Stdin: invocation.Stdin, Home: homeDir(), TTY: backend.ControllingTTY() != "", SelectedBackend: string(invocation.Selection.Kind), ConfigPath: invocation.ConfigPath}
+	input := setup.Input{Runner: invocation.Runner, Stdout: invocation.Stdout, Stderr: invocation.Stderr, Stdin: invocation.Stdin, Home: homeDir(), TTY: interactiveTerminal(), SelectedBackend: string(invocation.Selection.Kind), ConfigPath: invocation.ConfigPath}
 	if opts.Check {
 		return setup.Run(ctx, input, opts)
 	}
