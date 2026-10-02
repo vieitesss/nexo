@@ -268,6 +268,22 @@ func TestSelectedRowHasTheOnlyBackgroundSGR(t *testing.T) {
 	}
 }
 
+func TestStateColorMapsEachState(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		agent capabilities.Agent
+		want  lipgloss.TerminalColor
+	}{
+		{"unseen stopped", capabilities.Agent{State: "stopped"}, lipgloss.Color("1")},
+		{"working", capabilities.Agent{State: "working"}, lipgloss.Color("3")},
+		{"seen stopped", capabilities.Agent{State: "stopped", Seen: true}, palette.Muted},
+	} {
+		if got := stateColor(tc.agent).GetForeground(); got != tc.want {
+			t.Errorf("%s: stateColor foreground = %#v, want %#v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestSelectedStateColoursMatchUnselected(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	previous := lipgloss.HasDarkBackground()
@@ -275,7 +291,7 @@ func TestSelectedStateColoursMatchUnselected(t *testing.T) {
 	since := time.Now().Add(-2 * time.Hour)
 	deps := Deps{Containers: []capabilities.Container{{ID: "one", Name: "one", Machine: picker.LocalMachine()}}, Agents: []capabilities.Agent{
 		{PaneID: "red", ContainerID: "one", Container: "one", Harness: "pi", State: "stopped", StoppedSince: &since},
-		{PaneID: "green", ContainerID: "one", Container: "one", Harness: "pi", State: "stopped", Seen: true, StoppedSince: &since},
+		{PaneID: "grey", ContainerID: "one", Container: "one", Harness: "pi", State: "stopped", Seen: true, StoppedSince: &since},
 		{PaneID: "amber", ContainerID: "one", Container: "one", Harness: "pi", State: "working"},
 	}}
 	for _, dark := range []bool{true, false} {

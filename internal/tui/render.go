@@ -924,12 +924,14 @@ func itoa(value int) string { return fmt.Sprintf("%d", value) }
 
 func stoppedAge(now, since time.Time) string { return picker.StoppedAge(now, since) }
 
+// stateColor follows the glance dots' state hierarchy: red needs attention,
+// yellow is working, and a seen stopped agent recedes into the muted text.
 func stateColor(agent capabilities.Agent) lipgloss.Style {
 	switch {
 	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped") && !agent.Seen:
 		return red()
 	case strings.EqualFold(strings.TrimSpace(agent.State), "stopped"):
-		return green()
+		return muted()
 	default:
 		return yellow()
 	}
@@ -948,8 +950,6 @@ func accent() lipgloss.Style { return lipgloss.NewStyle().Foreground(palette.Acc
 func divergence() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("6")) }
 
 func red() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("1")) }
-
-func green() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("2")) }
 
 func yellow() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("3")) }
 

@@ -4,11 +4,13 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/shell"
 )
 
 var update = flag.Bool("update", false, "update golden files")
@@ -53,6 +55,13 @@ func TestRenderGolden(t *testing.T) {
 		{name: "tint-colour", agents: testAgents(), cfg: config.GlanceConfig{Tint: "colour238"}, width: 0},
 		{name: "tint-palette", agents: testAgents(), cfg: config.GlanceConfig{Tint: "@thm_surface_0"}, width: 0},
 		{name: "tint-default", agents: testAgents(), cfg: config.GlanceConfig{Tint: "default"}, width: 0},
+		{name: "dots-symbols", agents: testAgents(), cfg: config.GlanceConfig{Dots: config.GlanceDotsSymbols}, width: 0},
+		{name: "colors-custom", agents: testAgents(), cfg: config.GlanceConfig{Colors: config.GlanceColors{
+			Working: "@thm_yellow", Unseen: "colour160", Seen: "brightblack",
+		}}, width: 0},
+		{name: "colors-with-tint", agents: testAgents(), cfg: config.GlanceConfig{
+			Tint: "@thm_surface_0", Fields: []string{"dot", "target", "age"},
+		}, width: 0},
 		{name: "escapes-format", agents: []capabilities.Agent{
 			{PaneID: "%9", Target: "#(rm -rf)", Harness: "pi", State: "working"},
 			{PaneID: "%8", Target: "a#b", Harness: "a#b", State: "stopped", Seen: true, StoppedSince: at(5)},
@@ -100,8 +109,36 @@ func TestRenderNeverTruncatesLabel(t *testing.T) {
 func TestRenderFitsConfiguredWidth(t *testing.T) {
 	for width := 1; width <= 60; width++ {
 		got := Render(testAgents(), config.GlanceConfig{Fields: config.GlanceFieldOrder()}, width, reference)
-		if gotWidth := len([]rune(got)); gotWidth > width && gotWidth > len([]rune(Label)) {
+		if gotWidth := shell.StringWidth(visible(got)); gotWidth > width && gotWidth > len([]rune(Label)) {
 			t.Fatalf("Render(width=%d) width = %d, row %q exceeds budget", width, gotWidth, got)
 		}
 	}
+}
+
+// TestRenderStylesOnlyTheDot pins that colour mode keeps the visible row of
+// symbol mode apart from the glyph, so styles never shift the measured width.
+func TestRenderStylesOnlyTheDot(t *testing.T) {
+	colour := visible(Render(testAgents(), config.GlanceConfig{}, 0, reference))
+	want := "nexo │ [● zeta:1.0] [● alpha:0.1] [● beta:2.0]"
+	if colour != want {
+		t.Fatalf("visible colour row = %q, want %q", colour, want)
+	}
+}
+
+// visible returns what tmux draws for a row: styles removed and escaped
+// hashes collapsed.
+func visible(row string) string {
+	var out strings.Builder
+	for i := 0; i < len(row); i++ {
+		switch {
+		case strings.HasPrefix(row[i:], "##"):
+			out.WriteByte('#')
+			i++
+		case strings.HasPrefix(row[i:], "#["):
+			i += strings.IndexByte(row[i:], ']')
+		default:
+			out.WriteByte(row[i])
+		}
+	}
+	return out.String()
 }

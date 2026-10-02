@@ -528,7 +528,7 @@ func TestGlanceRendersAgentsAtClientWidth(t *testing.T) {
 	if err := source.setGlanceRow(context.Background(), 1, agents); err != nil {
 		t.Fatalf("setGlanceRow() error = %v", err)
 	}
-	if got := fake.option("status-format[1]"); got != "nexo │ [● zeta:1.0]" {
+	if got := fake.option("status-format[1]"); got != "nexo │ [#[fg=red]●#[fg=default] zeta:1.0]" {
 		t.Fatalf("status-format[1] = %q, want the agent entry", got)
 	}
 
