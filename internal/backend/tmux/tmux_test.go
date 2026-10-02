@@ -65,9 +65,7 @@ func (f *fakeRunner) RunInteractive(_ context.Context, name string, args ...stri
 
 func TestListContainersUsesStableIDsAndActivePane(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"list-sessions -F #{session_id}\t#{session_name}\t#{session_activity}\t#{@nexo-proxy}": []byte("$1\tdev\t0\t\n$2\twork\t0\t\n"),
-		"list-panes -t $1 -F #{pane_id}\t#{pane_active}":                                       []byte("%1\t0\n%2\t1\n"),
-		"list-panes -t $2 -F #{pane_id}\t#{pane_active}":                                       []byte("%3\t1\n"),
+		"list-sessions -F #{session_id}\t#{session_name}\t#{session_activity}\t#{@nexo-proxy}\t#{pane_id}": []byte("$1\tdev\t0\t\t%2\n$2\twork\t0\t\t%3\n"),
 	}}
 	backend := New(runner)
 	containers, err := backend.ListContainers(context.Background())
@@ -76,6 +74,11 @@ func TestListContainersUsesStableIDsAndActivePane(t *testing.T) {
 	}
 	if len(containers) != 2 || containers[0].ID != "$1" || containers[0].Name != "dev" || containers[0].ActivePaneID != "%2" || containers[1].ActivePaneID != "%3" {
 		t.Fatalf("containers = %#v, want stable IDs and active panes", containers)
+	}
+	// Commands such as previous list containers on every keypress; a tmux
+	// process per session made them scale with the session count.
+	if len(runner.calls) != 1 {
+		t.Fatalf("calls = %#v, want a single list-sessions", runner.calls)
 	}
 }
 

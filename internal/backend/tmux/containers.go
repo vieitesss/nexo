@@ -24,12 +24,14 @@ var (
 
 // ListContainers lists tmux sessions and records each session's active pane.
 // Session IDs, rather than names, are used for subsequent actions so a rename
-// cannot make a focused row target a different session.
+// cannot make a focused row target a different session. A session's #{pane_id}
+// is the active pane of its current window, so one tmux call covers every
+// session.
 func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container, error) {
 	if b == nil || b.Runner == nil {
 		return nil, errors.New("tmux container lister requires a command runner")
 	}
-	output, err := b.run(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_activity}\t#{@nexo-proxy}")
+	output, err := b.run(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_activity}\t#{@nexo-proxy}\t#{pane_id}")
 	if err != nil {
 		if isNoServer(err) {
 			return []capabilities.Container{}, nil
@@ -62,9 +64,9 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 				activity = &value
 			}
 		}
-		paneID, paneErr := b.activePane(ctx, fields[0])
-		if paneErr != nil {
-			return nil, paneErr
+		paneID := ""
+		if len(fields) >= 5 {
+			paneID = strings.TrimSpace(fields[4])
 		}
 		name, containerMachine := fields[1], machine
 		if proxy {
@@ -88,20 +90,6 @@ func (b *Backend) proxyTarget(value string) (string, string, bool) {
 		return "", "", false
 	}
 	return proxyidentity.NormalizeMachineName(identity.Machine), CanonicalContainerName(identity.Container), true
-}
-
-func (b *Backend) activePane(ctx context.Context, sessionID string) (string, error) {
-	output, err := b.run(ctx, "list-panes", "-t", sessionID, "-F", "#{pane_id}\t#{pane_active}")
-	if err != nil {
-		return "", err
-	}
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		fields := strings.SplitN(strings.TrimSpace(line), "\t", 2)
-		if len(fields) == 2 && fields[1] == "1" {
-			return fields[0], nil
-		}
-	}
-	return "", nil
 }
 
 // RenameContainer renames a tmux session by its stable session ID.
