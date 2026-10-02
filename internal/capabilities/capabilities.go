@@ -42,6 +42,9 @@ func Names(backend any) []string {
 	if _, ok := backend.(Notifier); ok {
 		names = append(names, "Notifier")
 	}
+	if _, ok := backend.(MessageDisplayer); ok {
+		names = append(names, "MessageDisplayer")
+	}
 	if _, ok := backend.(RemoteProxy); ok {
 		names = append(names, "RemoteProxy")
 	}
