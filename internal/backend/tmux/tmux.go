@@ -454,10 +454,9 @@ func (b *Backend) RecordFocusEvent(ctx context.Context, _ []byte) error {
 	if paneID == "" {
 		return nil
 	}
-	if err := b.recordTarget(ctx, paneID); err != nil {
-		return err
-	}
-	return b.MarkAgentSeen(ctx, paneID)
+	historyErr := b.recordTarget(ctx, paneID)
+	seenErr := b.MarkAgentSeen(ctx, paneID)
+	return errors.Join(historyErr, seenErr)
 }
 
 // recordTarget classifies one tmux target from authoritative session metadata
