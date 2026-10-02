@@ -268,11 +268,13 @@ working-pattern = { pi = "⠋" }
 
 ## Upgrading
 
-The tmux watcher is a long-running process that keeps the binary and the
-configuration it started with. After installing a new nexo binary, or after
-changing `[agents] highlight-color` or any `[glance]` key, rerun init on every
-machine running the watcher. Init stops the running watcher and starts a new
-one:
+The tmux watcher reloads itself when its nexo binary is replaced atomically, as
+`just install` does, so upgrades need no manual step. Changing
+`[agents] highlight-color` or any `[glance]` key still needs a restart, because
+the watcher reads those values once at startup. See
+[docs/agents.md](docs/agents.md) for details and the non-Linux startup-window
+limitation. Init stops the running watcher and starts a new one, so rerun it on
+every machine running the watcher:
 
 ```sh
 nexo tmux init --backend=tmux

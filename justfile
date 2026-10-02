@@ -12,5 +12,12 @@ build:
     go build ./cmd/nexo
 
 install: build
-    rm -rf ~/.local/bin/nexo | true
-    cp nexo ~/.local/bin/nexo
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p ~/.local/bin
+    tmp=$(mktemp ~/.local/bin/.nexo.XXXXXX)
+    trap 'rm -f "$tmp"' EXIT
+    cp nexo "$tmp"
+    chmod 755 "$tmp"
+    mv -f "$tmp" ~/.local/bin/nexo
+    trap - EXIT

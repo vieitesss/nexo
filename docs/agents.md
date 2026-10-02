@@ -48,6 +48,22 @@ server options. If `focus-events` is off, it shows a message explaining that
 agent seen-marking needs `set -g focus-events on`; users may enable that option
 themselves when they want focus transitions to mark the exact pane seen.
 
+The watcher checks on every poll whether the executable it started from was
+replaced, validates the candidate with `--version`, and re-execs the new binary
+in place with the same arguments and environment. The preflight is bounded and
+kills the candidate's process group if it hangs, so a broken candidate cannot
+stall the watcher indefinitely. A candidate that fails that check or the exec
+itself is not retried while that exact file remains unchanged when the failed
+file could be pinned; if pinning fails, the candidate remains retryable. This
+protection relies on the preflight and on installs publishing completed binaries
+atomically. Upgrading nexo therefore needs no manual watcher restart. On Linux
+the running image is identified exactly through `/proc/self/exe`, so a
+replacement is detected even when it is published while the watcher is starting.
+On other platforms the watcher can only baseline the install path it sees at
+startup, so a replacement published during that window can be missed until the
+next upgrade. Settings the watcher reads once at startup, such as `[agents]
+highlight-color` and `[glance]`, still need a restart to take effect.
+
 ## Unseen window highlight
 
 The tmux watcher keeps a window highlighted in the window list while it holds

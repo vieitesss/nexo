@@ -31,8 +31,16 @@ func (b *Backend) Init(ctx context.Context, input capabilities.InitInput) error 
 	return nil
 }
 
+// watcherCommand builds the shell command that starts the agent watcher. The
+// binary is its absolute unresolved launch path when that can be determined,
+// so the watcher does not need a PATH lookup to find its own executable when
+// it later derives the path to watch.
 func watcherCommand(configPath string) string {
-	command := fmt.Sprintf("%s --backend=%s", shellQuote(os.Args[0]), shellQuote("tmux"))
+	binary := os.Args[0]
+	if path, err := launchPath(); err == nil && path != "" {
+		binary = path
+	}
+	command := fmt.Sprintf("%s --backend=%s", shellQuote(binary), shellQuote("tmux"))
 	if configPath != "" {
 		command += " --config-file=" + shellQuote(configPath)
 	}

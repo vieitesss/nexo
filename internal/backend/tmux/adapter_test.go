@@ -2,7 +2,9 @@ package tmux
 
 import (
 	"context"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
@@ -20,6 +22,20 @@ func TestInitInstallsHooksAndWatcherWithoutBindings(t *testing.T) {
 	}
 	if !hasCall(runner.calls, "run-shell", "-b", watcherCommand("")) {
 		t.Fatalf("calls = %#v, want agent watcher", runner.calls)
+	}
+}
+
+func TestWatcherCommandUsesAbsoluteLaunchPathForSlashlessArgv0(t *testing.T) {
+	dir := t.TempDir()
+	path := executableFile(t, dir, "nexo", "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", dir)
+	original := os.Args
+	os.Args = []string{"nexo"}
+	defer func() { os.Args = original }()
+
+	command := watcherCommand("")
+	if !strings.HasPrefix(command, shellQuote(path)) {
+		t.Fatalf("watcherCommand() = %q, want it to start with absolute %q", command, path)
 	}
 }
 
