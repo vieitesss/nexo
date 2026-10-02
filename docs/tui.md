@@ -39,11 +39,17 @@ folds the same folder. Left on a folded folder does nothing. A folded checkout
 keeps a subtle count of its hidden worktree children. Search does not change
 the saved fold state.
 
+Project rows carry a short-lived local Git context: the branch name, or the
+short commit SHA when the checkout is detached; additions, deletions, and a
+dirty marker; and ahead/behind divergence read from local refs only. nexo never
+fetches to build it.
+
 ## Search
 
 Printable input performs one flat fuzzy search. The first non-empty query selects
 the best match. Refining a query keeps the selected project, container, or agent
-when it still matches; otherwise the best remaining match is selected. Project
+when it still matches; otherwise the best remaining match is selected. Agent
+search matches harness, container, machine, target, and branch. Project
 search ranks name matches before branch matches, then visible folder matches.
 Equal scores are ordered by shorter name, checkout before linked worktree, then
 name.

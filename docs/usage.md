@@ -10,7 +10,7 @@ are equivalent.
 | Command | Purpose |
 | --- | --- |
 | `nexo backend` | Print the selected backend and its capabilities; add `--json` for structured output. |
-| `nexo list` | List configured project candidates; use `--places` to include local and configured remote containers. |
+| `nexo list` | List configured project candidates; use `--places` to include local and configured remote containers, each local container with a screen preview. |
 | `nexo tui [agents\|containers\|projects]` | Render the TUI in the terminal supplied by your binding. With no tab, open Agents for unseen-stopped agents, otherwise Containers. |
 | `nexo agents` | List agent panes; add `watch` or `seen PANE_ID`. |
 | `nexo previous` | Open the last non-proxy container on this machine other than the current one; it skips proxies, stale containers, and the current container, and is a no-op when nothing else is live. |
@@ -84,14 +84,6 @@ tmux bindings for the TUI, the glance toggle, `previous`, `remote previous`,
 `remote paste`, and root-key passthrough. The complete binding reference and
 the paste and passthrough details are in [remote.md](remote.md). The TUI's picker
 keys are in [tui.md](tui.md).
-
-In tmux, `run-shell` does not inherit `TMUX_PANE`, so pass it explicitly when a
-binding needs to know the current pane:
-
-```tmux
-bind-key -T root C-v run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote paste C-v'
-bind-key -T root C-h run-shell 'TMUX_PANE=#{pane_id} nexo --backend=tmux remote passthrough C-h || tmux select-pane -L'
-```
 
 ## Deletion safety
 
