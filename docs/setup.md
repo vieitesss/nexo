@@ -13,9 +13,10 @@ nexo setup --yes --machine devbox --machine gpu1
 ```
 
 `--check` is read-only and prints the binary on the non-interactive SSH PATH,
-version, UTF-8 locale, focus hooks, init line or plugin, watcher, and selected
-backend for every machine. A failed machine does not prevent other machines
-from being probed, but setup exits non-zero when any machine fails.
+version, UTF-8 locale, effective focus events and installed nexo focus hooks,
+init line or plugin, watcher, and selected backend for every machine. A failed
+machine does not prevent other machines from being probed, but setup exits
+non-zero when any machine fails.
 
 When a remote has a different OS or architecture and no nexo binary yet, setup
 builds the running binary's tagged revision (or commit) with the local Go
@@ -48,8 +49,13 @@ retained; setup adds only the selected `paths`, `[agents].notify`,
 `[remote].machines`, and detected `[remote.backends]` entries. New keys use
 canonical TOML formatting (comments on existing values are not rewritten).
 `config.toml` is intentionally not wrapped in a managed block: the parser
-edits exact TOML value ranges and validates the complete result. Unknown TOML
-keys remain errors.
+edits exact TOML value ranges and validates the complete result. Setup edits
+these shapes: top-level keys (including dotted keys such as
+`agents.notify`), ordinary `[agents]`, `[remote]`, and `[remote.backends]`
+tables, and one-level inline tables such as `agents = { notify = true }`.
+It clearly refuses nested inline tables and table-local dotted keys rather than
+trying to rewrite arbitrary TOML; move those values to the table forms above
+before running setup. Unknown TOML keys remain errors.
 
 ## Manual fallback
 

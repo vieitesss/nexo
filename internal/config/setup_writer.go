@@ -426,6 +426,9 @@ func upsertTOMLValue(contents []byte, path, table, key, value string) ([]byte, e
 		}
 		return replaceRange(contents, expr.value, value), nil
 	}
+	if reason := unsupportedTOMLShape(expressions, table, key); reason != "" {
+		return nil, fmt.Errorf("setup cannot edit %s.%s: %s", table, key, reason)
+	}
 	return appendTOMLKey(contents, table, key, value), nil
 }
 
@@ -460,10 +463,30 @@ func appendInlineValue(contents []byte, span unstable.Range, key, value string) 
 	}
 	insert := end - 1
 	prefix := ""
-	if insert > start && !strings.HasSuffix(strings.TrimSpace(string(contents[start:insert])), ",") {
+	inside := strings.TrimSpace(string(contents[start+1 : insert]))
+	if inside != "" && !strings.HasSuffix(inside, ",") {
 		prefix = ", "
 	}
 	return appendAt(contents, insert, prefix+formatTOMLKey(key)+" = "+value)
+}
+
+func unsupportedTOMLShape(expressions []expression, table, key string) string {
+	if table == "" {
+		return ""
+	}
+	parent, nested, ok := strings.Cut(table, ".")
+	for _, expr := range expressions {
+		if expr.table == "" && expr.key == table && expr.inline && table != "agents" {
+			return "inline tables for this section are not supported; use [" + table + "]"
+		}
+		if expr.table == "" && expr.key == parent && expr.inline && ok {
+			return "nested inline tables are not supported; use [" + table + "]"
+		}
+		if ok && expr.table == parent && strings.HasPrefix(expr.key, nested+".") {
+			return "table-local dotted keys are not supported; use [" + table + "]"
+		}
+	}
+	return ""
 }
 
 func appendTOMLArrayValue(contents []byte, path, table, key, value string) ([]byte, error) {
@@ -494,6 +517,9 @@ func appendTOMLArrayValue(contents []byte, path, table, key, value string) ([]by
 		}
 		updated := appendArrayValue(contents, start, end-1, quoted)
 		return updated, nil
+	}
+	if reason := unsupportedTOMLShape(expressions, table, key); reason != "" {
+		return nil, fmt.Errorf("setup cannot edit %s.%s: %s", table, key, reason)
 	}
 	return appendTOMLKey(contents, table, key, "["+quoted+"]"), nil
 }

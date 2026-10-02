@@ -128,6 +128,36 @@ func TestMergeAgentsSupportsDottedAndInlineTables(t *testing.T) {
 	}
 }
 
+func TestPrepareSetupAddsFirstValueToEmptyInlineTable(t *testing.T) {
+	got, err := PrepareSetup([]byte("backend = \"tmux\"\nagents = {}\n"), "config.toml", "/home/u", SetupValues{Notify: boolPtr(true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "agents = {notify = true}") {
+		t.Fatalf("empty inline table was not updated: %s", got)
+	}
+}
+
+func TestPrepareSetupRefusesExoticInlineShapes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "nested inline", text: "remote = { machines = [\"old\"], backends = { old = \"tmux\" } }\n", want: "nested inline tables"},
+		{name: "table-local dotted", text: "[remote]\nmachines = [\"dev\"]\nbackends.dev = \"tmux\"\n", want: "table-local dotted keys"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := PrepareSetup([]byte(test.text), "config.toml", "/home/u", SetupValues{Backends: map[string]string{"dev": "tmux"}})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func boolPtr(value bool) *bool { return &value }
+
 func TestPrepareSetupArrayMembershipUsesDecodedValues(t *testing.T) {
 	before := "[remote]\nmachines = [ # \"dev\" is only a suggestion\n  'old',\n]\n"
 	after, err := PrepareSetup([]byte(before), "config.toml", "/home/u", SetupValues{Machines: []string{"dev"}})
