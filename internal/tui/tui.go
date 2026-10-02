@@ -97,8 +97,9 @@ type Deps struct {
 	// CreateDirectory is the backend-neutral filesystem action behind the
 	// Projects-tab directory form. It must not open or focus a container.
 	CreateDirectory func(context.Context, string) error
-	// ExtractWorktree is the shared worktree lifecycle used by the Projects-tab
-	// staged form. The backend owns preflight, creation, opening and rollback.
+	// ExtractWorktree is the shared worktree operation used by the Projects-tab
+	// staged form. The backend owns native preflight, creation, opening and
+	// rollback while the operation owns project-path registration.
 	ExtractWorktree     func(context.Context, string, string, string) (capabilities.Worktree, error)
 	ExtractReturnBranch func(context.Context, string) (string, error)
 	// DeleteFingerprint captures selection identity before the confirmation UI.

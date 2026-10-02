@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
-	"github.com/vieitesss/nexo/internal/config"
+	worktreeflow "github.com/vieitesss/nexo/internal/worktree"
 )
 
 type worktreeCommand struct{}
@@ -68,54 +66,23 @@ func runWorktreeCreate(ctx context.Context, invocation Invocation) error {
 		return errors.New("worktree create requires stdout")
 	}
 
-	var restore func() error
-	if parsed.AddParent {
-		restore, err = addParentToConfig(invocation, parsed.Destination)
-		if err != nil {
-			return err
-		}
-	}
-
-	result, err := creator.CreateWorktree(ctx, capabilities.WorktreeCreateOptions{
+	remover, _ := invocation.Adapter.(capabilities.WorktreeRemover)
+	operation, err := worktreeflow.Create(ctx, worktreeflow.Options{
+		Creator:    creator,
+		Remover:    remover,
+		ConfigPath: invocation.ConfigPath,
+	}, worktreeflow.Request{
 		Repo:        parsed.Repo,
 		Branch:      parsed.Branch,
 		Destination: parsed.Destination,
 		NewBranch:   parsed.NewBranch,
+		AddParent:   parsed.AddParent,
 		NoFocus:     parsed.NoFocus,
 	})
 	if err != nil {
-		return restoreConfigOnFailure(err, restore, "worktree")
+		return err
 	}
-
-	var outputErr error
-	if invocation.JSON {
-		outputErr = json.NewEncoder(invocation.Stdout).Encode(worktreeJSON{
-			Path:      result.Path,
-			Branch:    result.Branch,
-			Container: newOpenedContainerJSON(string(invocation.Selection.Kind), result.Container),
-		})
-	} else {
-		_, outputErr = fmt.Fprintf(invocation.Stdout, "created worktree %s on %s\n", result.Path, result.Branch)
-	}
-	if outputErr == nil {
-		return nil
-	}
-
-	var rollbackErr error
-	if remover, ok := invocation.Adapter.(capabilities.WorktreeRemover); ok {
-		rollbackErr = remover.RemoveWorktree(ctx, result)
-	} else {
-		rollbackErr = errors.New("backend cannot roll back a created worktree")
-	}
-	if restore != nil {
-		if configErr := restore(); configErr != nil {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore config after output failure: %w", configErr))
-		}
-	}
-	if rollbackErr != nil {
-		return errors.Join(outputErr, rollbackErr)
-	}
-	return outputErr
+	return writeWorktreeResult(ctx, invocation, operation, "created")
 }
 
 func runWorktreeExtract(ctx context.Context, invocation Invocation) error {
@@ -134,24 +101,26 @@ func runWorktreeExtract(ctx context.Context, invocation Invocation) error {
 		return errors.New("worktree extract requires stdout")
 	}
 
-	var restore func() error
-	if parsed.AddParent {
-		restore, err = addParentToConfig(invocation, parsed.Destination)
-		if err != nil {
-			return err
-		}
-	}
-
-	result, err := extractor.ExtractWorktree(ctx, capabilities.WorktreeExtractOptions{
+	rollbacker, _ := invocation.Adapter.(capabilities.WorktreeExtractionRollback)
+	operation, err := worktreeflow.Extract(ctx, worktreeflow.Options{
+		Extractor:          extractor,
+		ExtractionRollback: rollbacker,
+		ConfigPath:         invocation.ConfigPath,
+	}, worktreeflow.Request{
 		Repo:         parsed.Repo,
 		Destination:  parsed.Destination,
 		ReturnBranch: parsed.ReturnBranch,
+		AddParent:    parsed.AddParent,
 		NoFocus:      parsed.NoFocus,
 	})
 	if err != nil {
-		return restoreConfigOnFailure(err, restore, "worktree extraction")
+		return err
 	}
+	return writeWorktreeResult(ctx, invocation, operation, "extracted")
+}
 
+func writeWorktreeResult(ctx context.Context, invocation Invocation, operation worktreeflow.Result, action string) error {
+	result := operation.Worktree
 	var outputErr error
 	if invocation.JSON {
 		outputErr = json.NewEncoder(invocation.Stdout).Encode(worktreeJSON{
@@ -161,58 +130,15 @@ func runWorktreeExtract(ctx context.Context, invocation Invocation) error {
 			Container:    newOpenedContainerJSON(string(invocation.Selection.Kind), result.Container),
 		})
 	} else {
-		_, outputErr = fmt.Fprintf(invocation.Stdout, "extracted worktree %s on %s\n", result.Path, result.Branch)
+		_, outputErr = fmt.Fprintf(invocation.Stdout, "%s worktree %s on %s\n", action, result.Path, result.Branch)
 	}
 	if outputErr == nil {
 		return nil
 	}
-
-	var rollbackErr error
-	if rollbacker, ok := invocation.Adapter.(capabilities.WorktreeExtractionRollback); ok {
-		rollbackErr = rollbacker.RollbackExtractWorktree(ctx, result)
-	} else {
-		rollbackErr = errors.New("backend cannot roll back an extracted worktree")
-	}
-	if restore != nil {
-		if configErr := restore(); configErr != nil {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore config after output failure: %w", configErr))
-		}
-	}
-	if rollbackErr != nil {
+	if rollbackErr := operation.Rollback(ctx); rollbackErr != nil {
 		return errors.Join(outputErr, rollbackErr)
 	}
 	return outputErr
-}
-
-// addParentToConfig adds the destination's parent directory to project
-// discovery. The returned restore function is nil when nothing changed.
-func addParentToConfig(invocation Invocation, destination string) (func() error, error) {
-	configPath := invocation.ConfigPath
-	if configPath == "" {
-		configPath = config.DefaultPath()
-	}
-	parent := filepath.Dir(destination)
-	if absolute, err := filepath.Abs(parent); err == nil {
-		parent = absolute
-	}
-	restore, changed, err := config.AddProjectPath(configPath, parent, os.Getenv("HOME"))
-	if err != nil {
-		return nil, err
-	}
-	if !changed {
-		return nil, nil
-	}
-	return restore, nil
-}
-
-func restoreConfigOnFailure(err error, restore func() error, action string) error {
-	if restore == nil {
-		return err
-	}
-	if restoreErr := restore(); restoreErr != nil {
-		return errors.Join(err, fmt.Errorf("restore config after %s failure: %w", action, restoreErr))
-	}
-	return err
 }
 
 // worktreeJSON is the documented worktree result plus the container the

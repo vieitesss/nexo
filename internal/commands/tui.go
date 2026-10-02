@@ -22,6 +22,7 @@ import (
 	"github.com/vieitesss/nexo/internal/remote"
 	"github.com/vieitesss/nexo/internal/startup"
 	"github.com/vieitesss/nexo/internal/tui"
+	worktreeflow "github.com/vieitesss/nexo/internal/worktree"
 )
 
 type tuiCommand struct{}
@@ -169,9 +170,15 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 		if !ok {
 			return capabilities.Worktree{}, fmt.Errorf("backend %q does not support extracting worktrees", invocation.Selection.Kind)
 		}
-		return extractor.ExtractWorktree(extractCtx, capabilities.WorktreeExtractOptions{
-			Repo: repo, Destination: destination, ReturnBranch: returnBranch,
+		operation, err := worktreeflow.Extract(extractCtx, worktreeflow.Options{Extractor: extractor}, worktreeflow.Request{
+			Repo:         repo,
+			Destination:  destination,
+			ReturnBranch: returnBranch,
 		})
+		if err != nil {
+			return capabilities.Worktree{}, err
+		}
+		return operation.Worktree, nil
 	}
 	deps.DeleteFingerprint = func(_ context.Context, path string) (string, error) {
 		return deletion.Fingerprint(deletion.OSFileSystem{}, path)

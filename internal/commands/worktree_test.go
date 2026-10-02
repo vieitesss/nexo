@@ -80,6 +80,29 @@ func TestWorktreeCreateCommandPrintsJSON(t *testing.T) {
 	}
 }
 
+func TestWorktreeCreateCommandAddsParentOnSuccess(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("paths = []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Dir(configPath)
+	creator := &fakeWorktreeCreator{result: capabilities.Worktree{Path: filepath.Join(parent, "created"), Branch: "feature"}}
+	command, _ := NewRegistry().Lookup("worktree")
+	if err := command.Run(context.Background(), Invocation{
+		Selection:  backend.Selection{Kind: backend.Tmux},
+		ConfigPath: configPath,
+		Adapter:    creator,
+		Stdout:     &bytes.Buffer{},
+		Args:       []string{"create", "--add-parent", "/repo", "feature", filepath.Join(parent, "created")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	contents, err := os.ReadFile(configPath)
+	if err != nil || !strings.Contains(string(contents), parent) {
+		t.Fatalf("config = %q, %v; want parent %q", contents, err, parent)
+	}
+}
+
 func TestWorktreeCreateCommandAddsParentAndRestoresOnFailure(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	original := "# retain\npaths = [\"/existing\"]\n"
