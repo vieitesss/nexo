@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/deletion"
 	"github.com/vieitesss/nexo/internal/destination"
 )
@@ -53,7 +54,7 @@ func (deleteCommand) Run(ctx context.Context, invocation Invocation) error {
 }
 
 func newDeleteTransaction(invocation Invocation) deletion.Transaction {
-	checker, _ := invocation.Adapter.(deletion.ActiveUseChecker)
+	checker, _ := invocation.Adapter.(capabilities.ProjectUseChecker)
 	return deletion.New(deletion.Options{
 		Projects:      invocation.Config.ProjectsConfig,
 		Home:          os.Getenv("HOME"),

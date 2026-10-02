@@ -8,18 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/destination"
 	"github.com/vieitesss/nexo/internal/projects"
 	"github.com/vieitesss/nexo/internal/runner"
 )
-
-// ActiveUseChecker is the backend's read-only safety check for a project.
-// Implementations must return an error when active use cannot be established;
-// an unknown project is never treated as idle.
-type ActiveUseChecker interface {
-	ProjectActive(context.Context, string) (bool, error)
-}
 
 // Options supplies the configuration snapshot and backend seams used by one
 // deletion operation. The transaction owns discovery, safety checks, and the
@@ -28,7 +22,7 @@ type Options struct {
 	Projects      config.ProjectsConfig
 	Home          string
 	Runner        runner.CommandRunner
-	ActiveChecker ActiveUseChecker
+	ActiveChecker capabilities.ProjectUseChecker
 }
 
 // Transaction is the shared project-deletion operation used by the CLI and

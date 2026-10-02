@@ -63,7 +63,7 @@ func AddProjectPath(path, parent, home string) (restore func() error, changed bo
 	if bytes.Equal(updated, original) && existed {
 		return func() error { return nil }, false, nil
 	}
-	if err := writeConfigFile(path, updated, mode, existed); err != nil {
+	if err := writeConfigFile(path, updated, mode); err != nil {
 		return nil, false, err
 	}
 	writtenInfo, statErr := os.Stat(path)
@@ -93,7 +93,7 @@ func AddProjectPath(path, parent, home string) (restore func() error, changed bo
 			return errors.New("config changed after project path update; refusing to overwrite newer edits")
 		}
 		if existed {
-			return writeConfigFile(path, original, mode, true)
+			return writeConfigFile(path, original, mode)
 		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -118,7 +118,7 @@ func readConfigFile(path string) (contents []byte, mode os.FileMode, existed boo
 	return nil, 0o600, false, nil
 }
 
-func writeConfigFile(path string, contents []byte, mode os.FileMode, _ bool) error {
+func writeConfigFile(path string, contents []byte, mode os.FileMode) error {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
