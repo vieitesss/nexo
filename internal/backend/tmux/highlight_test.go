@@ -360,7 +360,7 @@ func TestPollHighlightsAndListingDoesNot(t *testing.T) {
 		}
 		switch key := commandKey(args); {
 		case strings.HasPrefix(key, "list-panes"):
-			return []byte("%1\t99\tpi\t$1\twork\teditor\t1\t0\t@1\t/tmp\n"), true
+			return []byte("%1\t99\tpi\t$1\twork\teditor\t1\t0\t@1\t0\t/tmp\n"), true
 		case strings.HasPrefix(key, "list-windows"):
 			return []byte("@1\t\tdefault\tdefault\n"), true
 		case strings.HasPrefix(key, "capture-pane"):

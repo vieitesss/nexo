@@ -64,6 +64,35 @@ func TestScreenObservationsPersistThresholdTransitions(t *testing.T) {
 	}
 }
 
+func TestScreenObservationStoppingWhileFocusedIsSeen(t *testing.T) {
+	now := time.Date(2025, time.January, 1, 12, 0, 0, 0, time.UTC)
+	ledger := New(t.TempDir(), "tmux-test", func() time.Time { return now })
+	policy := Policy{IdleThreshold: 3 * time.Second}
+	observe := func(observation Observation) State {
+		t.Helper()
+		results, err := ledger.Observe(Batch{Present: []string{observation.ID}, Observations: []Observation{observation}}, policy, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return results[0].State
+	}
+
+	observe(Observation{ID: "%1", Working: true, Focused: true})
+	now = now.Add(3 * time.Second)
+	if state := observe(Observation{ID: "%1", Focused: true}); state.State != "stopped" || !state.Seen {
+		t.Fatalf("stopped while focused = %#v, want seen", state)
+	}
+
+	observe(Observation{ID: "%2", Working: true})
+	now = now.Add(3 * time.Second)
+	if state := observe(Observation{ID: "%2"}); state.State != "stopped" || state.Seen {
+		t.Fatalf("stopped while unfocused = %#v, want unseen", state)
+	}
+	if state := observe(Observation{ID: "%2", Focused: true}); !state.Seen {
+		t.Fatalf("stopped then focused = %#v, want seen", state)
+	}
+}
+
 func TestNativeObservationsUseStatusSequenceAndFocus(t *testing.T) {
 	stateDir := t.TempDir()
 	now := time.Date(2025, time.January, 1, 12, 0, 0, 0, time.UTC)

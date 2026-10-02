@@ -156,7 +156,7 @@ func TestSourceDropsPendingNotificationWhenPaneWorksAgain(t *testing.T) {
 func TestSourceDropsPendingNotificationWhenPaneDisappears(t *testing.T) {
 	clock := time.Date(2025, time.January, 1, 12, 0, 0, 0, time.UTC)
 	screen := "⠋ working"
-	paneList := "%1\t99\tpi\t$1\twork\twindow\t1\t2\t@1\t/tmp\n"
+	paneList := "%1\t99\tpi\t$1\twork\twindow\t1\t2\t@1\t0\t/tmp\n"
 	runner := runnerForNotificationTest(&screen)
 	runner.paneList = &paneList
 	notifier := &recordingNotifier{}
@@ -222,7 +222,7 @@ func (r *multiNotificationSourceRunner) Run(_ context.Context, name string, args
 		joined := commandKey(args)
 		switch {
 		case strings.HasPrefix(joined, "list-panes"):
-			return []byte("%1\t99\tpi\t$1\twork\twindow\t1\t1\t@1\t/tmp\n%2\t100\tclaude\t$1\twork\twindow\t1\t2\t@1\t/tmp\n"), nil
+			return []byte("%1\t99\tpi\t$1\twork\twindow\t1\t1\t@1\t0\t/tmp\n%2\t100\tclaude\t$1\twork\twindow\t1\t2\t@1\t0\t/tmp\n"), nil
 		case strings.HasPrefix(joined, "display-message"):
 			return []byte("/tmp/tmux-test\n"), nil
 		case strings.HasPrefix(joined, "capture-pane"):
@@ -253,7 +253,7 @@ func (r *notificationSourceRunner) Run(_ context.Context, name string, args ...s
 			if r.paneList != nil {
 				return []byte(*r.paneList), nil
 			}
-			return []byte("%1\t99\tpi\t$1\twork\twindow\t1\t2\t@1\t/tmp\n"), nil
+			return []byte("%1\t99\tpi\t$1\twork\twindow\t1\t2\t@1\t0\t/tmp\n"), nil
 		case strings.HasPrefix(joined, "display-message"):
 			return []byte("/tmp/tmux-test\n"), nil
 		case strings.HasPrefix(joined, "capture-pane"):

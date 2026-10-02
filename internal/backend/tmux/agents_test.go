@@ -72,10 +72,10 @@ func TestAgentPanesFindsHarnessInPaneDescendants(t *testing.T) {
 		"  202   200 vim notes/claude.md\n" +
 		"  300     1 -bash\n"
 	panes := []string{
-		"%1\t100\tnode\t$1\twork\teditor\t1\t0\t@1\t/tmp/work",
-		"%2\t200\t2.1.30\t$2\tdev\tshell\t1\t0\t@2\t/tmp/dev",
-		"%3\t300\tpi\t$3\tover\tmain\t0\t0\t@3\t/tmp/over",
-		"%4\t202\tvim\t$4\tnotes\tmain\t0\t0\t@4\t/tmp/notes",
+		"%1\t100\tnode\t$1\twork\teditor\t1\t0\t@1\t0\t/tmp/work",
+		"%2\t200\t2.1.30\t$2\tdev\tshell\t1\t0\t@2\t0\t/tmp/dev",
+		"%3\t300\tpi\t$3\tover\tmain\t0\t0\t@3\t0\t/tmp/over",
+		"%4\t202\tvim\t$4\tnotes\tmain\t0\t0\t@4\t0\t/tmp/notes",
 	}
 	psCalls := 0
 	r := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -150,7 +150,7 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 			joined := commandKey(args)
 			switch {
 			case strings.HasPrefix(joined, "list-panes"):
-				return []byte("%1\t99\tpi\t$1\twork\teditor\t1\t2\t@1\t/tmp\n"), nil
+				return []byte("%1\t99\tpi\t$1\twork\teditor\t1\t2\t@1\t0\t/tmp\n"), nil
 			case strings.HasPrefix(joined, "display-message"):
 				return []byte("/tmp/tmux-test\n"), nil
 			case strings.HasPrefix(joined, "capture-pane"):
@@ -231,6 +231,43 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 	}
 	if len(watcherAgents) != 1 || !watcherAgents[0].Seen {
 		t.Fatalf("watcher poll clobbered focus hook state: %#v", watcherAgents)
+	}
+}
+
+func TestSourceAgentStoppingInFocusedPaneIsSeen(t *testing.T) {
+	clock := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	screen := "⠋ working"
+	r := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "tmux" {
+			return nil, nil
+		}
+		joined := commandKey(args)
+		switch {
+		case strings.HasPrefix(joined, "list-panes"):
+			return []byte("%1\t99\tpi\t$1\twork\teditor\t1\t0\t@1\t1\t/tmp\n%2\t98\tpi\t$1\twork\tother\t2\t0\t@2\t0\t/tmp\n"), nil
+		case strings.HasPrefix(joined, "display-message"):
+			return []byte("/tmp/tmux-test\n"), nil
+		case strings.HasPrefix(joined, "capture-pane"):
+			return []byte(screen), nil
+		}
+		return nil, nil
+	})
+	source := NewAgentSource(r)
+	setStateDir(source, t.TempDir())
+	setClock(source, func() time.Time { return clock })
+	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, IdleSeconds: 3, PollInterval: 1})
+
+	if _, err := source.ListAgents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	screen = "prompt> "
+	clock = clock.Add(3 * time.Second)
+	agents, err := source.ListAgents(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 2 || agents[0].State != "stopped" || !agents[0].Seen || agents[1].State != "stopped" || agents[1].Seen {
+		t.Fatalf("agents = %#v, want the focused pane seen and the other unseen", agents)
 	}
 }
 

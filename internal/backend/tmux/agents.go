@@ -33,6 +33,9 @@ type pane struct {
 	path        string
 	harness     string
 	branch      string
+	// focused reports that the pane is the active pane of the active window
+	// in a session some client is attached to.
+	focused bool
 }
 
 type observedPane struct {
@@ -151,6 +154,7 @@ func (s *Source) listAgents(ctx context.Context, highlight bool) ([]capabilities
 		observations = append(observations, agentstate.Observation{
 			ID:      current.id,
 			Working: current.working,
+			Focused: current.focused,
 		})
 	}
 	results, err := s.ledger().Observe(
@@ -198,7 +202,7 @@ func (s *Source) runTmux(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pane, error) {
-	format := "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{session_id}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_index}\t#{window_id}\t#{pane_current_path}"
+	format := "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{session_id}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_index}\t#{window_id}\t#{&&:#{session_attached},#{&&:#{window_active},#{pane_active}}}\t#{pane_current_path}"
 	output, err := s.runTmux(ctx, "list-panes", "-a", "-F", format)
 	if err != nil {
 		return nil, fmt.Errorf("list tmux panes: %w", err)
@@ -214,8 +218,8 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		fields := strings.SplitN(line, "\t", 10)
-		if len(fields) != 10 {
+		fields := strings.SplitN(line, "\t", 11)
+		if len(fields) != 11 {
 			continue
 		}
 		containerField := 4
@@ -223,7 +227,8 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		windowIndexField := 6
 		paneIndexField := 7
 		windowIDField := 8
-		pathField := 9
+		focusedField := 9
+		pathField := 10
 		current := strings.TrimSpace(fields[2])
 		harness := findHarness(current, allow)
 		if harness == "" {
@@ -251,6 +256,7 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 			windowID:    strings.TrimSpace(fields[windowIDField]),
 			target:      fmt.Sprintf("%s:%s.%s", fields[containerField], fields[windowIndexField], fields[paneIndexField]),
 			harness:     harness,
+			focused:     strings.TrimSpace(fields[focusedField]) == "1",
 		}
 		p.branch = git.Branch(ctx, s.runner, p.path)
 		result = append(result, p)

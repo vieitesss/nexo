@@ -127,6 +127,9 @@ func TestTmuxUnseenWindowHighlightFocusHook(t *testing.T) {
 	// window focuses it before the targeted agent pane.
 	mustRun(t, runTmux, "split-window", "-t", "work:0", "-P", "-F", "#{pane_id}", "sleep 600")
 	mustRun(t, runTmux, "new-window", "-t", "work", "-n", "other", pi+" 600")
+	// The attached client looks at the non-agent pane, so every agent stops
+	// unseen; an agent that stops in the pane being looked at would be seen.
+	mustRun(t, runTmux, "select-window", "-t", "work:0")
 	// Custom inherited styles so clearing can be asserted to restore them.
 	mustRun(t, runTmux, "set-option", "-g", "window-status-style", "bg=colour17")
 	mustRun(t, runTmux, "set-option", "-g", "window-status-current-style", "bg=colour18")

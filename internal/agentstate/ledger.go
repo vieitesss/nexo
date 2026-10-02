@@ -319,6 +319,11 @@ func transition(previous State, observation Observation, policy Policy, now time
 		previous.StoppedSince = &stoppedAt
 		previous.Seen = false
 	}
+	// An agent that stops in the pane the user is looking at has been seen;
+	// no focus hook fires because focus never moved.
+	if observation.Focused {
+		previous.Seen = true
+	}
 	return previous, enteredStopped
 }
 
