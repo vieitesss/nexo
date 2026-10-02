@@ -80,35 +80,7 @@ func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, default
 		stages = append(stages, formStage{ID: "remote-backend:" + machine, Title: "backend for " + machine, Fields: []formField{{ID: "remote-backend:" + machine, Label: "tmux or herdr", Value: defaults.RemoteBackends[machine]}}})
 	}
 	form := newStagedForm(ctx, stages, func(f *stagedForm) formValidation {
-		for stageIndex, stage := range f.stages {
-			if stageIndex > f.stage {
-				break
-			}
-			for index := range stage.Fields {
-				field := &stage.Fields[index]
-				if field.ID == "backend" {
-					backend := strings.ToLower(strings.TrimSpace(field.Value))
-					if backend != "tmux" && backend != "herdr" {
-						field.Error = "choose tmux or herdr"
-						return formValidation{Error: "backend must be tmux or herdr"}
-					}
-				}
-				if field.ID == "tui-key" || field.ID == "agents-key" {
-					if err := config.ValidateBindingKey(field.Value); err != nil {
-						field.Error = err.Error()
-						return formValidation{Error: "choose a valid binding key or leave it blank"}
-					}
-				}
-				if strings.HasPrefix(field.ID, "remote-backend:") {
-					backend := strings.ToLower(strings.TrimSpace(field.Value))
-					if backend != "tmux" && backend != "herdr" {
-						field.Error = "choose tmux or herdr"
-						return formValidation{Error: "each remote backend must be tmux or herdr"}
-					}
-				}
-			}
-		}
-		return formValidation{}
+		return validateSetupForm(f, defaults.Backend)
 	}, func(_ context.Context, values map[string]string, _ uint64) tea.Cmd {
 		return func() tea.Msg {
 			answer := SetupPromptValues{Backend: strings.ToLower(strings.TrimSpace(values["backend"])), Notify: values["notify"] == "yes"}
@@ -173,6 +145,85 @@ func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, default
 		return SetupPromptValues{}, fmt.Errorf("setup form returned no answer")
 	}
 	return *final.value, nil
+}
+
+// PromptRemoteBackends asks only the questions whose machines were found
+// ambiguous after the host-selection stage. Keeping this as a second form
+// means aliases typed into that stage are included in the final question list.
+func PromptRemoteBackends(ctx context.Context, input io.Reader, output io.Writer, backends map[string]string) (map[string]string, error) {
+	machines := make([]string, 0, len(backends))
+	for machine := range backends {
+		machines = append(machines, machine)
+	}
+	sort.Strings(machines)
+	stages := make([]formStage, 0, len(machines))
+	for _, machine := range machines {
+		stages = append(stages, formStage{ID: "remote-backend:" + machine, Title: "backend for " + machine, Fields: []formField{{ID: "remote-backend:" + machine, Label: "tmux or herdr", Value: backends[machine]}}})
+	}
+	form := newStagedForm(ctx, stages, func(f *stagedForm) formValidation {
+		return validateSetupForm(f, "")
+	}, func(_ context.Context, values map[string]string, _ uint64) tea.Cmd {
+		return func() tea.Msg {
+			answer := SetupPromptValues{RemoteBackends: make(map[string]string, len(machines))}
+			for _, machine := range machines {
+				answer.RemoteBackends[machine] = strings.ToLower(strings.TrimSpace(values["remote-backend:"+machine]))
+			}
+			return setupPromptDone{values: answer}
+		}
+	})
+	model := setupPromptModel{form: form}
+	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(input), tea.WithOutput(output))
+	result, err := program.Run()
+	if err != nil {
+		return nil, fmt.Errorf("run remote backend form: %w", err)
+	}
+	final, ok := result.(setupPromptModel)
+	if !ok || final.value == nil {
+		if final.err != nil {
+			return nil, final.err
+		}
+		return nil, fmt.Errorf("remote backend form returned no answer")
+	}
+	return final.value.RemoteBackends, nil
+}
+
+func validateSetupForm(f *stagedForm, defaultBackend string) formValidation {
+	backend := defaultBackend
+	for _, stage := range f.stages {
+		for _, field := range stage.Fields {
+			if field.ID == "backend" {
+				backend = strings.ToLower(strings.TrimSpace(field.Value))
+			}
+		}
+	}
+	for stageIndex, stage := range f.stages {
+		if stageIndex > f.stage {
+			break
+		}
+		for index := range stage.Fields {
+			field := &stage.Fields[index]
+			if field.ID == "backend" {
+				if backend != "tmux" && backend != "herdr" {
+					field.Error = "choose tmux or herdr"
+					return formValidation{Error: "backend must be tmux or herdr"}
+				}
+			}
+			if field.ID == "tui-key" || field.ID == "agents-key" {
+				if err := config.ValidateBindingKeyForBackend(backend, field.Value); err != nil {
+					field.Error = err.Error()
+					return formValidation{Error: "choose a valid binding key or leave it blank"}
+				}
+			}
+			if strings.HasPrefix(field.ID, "remote-backend:") {
+				remoteBackend := strings.ToLower(strings.TrimSpace(field.Value))
+				if remoteBackend != "tmux" && remoteBackend != "herdr" {
+					field.Error = "choose tmux or herdr"
+					return formValidation{Error: "each remote backend must be tmux or herdr"}
+				}
+			}
+		}
+	}
+	return formValidation{}
 }
 
 func appendUnique(values []string, value string) []string {

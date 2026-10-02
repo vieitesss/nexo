@@ -40,6 +40,17 @@ func TestReadinessIgnoresCommentedBackendLines(t *testing.T) {
 	}
 }
 
+func TestTmuxReadinessRequiresHooksAndFocusEvents(t *testing.T) {
+	ready, err := probeTmuxReadiness(context.Background(), remoteFileRunner{output: []byte("watcher=yes\ntmux_running=yes\ntmux_focus=on\ntmux_hooks=yes\n")}, "", "")
+	if err != nil || !ready.TmuxFocusOK || !ready.TmuxHooksOK || !ready.WatcherRunning {
+		t.Fatalf("ready probe = %#v, err=%v", ready, err)
+	}
+	missingHooks, err := probeTmuxReadiness(context.Background(), remoteFileRunner{output: []byte("watcher=yes\ntmux_running=yes\ntmux_focus=on\ntmux_hooks=no\n")}, "", "")
+	if err != nil || !missingHooks.TmuxFocusOK || missingHooks.TmuxHooksOK {
+		t.Fatalf("missing-hooks probe = %#v, err=%v", missingHooks, err)
+	}
+}
+
 func TestRemoteShellChangePreservesLocaleRepair(t *testing.T) {
 	before := ManagedStart + "\nexport PATH=\"$HOME/.local/bin:$PATH\"\nexport LC_ALL='C.UTF-8'\n" + ManagedEnd + "\n"
 	response := "__NEXO_FILE_PRESENT__\n" + before
