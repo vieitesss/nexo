@@ -1,9 +1,12 @@
 # Usage and commands
 
-Running `nexo` with no command prints usage. The TUI entry point accepts an
-optional starting tab. Global flags can appear before or after a command, so
-`nexo --backend=herdr tui projects` and `nexo tui projects --backend=herdr`
-are equivalent.
+Running `nexo` with no command prints usage. `nexo --help` lists every
+command and global flag. Use `nexo <command> --help`, `nexo <command> -h`, or
+`nexo help <command> [subcommand]` for that command's subcommands, flags, and
+examples; nested paths such as `nexo remote paste --help` work the same way.
+The TUI entry point accepts an optional starting tab. Global flags can appear
+before or after a command, so `nexo --backend=herdr tui projects` and
+`nexo tui projects --backend=herdr` are equivalent.
 
 ## Commands
 
@@ -23,6 +26,11 @@ are equivalent.
 | `nexo worktree extract REPO DESTINATION` | Move the branch checked out in `REPO` into a new worktree and leave a return branch behind; add `--return-branch`, `--add-parent`, or `--no-focus`. |
 | `nexo tmux init` | Install tmux focus hooks and replace the agent watcher (tmux backend only). |
 | `nexo tmux glance on\|off\|toggle` | Show, hide or toggle the glance row that lists agent panes (tmux backend only). Bind it yourself; nexo installs no key. |
+
+Help lists `focus`, `agents watch`, and the tmux integration commands because
+users invoke them from backend hooks or bindings and may need to inspect them.
+The internal `remote attach` proxy entry point remains hidden from the
+subcommand table, but `nexo remote attach --help` still documents it.
 
 ## Examples
 

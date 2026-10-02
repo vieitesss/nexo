@@ -371,7 +371,8 @@ cleanup errors are returned rather than hidden.
   before or after the command, but it is a global flag rather than a positional
   argument.
 - `--version` prints the version and exits `0`; `--help` prints command and
-  flag help and exits `0`.
+  flag help and exits `0`. Use `nexo <command> --help` or
+  `nexo help <command> [subcommand]` for nested command help.
 
 stderr is plain text, not a JSON error envelope and not a per-line framing
 protocol. Most CLI diagnostics are one line prefixed with `nexo:`, but
