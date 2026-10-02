@@ -118,7 +118,7 @@ func TestLoadParsesGlanceDotsAndColors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	want := GlanceColors{Working: "@thm_yellow", Unseen: "colour160", Seen: "default"}
+	want := GlanceColors{Working: "@thm_yellow", Unseen: "colour160", Seen: "green"}
 	if got.Glance.Dots != GlanceDotsSymbols || got.Glance.Colors != want {
 		t.Fatalf("Glance = %#v, want symbols and %#v", got.Glance, want)
 	}
@@ -134,7 +134,7 @@ func TestLoadDefaultsGlanceDotsAndColors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	want := GlanceColors{Working: "yellow", Unseen: "red", Seen: "default"}
+	want := GlanceColors{Working: "yellow", Unseen: "red", Seen: "green"}
 	if got.Glance.Dots != GlanceDotsColor || got.Glance.Colors != want {
 		t.Fatalf("Glance = %#v, want color dots and %#v", got.Glance, want)
 	}

@@ -43,10 +43,10 @@ const (
 // its state.
 var defaultGlanceFields = []string{"dot", "target"}
 
-// defaultGlanceColors follow the TUI state cues. The seen dot keeps the status
-// foreground: a grey such as brightblack vanishes on themes whose bright black
-// is the background.
-var defaultGlanceColors = GlanceColors{Working: "yellow", Unseen: "red", Seen: "default"}
+// defaultGlanceColors follow the TUI state cues. The seen dot is green, an idle
+// agent that needs nothing: a grey such as brightblack vanishes on themes whose
+// bright black is the background.
+var defaultGlanceColors = GlanceColors{Working: "yellow", Unseen: "red", Seen: "green"}
 
 // WithDefaults returns a copy with the documented glance defaults filled in.
 func (c GlanceConfig) WithDefaults() GlanceConfig {

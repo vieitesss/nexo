@@ -86,7 +86,7 @@ pane, for example `nexo │ [● zeta:1.0]`. Each entry renders the enabled
 branch, age`; the defaults are `dot` and `target`. The dot is one `●` whose
 colour carries the state: `[glance] colors` sets `working` (default `yellow`),
 `unseen` stopped (default `red`, like the window highlight) and `seen` stopped
-(default `default`, the status foreground). Each colour is a tmux colour or a
+(default `green`). Each colour is a tmux colour or a
 theme palette option such as `@thm_yellow`. For terminals without colour,
 `[glance] dots = "symbols"` draws an uncoloured `◐` for a working agent, `●`
 for an unseen stopped agent and `○` for a seen stopped agent instead. Entries

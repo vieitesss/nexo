@@ -1,1 +1,1 @@
-#[bg=#{@thm_surface_0}]nexo │ [#[fg=red]●#[fg=default] zeta:1.0] [#[fg=yellow]●#[fg=default] alpha:0.1] [● beta:2.0]
+#[bg=#{@thm_surface_0}]nexo │ [#[fg=red]●#[fg=default] zeta:1.0] [#[fg=yellow]●#[fg=default] alpha:0.1] [#[fg=green]●#[fg=default] beta:2.0]
