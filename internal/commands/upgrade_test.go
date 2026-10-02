@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/config"
@@ -82,6 +83,78 @@ func TestUpgradeDryRunPrintsOneLinePerSelectedMachine(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
 	if len(lines) != 2 || !strings.Contains(lines[0], "local: v1.0.0 -> v2.0.0 (dry-run)") || !strings.Contains(lines[1], "devbox:") {
 		t.Fatalf("output = %q, want one line for local and devbox", output.String())
+	}
+}
+
+func TestUpgradeTerminalDryRunUsesLiveProgressTable(t *testing.T) {
+	previous := upgradeInteractiveTerminal
+	upgradeInteractiveTerminal = func() bool { return true }
+	defer func() { upgradeInteractiveTerminal = previous }()
+	var output strings.Builder
+	fake := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch {
+		case name == "git":
+			return []byte("abc\trefs/tags/v2.0.0\n"), nil
+		case name == "uname" && len(args) == 1 && args[0] == "-s":
+			return []byte("Linux\n"), nil
+		case name == "uname" && len(args) == 1 && args[0] == "-m":
+			return []byte("x86_64\n"), nil
+		case name == "sh" && len(args) == 2 && args[0] == "-c" && args[1] == "command -v nexo":
+			return []byte("/usr/local/bin/nexo\n"), nil
+		case name == "brew":
+			return nil, errors.New("brew not installed")
+		case name == "/usr/local/bin/nexo":
+			return []byte("nexo v1.0.0\n"), nil
+		default:
+			return nil, errors.New("unexpected command")
+		}
+	})
+	if err := (upgradeCommand{}).Run(context.Background(), Invocation{
+		Config: config.Config{}, Runner: fake, Stdout: &output, Stdin: strings.NewReader(""),
+		Args: []string{"--version", "v2.0.0", "--dry-run", "--local-only"},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(output.String(), "MACHINE") || !strings.Contains(output.String(), "STATUS") || !strings.Contains(output.String(), "DETAIL") {
+		t.Fatalf("output = %q, want the live progress table", output.String())
+	}
+	if !strings.Contains(output.String(), "✓ done") {
+		t.Fatalf("output = %q, want a final done row", output.String())
+	}
+	if !strings.Contains(output.String(), "v1.0.0") || !strings.Contains(output.String(), "v2.0.0") {
+		t.Fatalf("output = %q, want old and target versions", output.String())
+	}
+}
+
+func TestUpgradeCancellationIsNotReportedAsFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	var once sync.Once
+	fake := funcRunner(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name != "ssh" {
+			return nil, errors.New("unexpected command")
+		}
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		return nil, errors.New("signal: killed")
+	})
+	go func() {
+		<-started
+		cancel()
+	}()
+	var output strings.Builder
+	err := runUpgradeInteractive(ctx, Invocation{
+		Runner: fake, Stdout: &output, Stdin: strings.NewReader(""),
+	}, []upgradeMachine{{Name: "slowhost", Remote: true}}, upgradeversion.Version{Release: "v2.0.0", Ref: "v2.0.0"}, false)
+	if err == nil || err.Error() != "upgrade cancelled" {
+		t.Fatalf("runUpgradeInteractive() error = %v, want upgrade cancelled", err)
+	}
+	if strings.Contains(output.String(), "✗ failed") || strings.Contains(output.String(), "failed on") {
+		t.Fatalf("output = %q, cancellation looked like failure", output.String())
+	}
+	if !strings.Contains(output.String(), "cancelled") {
+		t.Fatalf("output = %q, want cancelled row", output.String())
 	}
 }
 

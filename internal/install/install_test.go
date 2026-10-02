@@ -266,8 +266,17 @@ func TestCopyAtomicReplacesLocalFile(t *testing.T) {
 	if err := os.WriteFile(source, contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := CopyAtomic(context.Background(), NewLocalTarget(runner.ExecRunner{}), source, destination); err != nil {
+	published := false
+	if err := copyAtomic(context.Background(), NewLocalTarget(runner.ExecRunner{}), source, destination, func() {
+		if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("publish callback observed destination error = %v, want not-exist", err)
+		}
+		published = true
+	}); err != nil {
 		t.Fatalf("CopyAtomic() error = %v", err)
+	}
+	if !published {
+		t.Fatal("publish callback was not called")
 	}
 	got, err := os.ReadFile(destination)
 	if err != nil {
@@ -281,6 +290,46 @@ func TestCopyAtomicReplacesLocalFile(t *testing.T) {
 	}
 }
 
+func TestCopyAtomicRemotePublishesAfterTransferCallback(t *testing.T) {
+	directory := t.TempDir()
+	source := filepath.Join(directory, "built-nexo")
+	if err := os.WriteFile(source, []byte("new binary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var actions []string
+	remote := &fakeRunner{}
+	// fakeRunner's RunInput delegates to run; return the transfer staging path
+	// from that callback while recording the publish command in Run.
+	remote.run = func(name string, args ...string) ([]byte, error) {
+		if name == "ssh" {
+			command := strings.Join(args, " ")
+			actions = append(actions, command)
+			if strings.Contains(command, "sh -c") {
+				return []byte("/tmp/nexo-stage\n"), nil
+			}
+		}
+		return nil, nil
+	}
+	published := false
+	if err := copyAtomic(context.Background(), NewRemoteTarget(remote, "test", ""), source, "/usr/local/bin/nexo", func() {
+		published = true
+	}); err != nil {
+		t.Fatalf("copyAtomic() error = %v", err)
+	}
+	if !published || len(actions) < 2 {
+		t.Fatalf("actions = %#v, callback = %v", actions, published)
+	}
+	if !strings.Contains(actions[0], "'sh'") || !strings.Contains(actions[1], "'mv'") {
+		t.Fatalf("actions = %#v, want transfer then publish", actions)
+	}
+}
+
+// publishingCopyScript runs the transfer receiver followed by the publish
+// rename, as CopyAtomic does over two remote actions.
+func publishingCopyScript(destination string, size int, digest string) string {
+	return copyTransferScript(destination, destination+".nexo-copy.test.tmp", size, digest) + "; mv -f \"$tmp\" \"$dest\""
+}
+
 func TestCopyScriptRejectsBrokenTransfers(t *testing.T) {
 	directory := t.TempDir()
 	destination := filepath.Join(directory, "bin", "nexo")
@@ -292,7 +341,7 @@ func TestCopyScriptRejectsBrokenTransfers(t *testing.T) {
 	}
 	contents := []byte("complete-new-binary")
 	sum := sha256.Sum256(contents)
-	script := copyScript(destination, len(contents), hex.EncodeToString(sum[:]))
+	script := publishingCopyScript(destination, len(contents), hex.EncodeToString(sum[:]))
 	run := func(input []byte) error {
 		command := exec.Command("sh", "-c", script)
 		command.Stdin = bytes.NewReader(input)
@@ -336,7 +385,7 @@ func TestCopyScriptLeavesDestinationWhenDirectoryIsUnwritable(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 	contents := []byte("complete-new-binary")
 	sum := sha256.Sum256(contents)
-	command := exec.Command("sh", "-c", copyScript(destination, len(contents), hex.EncodeToString(sum[:])))
+	command := exec.Command("sh", "-c", publishingCopyScript(destination, len(contents), hex.EncodeToString(sum[:])))
 	command.Stdin = bytes.NewReader(contents)
 	if err := command.Run(); err == nil {
 		t.Fatal("unwritable destination directory accepted the copy")
@@ -431,6 +480,7 @@ func TestInstallPublishesReferentAndPreservesSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	destPattern := regexp.MustCompile(`dest='([^']+)'`)
+	var events []ProgressStep
 	fake := &fakeRunner{run: func(name string, args ...string) ([]byte, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		switch {
@@ -459,7 +509,10 @@ func TestInstallPublishesReferentAndPreservesSymlink(t *testing.T) {
 		}
 		return nil, errors.New("unexpected command: " + key)
 	}}
-	got, err := Install(context.Background(), NewLocalTarget(fake), Request{Ref: "abcdef1234567890", Local: &LocalBuilder{Runner: fake}})
+	got, err := Install(context.Background(), NewLocalTarget(fake), Request{
+		Ref: "abcdef1234567890", Local: &LocalBuilder{Runner: fake},
+		Progress: func(event ProgressEvent) { events = append(events, event.Step) },
+	})
 	if err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
@@ -468,6 +521,15 @@ func TestInstallPublishesReferentAndPreservesSymlink(t *testing.T) {
 	}
 	if got.Version != "v0.0.0-20200101000000-abcdef123456" {
 		t.Fatalf("version = %q", got.Version)
+	}
+	wantEvents := []ProgressStep{ProgressBuilding, ProgressCopying, ProgressInstalling}
+	if len(events) != len(wantEvents) {
+		t.Fatalf("progress events = %#v, want %#v", events, wantEvents)
+	}
+	for index, want := range wantEvents {
+		if events[index] != want {
+			t.Fatalf("progress event %d = %q, want %q", index, events[index], want)
+		}
 	}
 	linkTarget, err := os.Readlink(link)
 	if err != nil {

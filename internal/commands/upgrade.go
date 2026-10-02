@@ -8,9 +8,11 @@ import (
 	"sync"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/install"
+	"github.com/vieitesss/nexo/internal/progress"
 	upgradeversion "github.com/vieitesss/nexo/internal/upgrade"
 )
 
@@ -43,6 +45,10 @@ func (upgradeCommand) Help() Help {
 // unreachable or stalled target cannot hold back the other result lines.
 const upgradeMachineTimeout = 15 * time.Minute
 
+// upgradeInteractiveTerminal is a seam for command tests. Production checks
+// the process fds through the same helper used by setup.
+var upgradeInteractiveTerminal = interactiveTerminal
+
 func (upgradeCommand) Run(ctx context.Context, invocation Invocation) error {
 	if invocation.Stdout == nil {
 		return errors.New("upgrade requires stdout")
@@ -56,26 +62,158 @@ func (upgradeCommand) Run(ctx context.Context, invocation Invocation) error {
 		Nightly: options.nightly,
 	})
 	if err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return upgradeCancelled()
+		}
 		return err
 	}
 	machines, err := upgradeMachines(invocation.Config.Remote, options)
 	if err != nil {
 		return UsageError{Err: err}
 	}
-	results := runUpgradeMachines(ctx, invocation, machines, requested, options.dryRun)
+	if upgradeInteractiveTerminal() {
+		return runUpgradeInteractive(ctx, invocation, machines, requested, options.dryRun)
+	}
+	return runUpgradePlain(ctx, invocation, machines, requested, options.dryRun)
+}
+
+func runUpgradePlain(ctx context.Context, invocation Invocation, machines []upgradeMachine, requested upgradeversion.Version, dryRun bool) error {
+	results := runUpgradeMachines(ctx, invocation, machines, requested, dryRun, nil)
 	failed := 0
+	cancelled := false
 	for _, result := range results {
 		if _, err := fmt.Fprintln(invocation.Stdout, result.line()); err != nil {
 			return err
 		}
-		if result.err != nil {
+		if result.cancelled {
+			cancelled = true
+		} else if result.err != nil {
 			failed++
 		}
 	}
+	if cancelled || errors.Is(ctx.Err(), context.Canceled) {
+		return upgradeCancelled()
+	}
+	return upgradeFailure(failed)
+}
+
+func upgradeFailure(failed int) error {
 	if failed > 0 {
 		return fmt.Errorf("upgrade failed on %d machine(s)", failed)
 	}
 	return nil
+}
+
+func upgradeCancelled() error {
+	return errors.New("upgrade cancelled")
+}
+
+func runUpgradeInteractive(ctx context.Context, invocation Invocation, machines []upgradeMachine, requested upgradeversion.Version, dryRun bool) error {
+	operationCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	targets := make([]progress.Target, len(machines))
+	for index, machine := range machines {
+		targets[index] = progress.Target{Name: machine.Name}
+	}
+	header := "Upgrade " + requested.Label()
+	if dryRun {
+		header += " (dry-run)"
+	}
+	model := progress.NewModel(header, targets)
+	model.SetCancel(cancel)
+	program := tea.NewProgram(model, tea.WithInput(invocation.Stdin), tea.WithOutput(invocation.Stdout))
+	programDone := make(chan progressProgramResult, 1)
+	go func() {
+		result, err := program.Run()
+		programDone <- progressProgramResult{model: result, err: err}
+	}()
+
+	// Keep a copy of every event so a renderer/input failure can still produce
+	// the complete final table after the workers have joined. Program.Send is
+	// safe after Run returns and becomes a no-op, so reporting remains simple.
+	var eventsMu sync.Mutex
+	events := make([]progress.Event, 0, len(machines)*4)
+	report := func(event progress.Event) {
+		eventsMu.Lock()
+		events = append(events, event)
+		eventsMu.Unlock()
+		program.Send(progress.EventMsg{Event: event})
+	}
+	workersDone := make(chan []upgradeResult, 1)
+	go func() {
+		workersDone <- runUpgradeMachines(operationCtx, invocation, machines, requested, dryRun, report)
+	}()
+
+	var (
+		programResult   progressProgramResult
+		results         []upgradeResult
+		programFinished bool
+		workersFinished bool
+	)
+	for !programFinished || !workersFinished {
+		select {
+		case programResult = <-programDone:
+			programFinished = true
+			if !workersFinished {
+				// The UI is gone before the workers returned. Stop the operation
+				// now rather than leaving blocked build/SSH work behind.
+				cancel()
+			}
+		case results = <-workersDone:
+			workersFinished = true
+			if !programFinished {
+				// Workers publish all events before this message, so CompleteMsg
+				// is ordered after every worker event in Bubble Tea's queue.
+				program.Send(progress.CompleteMsg{})
+			}
+		}
+	}
+
+	finalModel := model
+	switch returned := programResult.model.(type) {
+	case progress.Model:
+		finalModel = returned
+	case *progress.Model:
+		if returned != nil {
+			finalModel = *returned
+		}
+	}
+	eventsMu.Lock()
+	for _, event := range events {
+		finalModel.Apply(event)
+	}
+	eventsMu.Unlock()
+	if output := finalModel.FinalView(); output != "" {
+		if _, err := fmt.Fprint(invocation.Stdout, output); err != nil {
+			return err
+		}
+	}
+
+	failed := 0
+	cancelled := false
+	for _, result := range results {
+		if result.cancelled {
+			cancelled = true
+		} else if result.err != nil {
+			failed++
+		}
+	}
+	if errors.Is(programResult.err, tea.ErrInterrupted) || errors.Is(ctx.Err(), context.Canceled) {
+		return upgradeCancelled()
+	}
+	if programResult.err != nil {
+		return fmt.Errorf("run upgrade progress: %w", programResult.err)
+	}
+	if cancelled {
+		return upgradeCancelled()
+	}
+	return upgradeFailure(failed)
+}
+
+type progressProgramResult struct {
+	model tea.Model
+	err   error
 }
 
 type upgradeOptions struct {
@@ -187,36 +325,69 @@ func upgradeMachines(remote config.RemoteConfig, options upgradeOptions) ([]upgr
 }
 
 type upgradeResult struct {
-	machine string
-	old     string
-	new     string
-	skipped bool
-	dryRun  bool
-	err     error
+	machine   string
+	old       string
+	new       string
+	skipped   bool
+	dryRun    bool
+	cancelled bool
+	err       error
 }
 
-func runUpgradeMachines(ctx context.Context, invocation Invocation, machines []upgradeMachine, requested upgradeversion.Version, dryRun bool) []upgradeResult {
+func runUpgradeMachines(ctx context.Context, invocation Invocation, machines []upgradeMachine, requested upgradeversion.Version, dryRun bool, report func(progress.Event)) []upgradeResult {
 	results := make([]upgradeResult, len(machines))
 	var wait sync.WaitGroup
 	for index, machine := range machines {
 		wait.Add(1)
 		go func(index int, machine upgradeMachine) {
 			defer wait.Done()
-			results[index] = runUpgradeMachine(ctx, invocation, machine, requested, dryRun)
+			results[index] = runUpgradeMachine(ctx, invocation, machine, requested, dryRun, report)
 		}(index, machine)
 	}
 	wait.Wait()
 	return results
 }
 
-func runUpgradeMachine(parent context.Context, invocation Invocation, machine upgradeMachine, requested upgradeversion.Version, dryRun bool) upgradeResult {
+func runUpgradeMachine(parent context.Context, invocation Invocation, machine upgradeMachine, requested upgradeversion.Version, dryRun bool, report func(progress.Event)) (result upgradeResult) {
+	started := time.Now()
+	currentStep := progress.StepProbing
+	notify := func(event progress.Event) {
+		if report != nil {
+			event.Machine = machine.Name
+			report(event)
+		}
+	}
+	result = upgradeResult{machine: machine.Name, old: "unknown"}
+	notify(progress.Event{State: progress.StateRunning, Step: currentStep})
+	defer func() {
+		if result.err != nil && errors.Is(parent.Err(), context.Canceled) {
+			result.cancelled = true
+		}
+		state := progress.StateDone
+		if result.cancelled {
+			state = progress.StateCancelled
+		} else if result.err != nil {
+			state = progress.StateFailed
+		} else if result.skipped {
+			state = progress.StateSkipped
+		}
+		err := result.err
+		if result.cancelled {
+			err = nil
+		}
+		notify(progress.Event{State: state, Step: currentStep, Old: result.old, New: result.new, Err: err, At: time.Now(), Elapsed: time.Since(started)})
+	}()
 	ctx, cancel := context.WithTimeout(parent, upgradeMachineTimeout)
 	defer cancel()
 	target := install.NewLocalTarget(invocation.Runner)
 	if machine.Remote {
 		target = install.NewRemoteTarget(invocation.Runner, machine.Name, invocation.Config.Remote.SSHConfig)
 	}
-	result := upgradeResult{machine: machine.Name, old: "unknown"}
+	if errors.Is(parent.Err(), context.Canceled) {
+		result.err = parent.Err()
+		result.cancelled = true
+		return result
+	}
 	current, err := install.Detect(ctx, target)
 	if err != nil {
 		result.err = err
@@ -240,6 +411,10 @@ func runUpgradeMachine(parent context.Context, invocation Invocation, machine up
 	updated, err := install.Install(ctx, target, install.Request{
 		Ref:   requested.Ref,
 		Local: &install.LocalBuilder{Runner: invocation.Runner},
+		Progress: func(event install.ProgressEvent) {
+			currentStep = progress.Step(event.Step)
+			notify(progress.Event{State: progress.StateRunning, Step: currentStep, Old: result.old})
+		},
 	})
 	if err != nil {
 		result.err = err
