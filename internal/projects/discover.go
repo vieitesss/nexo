@@ -205,18 +205,11 @@ func lexicalPath(path string) string {
 	return filepath.Clean(absolute)
 }
 
-func (d *Discovery) add(path, group string, status ...bool) {
+func (d *Discovery) add(path, group string, git, linked bool) {
 	for _, candidate := range d.Candidates {
 		if candidate.Path == path {
 			return
 		}
-	}
-	git, linked := false, false
-	if len(status) > 0 {
-		git = status[0]
-	}
-	if len(status) > 1 {
-		linked = status[1]
 	}
 	d.Candidates = append(d.Candidates, Candidate{Path: path, Group: group, Git: git, LinkedWorktree: linked})
 }
