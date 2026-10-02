@@ -76,7 +76,7 @@ func Execute(ctx context.Context, plan Plan, force, permanent bool, fs FileSyste
 		return fmt.Errorf("delete blocked: %s", FormatFindings(plan.Blockers))
 	}
 	if plan.HasWarnings() && !force {
-		return fmt.Errorf("delete requires confirmation: %s", FormatFindings(plan.Warnings))
+		return fmt.Errorf("delete requires --force: %s", FormatFindings(plan.Warnings))
 	}
 	if fs == nil {
 		fs = OSFileSystem{}

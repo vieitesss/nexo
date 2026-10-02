@@ -180,20 +180,15 @@ func tuiDependencies(ctx context.Context, invocation Invocation, tab string, ini
 		}
 		return operation.Worktree, nil
 	}
+	deleteTransaction := newDeleteTransaction(invocation)
 	deps.DeleteFingerprint = func(_ context.Context, path string) (string, error) {
 		return deletion.Fingerprint(deletion.OSFileSystem{}, path)
 	}
 	deps.DeletePreflight = func(deleteCtx context.Context, path, identity string) (deletion.Plan, error) {
-		return preflightDelete(deleteCtx, invocation, lexicalAbs(path), identity)
+		return deleteTransaction.Preflight(deleteCtx, path, identity)
 	}
 	deps.DeleteProjectPlan = func(deleteCtx context.Context, plan deletion.Plan, permanent, force bool) error {
-		if len(plan.Blockers) > 0 {
-			return fmt.Errorf("delete blocked: %s", findingText(plan.Blockers))
-		}
-		if plan.HasWarnings() && !force {
-			return fmt.Errorf("delete requires --force: %s", findingText(plan.Warnings))
-		}
-		return executeDelete(deleteCtx, invocation, plan, force, permanent)
+		return deleteTransaction.Execute(deleteCtx, plan, force, permanent)
 	}
 
 	deps.OpenProject = func(openCtx context.Context, place picker.Place) error {

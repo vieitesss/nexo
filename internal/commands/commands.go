@@ -35,9 +35,6 @@ type Invocation struct {
 	StartupTrace      *startup.Trace
 	JSON              bool
 	Args              []string
-	// DeleteIdentity is captured before a delete confirmation is shown. A
-	// replacement at the same pathname is a hard blocker, including force.
-	DeleteIdentity string
 }
 
 // UsageError reports invalid arguments for a command.
