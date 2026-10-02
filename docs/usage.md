@@ -21,7 +21,7 @@ are equivalent.
 | `nexo focus` | Record the container named by a backend focus event; it is the command declared by the Herdr plugin's `[[events]]` hook. |
 | `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch`, `--add-parent`, or `--no-focus`. |
 | `nexo worktree extract REPO DESTINATION` | Move the branch checked out in `REPO` into a new worktree and leave a return branch behind; add `--return-branch`, `--add-parent`, or `--no-focus`. |
-| `nexo tmux init` | Install tmux focus hooks and the agent watcher (tmux backend only). |
+| `nexo tmux init` | Install tmux focus hooks and replace the agent watcher (tmux backend only). |
 | `nexo tmux glance on\|off\|toggle` | Show, hide or toggle the glance row that lists agent panes (tmux backend only). Bind it yourself; nexo installs no key. |
 
 ## Examples

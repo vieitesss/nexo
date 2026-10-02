@@ -17,7 +17,6 @@ func (f *fakeTmuxInitializer) Init(_ context.Context, input tmuxbackend.InitInpu
 	f.configPath = input.ConfigPath
 	return nil
 }
-func (f *fakeTmuxInitializer) ConfigureAgents(config.AgentsConfig) {}
 
 type fakeGlanceController struct {
 	action tmuxbackend.GlanceAction

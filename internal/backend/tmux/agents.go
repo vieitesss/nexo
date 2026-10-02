@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -51,6 +52,8 @@ type pendingNotification struct {
 }
 
 var errWatcherAlreadyRunning = errors.New("tmux agent watcher already running")
+
+const watcherShutdownTimeout = 5 * time.Second
 
 // Source discovers agent panes in a tmux server and polls their visible
 // screens for harness working indicators.
@@ -526,6 +529,115 @@ func (s *Source) statePath(suffix string) string {
 	return s.ledger().Path(suffix)
 }
 
+func (s *Source) watcherPIDPath() string {
+	return s.statePath("watcher")
+}
+
+func (s *Source) writeWatcherPID() error {
+	return statefile.WriteAtomic(s.watcherPIDPath(), []byte(strconv.Itoa(os.Getpid())+"\n"))
+}
+
+func (s *Source) clearWatcherPID(pid int) {
+	contents, err := os.ReadFile(s.watcherPIDPath())
+	if err != nil || strings.TrimSpace(string(contents)) != strconv.Itoa(pid) {
+		return
+	}
+	_ = os.Remove(s.watcherPIDPath())
+}
+
+func (s *Source) removeStaleWatcherPID() {
+	_ = os.Remove(s.watcherPIDPath())
+}
+
+func (s *Source) watcherPID() (int, error) {
+	contents, err := os.ReadFile(s.watcherPIDPath())
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("invalid watcher pid %q", strings.TrimSpace(string(contents)))
+	}
+	return pid, nil
+}
+
+// ReplaceWatcher stops the existing watcher for this tmux server, if any.
+// Init calls this before launching the current binary so upgrading nexo never
+// leaves an old watcher holding the server lock and silently losing the new
+// configuration.
+func (s *Source) ReplaceWatcher(ctx context.Context) error {
+	s.mu.Lock()
+	if s.server == "" {
+		s.server = s.serverName(ctx)
+	}
+	lockPath := s.statePath("lock")
+	s.mu.Unlock()
+
+	release, err := acquireWatcherLock(lockPath)
+	if err == nil {
+		s.removeStaleWatcherPID()
+		release()
+		return nil
+	}
+	if !errors.Is(err, errWatcherAlreadyRunning) {
+		return err
+	}
+	pid, err := s.watcherPID()
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("replace tmux agent watcher: running watcher has no owner record")
+	}
+	if err != nil {
+		return fmt.Errorf("replace tmux agent watcher: read owner: %w", err)
+	}
+	if pid == os.Getpid() {
+		return errors.New("replace tmux agent watcher: refusing to stop this process")
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("replace tmux agent watcher: find owner %d: %w", pid, err)
+	}
+	if err := process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("replace tmux agent watcher: stop owner %d: %w", pid, err)
+	}
+	if err := waitForWatcherLock(lockPath, watcherShutdownTimeout); err == nil {
+		return nil
+	}
+	// A watcher from an older binary may not handle SIGTERM. It is safe to
+	// force-stop it now: the kernel releases the lock and the next watcher
+	// reconciles any highlights or glance row it left behind.
+	if err := process.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("replace tmux agent watcher: force-stop owner %d: %w", pid, err)
+	}
+	if err := waitForWatcherLock(lockPath, watcherShutdownTimeout); err != nil {
+		return fmt.Errorf("replace tmux agent watcher: wait for owner %d: %w", pid, err)
+	}
+	return nil
+}
+
+func waitForWatcherLock(path string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		release, err := acquireWatcherLock(path)
+		if err == nil {
+			release()
+			return nil
+		}
+		if !errors.Is(err, errWatcherAlreadyRunning) {
+			return err
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 // deliverPending sends one trailing, coalesced notification for all pending
 // transitions once the durable rate-limit window has elapsed. It is called
 // only by Watch; listing agents and focus hooks never send notifications.
@@ -603,48 +715,41 @@ func (s *Source) MarkSeen(ctx context.Context, paneID string) error {
 }
 
 // Watch polls until ctx is canceled. A kernel-held file lock makes concurrent
-// watchers for one server idempotent and releases automatically on crashes.
+// watchers for one server explicit and releases automatically on crashes.
 func (s *Source) Watch(ctx context.Context) error {
+	watchCtx, stopSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
 	s.mu.Lock()
 	if s.server == "" {
-		s.server = s.serverName(ctx)
+		s.server = s.serverName(watchCtx)
 	}
 	s.mu.Unlock()
 	lockPath := s.statePath("lock")
-	watchersMu.Lock()
-	if _, ok := watchers[lockPath]; ok {
-		watchersMu.Unlock()
-		return nil
-	}
-	watchersMu.Unlock()
 	release, err := acquireWatcherLock(lockPath)
-	if errors.Is(err, errWatcherAlreadyRunning) {
-		return nil
-	}
 	if err != nil {
 		return err
 	}
-	watchersMu.Lock()
-	watchers[lockPath] = struct{}{}
-	watchersMu.Unlock()
+	if err := s.writeWatcherPID(); err != nil {
+		release()
+		return fmt.Errorf("record tmux agent watcher: %w", err)
+	}
+	pid := os.Getpid()
 	defer func() {
-		watchersMu.Lock()
-		delete(watchers, lockPath)
-		watchersMu.Unlock()
+		s.clearWatcherPID(pid)
 		release()
 	}()
 	// An orderly shutdown clears every highlight this watcher owns. The context
 	// is already canceled, so cleanup gets its own bounded one. A crash cannot
 	// run this; the next startup reconciles the durable marker instead.
 	defer func() {
-		if ctx.Err() == nil {
+		if watchCtx.Err() == nil {
 			return
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), highlightCleanupTimeout)
 		defer cancel()
 		_ = s.clearHighlights(cleanupCtx)
 	}()
-	if err := s.installHooksQuiet(ctx); err != nil {
+	if err := s.installHooksQuiet(watchCtx); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -652,21 +757,21 @@ func (s *Source) Watch(ctx context.Context) error {
 	s.mu.Unlock()
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
-	if _, err := s.poll(ctx); err != nil {
+	if _, err := s.poll(watchCtx); err != nil {
 		return err
 	}
-	if err := s.deliverPending(ctx); err != nil {
+	if err := s.deliverPending(watchCtx); err != nil {
 		return err
 	}
 	for {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-watchCtx.Done():
+			return watchCtx.Err()
 		case <-ticker.C:
-			if _, err := s.poll(ctx); err != nil {
+			if _, err := s.poll(watchCtx); err != nil {
 				return err
 			}
-			if err := s.deliverPending(ctx); err != nil {
+			if err := s.deliverPending(watchCtx); err != nil {
 				return err
 			}
 		}
@@ -771,10 +876,5 @@ func acquireFileLock(path string, nonBlocking bool) (func(), error) {
 	}
 	return release, nil
 }
-
-var (
-	watchersMu sync.Mutex
-	watchers   = make(map[string]struct{})
-)
 
 var _ capabilities.AgentSource = (*Source)(nil)

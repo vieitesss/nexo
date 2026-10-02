@@ -137,6 +137,30 @@ func TestOnlyOneWatcherLockPerServer(t *testing.T) {
 	}
 }
 
+func TestWatchReportsExistingWatcher(t *testing.T) {
+	runner := funcRunner(func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "tmux" {
+			return []byte("/tmp/tmux-test\n"), nil
+		}
+		return nil, nil
+	})
+	first := NewAgentSource(runner)
+	setStateDir(first, t.TempDir())
+	first.server = "/tmp/tmux-test"
+	release, err := acquireWatcherLock(first.statePath("lock"))
+	if err != nil {
+		t.Fatalf("acquire watcher lock: %v", err)
+	}
+	defer release()
+
+	second := NewAgentSource(runner)
+	setStateDir(second, first.stateDir)
+	second.server = first.server
+	if err := second.Watch(context.Background()); !errors.Is(err, errWatcherAlreadyRunning) {
+		t.Fatalf("Watch() error = %v, want already-running", err)
+	}
+}
+
 func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 	clock := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	screen := "⠋ working"

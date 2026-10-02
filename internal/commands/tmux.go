@@ -25,11 +25,6 @@ func (tmuxCommand) Run(ctx context.Context, invocation Invocation) error {
 	if invocation.Selection.Kind != backend.Tmux {
 		return errors.New("tmux commands require the tmux backend")
 	}
-	if configurable, ok := invocation.Adapter.(interface {
-		ConfigureAgents(config.AgentsConfig)
-	}); ok {
-		configurable.ConfigureAgents(invocation.Config.Agents)
-	}
 	switch invocation.Args[0] {
 	case "init":
 		if len(invocation.Args) != 1 {

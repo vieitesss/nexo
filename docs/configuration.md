@@ -72,7 +72,7 @@ devbox = "tmux"             # auto, tmux, or herdr
 | `agents.working-pattern` | `{}` | Per-harness literal screen substring used as the working indicator; configured patterns take precedence over built-ins. |
 | `agents.notify` | `true` | Queue tmux working-to-stopped desktop notifications. Herdr notifications are native and unaffected. |
 | `agents.sound` | `false` | Play a short sound with tmux notifications. |
-| `agents.highlight-color` | `red` | tmux window-list colour for a window holding an unseen stopped agent. A value with a `=` is used as a full style (for example `bg=red,bold`); otherwise it becomes `fg=<colour>`. Read when the watcher starts, so restart `nexo agents watch` after changing it. Herdr uses its native agent state instead. |
+| `agents.highlight-color` | `red` | tmux window-list colour for a window holding an unseen stopped agent. A value with a `=` is used as a full style (for example `bg=red,bold`); otherwise it becomes `fg=<colour>`. Read when the watcher starts, so rerun `nexo tmux init` after changing it; init replaces the running watcher. Herdr uses its native agent state instead. |
 | `glance.fields` | `dot`, `target` | Agent fields shown in each glance entry, in the fixed order `dot, target, harness, session, window, branch, age`. Unknown or duplicate fields are rejected. |
 | `glance.tint` | none | Background tint for the tmux glance row: a tmux colour, a `@palette` option such as `@thm_surface_0`, or `default`/empty for no tint. |
 | `glance.dots` | `color` | How the glance `dot` field shows agent state: `color` draws one `●` in the state's colour; `symbols` draws an uncoloured `◐` working, `●` unseen stopped or `○` seen stopped, for terminals without colour. |
@@ -93,9 +93,8 @@ devbox = "tmux"             # auto, tmux, or herdr
 ## Changes that need a watcher restart
 
 The tmux watcher reads `[agents] highlight-color` and every `[glance]` key once
-when it starts. After changing any of them, restart it on each machine running
-the watcher; the [README's Upgrading section](../README.md#upgrading) has the
-canonical recipe for a default config and for a watcher started with
-`--config-file`. Herdr needs no watcher restart. `[tui] theme` is the
+when it starts. After changing any of them, rerun `nexo tmux init` on each
+machine running the watcher; init replaces the running watcher (see the
+[README's Upgrading section](../README.md#upgrading)). Herdr needs no watcher restart. `[tui] theme` is the
 exception: a running TUI polls the config and follows `dark`/`light` changes
 without a restart.

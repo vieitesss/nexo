@@ -64,8 +64,9 @@ receives focus. Marking a pane in another window never clears this one. When a
 window clears, nexo unsets the two style options so the window returns to your
 global window list style; a per-window `window-status-style` or
 `window-status-current-style` you set yourself on that window is discarded, not
-restored. The colour is read once when the watcher starts, so restart
-`nexo agents watch` after changing `highlight-color`. A working agent does not
+restored. The colour is read once when the watcher starts, so rerun
+`nexo tmux init` after changing `highlight-color`; init replaces the existing
+watcher. A working agent does not
 contribute to the highlight, but another unseen stopped agent in the same
 window does. The highlight clears through the same focus hooks as seen-marking,
 so it needs `focus-events on` as described above. An orderly watcher exit clears
@@ -114,9 +115,10 @@ a single write publishes it atomically.
 The watcher keeps the row current on every poll, so agent state changes appear
 without another command, and only writes when the rendered row or an option
 actually changed. Sessions created while the row is on are picked up on the
-next poll. Restart `nexo agents watch` for `[glance]` changes to take effect,
-like the window highlight. A configured `[glance] tint` paints the row
-background, either with a tmux colour or with a theme palette option such as
+next poll. Rerun `nexo tmux init` for `[glance]` changes to take effect, like the
+window highlight; init replaces the existing watcher. A configured `[glance] tint`
+paints the row background, either with a tmux colour or with a theme palette option
+such as
 `@thm_surface_0`; with no tint the row keeps the normal status background.
 The command is tmux-only because Herdr renders its own agent sidebar, which
 already lists agent panes natively, so nexo adds nothing for it. It needs a
