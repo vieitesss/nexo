@@ -416,7 +416,7 @@ func (b *Backend) RecentContainers(ctx context.Context) ([]containerstate.Entry,
 // CurrentContainerID reports the session that owns the calling pane.
 func (b *Backend) CurrentContainerID(ctx context.Context) (string, error) {
 	if b == nil || b.Runner == nil {
-		return "", errors.New("tmux container history requires a command runner")
+		return "", errors.New("tmux current container requires a command runner")
 	}
 	return b.currentContainer(ctx)
 }
@@ -428,7 +428,10 @@ func (b *Backend) CurrentProxyMachine(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	target, err := b.ProxyTarget(ctx, pane)
-	if err != nil || strings.TrimSpace(target) == "" {
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(target) == "" {
 		return "", nil
 	}
 	identity, ok := proxyidentity.ParseValue(target)

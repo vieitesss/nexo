@@ -216,6 +216,9 @@ func herdrPathContains(project, candidate string) bool {
 }
 
 var _ capabilities.AgentSource = (*Backend)(nil)
+var _ capabilities.ContainerHistory = (*Backend)(nil)
+var _ capabilities.CurrentContainer = (*Backend)(nil)
+var _ capabilities.CurrentProxyMachine = (*Backend)(nil)
 var _ capabilities.FocusEventRecorder = (*Backend)(nil)
 var _ capabilities.PaneFocuser = (*Backend)(nil)
 var _ capabilities.ProjectUseChecker = (*Backend)(nil)
@@ -435,7 +438,7 @@ func (b *Backend) RecentContainers(ctx context.Context) ([]containerstate.Entry,
 // CurrentContainerID reports the workspace owning the calling pane.
 func (b *Backend) CurrentContainerID(ctx context.Context) (string, error) {
 	if b == nil || b.Runner == nil {
-		return "", errors.New("herdr container history requires a command runner")
+		return "", errors.New("herdr current container requires a command runner")
 	}
 	if workspace := strings.TrimSpace(os.Getenv("HERDR_WORKSPACE_ID")); workspace != "" {
 		return workspace, nil
@@ -446,11 +449,11 @@ func (b *Backend) CurrentContainerID(ctx context.Context) (string, error) {
 	}
 	output, err := b.run(ctx, "pane", "get", pane)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 	workspace, err := decodePaneWorkspace(output)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 	return strings.TrimSpace(workspace), nil
 }
@@ -462,7 +465,10 @@ func (b *Backend) CurrentProxyMachine(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	target, err := b.ProxyTarget(ctx, pane)
-	if err != nil || strings.TrimSpace(target) == "" {
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(target) == "" {
 		return "", nil
 	}
 	identity, ok := proxyidentity.ParseValue(target)

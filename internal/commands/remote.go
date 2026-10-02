@@ -296,11 +296,7 @@ func runRemotePrevious(ctx context.Context, invocation Invocation) error {
 	if !ok {
 		return fmt.Errorf("backend %q does not support remote proxies", invocation.Selection.Kind)
 	}
-	history, ok := invocation.Adapter.(containerHistory)
-	if !ok {
-		return fmt.Errorf("backend %q does not support container history", invocation.Selection.Kind)
-	}
-	entries, err := history.RecentContainers(ctx)
+	entries, err := recentContainerEntries(ctx, invocation)
 	if err != nil {
 		return fmt.Errorf("read previous remote container: %w", err)
 	}
@@ -308,7 +304,10 @@ func runRemotePrevious(ctx context.Context, invocation Invocation) error {
 	// The current machine is the proxy's machine inside a proxy and the local
 	// machine otherwise. The most recent entry on any other machine wins, so
 	// from a proxy the local machine is a candidate like any remote.
-	current := currentProxyMachine(ctx, invocation)
+	current, err := currentProxyMachine(ctx, invocation)
+	if err != nil {
+		return fmt.Errorf("identify current proxy: %w", err)
+	}
 	var live map[string]struct{}
 	for _, entry := range entries {
 		if !entry.Proxy {

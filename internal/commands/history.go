@@ -8,22 +8,12 @@ import (
 	"github.com/vieitesss/nexo/internal/containerstate"
 )
 
-// containerHistory is implemented by backends that persist recent container
-// identities scoped to their native server instance.
-type containerHistory interface {
-	RecentContainers(context.Context) ([]containerstate.Entry, error)
-}
-
-// currentContainer identifies the container owning the calling pane. An empty
-// result means the caller is not inside a container.
-type currentContainer interface {
-	CurrentContainerID(context.Context) (string, error)
-}
-
-// currentProxy identifies the remote machine attached by the calling pane. An
-// empty result means the caller is not inside a proxy.
-type currentProxy interface {
-	CurrentProxyMachine(context.Context) (string, error)
+func recentContainerEntries(ctx context.Context, invocation Invocation) ([]containerstate.Entry, error) {
+	history, ok := invocation.Adapter.(capabilities.ContainerHistory)
+	if !ok {
+		return nil, fmt.Errorf("backend %q does not support container history", invocation.Selection.Kind)
+	}
+	return history.RecentContainers(ctx)
 }
 
 // liveLocalContainerIDs lists the native IDs of non-proxy containers that
@@ -47,26 +37,18 @@ func liveLocalContainerIDs(ctx context.Context, invocation Invocation) (map[stri
 	return ids, nil
 }
 
-func currentContainerID(ctx context.Context, invocation Invocation) string {
-	source, ok := invocation.Adapter.(currentContainer)
+func currentContainerID(ctx context.Context, invocation Invocation) (string, error) {
+	source, ok := invocation.Adapter.(capabilities.CurrentContainer)
 	if !ok {
-		return ""
+		return "", nil
 	}
-	id, err := source.CurrentContainerID(ctx)
-	if err != nil {
-		return ""
-	}
-	return id
+	return source.CurrentContainerID(ctx)
 }
 
-func currentProxyMachine(ctx context.Context, invocation Invocation) string {
-	source, ok := invocation.Adapter.(currentProxy)
+func currentProxyMachine(ctx context.Context, invocation Invocation) (string, error) {
+	source, ok := invocation.Adapter.(capabilities.CurrentProxyMachine)
 	if !ok {
-		return ""
+		return "", nil
 	}
-	machine, err := source.CurrentProxyMachine(ctx)
-	if err != nil {
-		return ""
-	}
-	return machine
+	return source.CurrentProxyMachine(ctx)
 }

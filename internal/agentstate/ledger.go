@@ -113,7 +113,7 @@ func (l *Ledger) ReadLocked() (Document, error) {
 	}
 	stateDir := l.stateDir
 	if stateDir == "" {
-		stateDir = statefile.DefaultDir()
+		stateDir = statefile.DefaultStateDir()
 	}
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return Document{}, fmt.Errorf("create agent state directory: %w", err)
@@ -138,7 +138,7 @@ func (l *Ledger) Update(update func(*Document) error) error {
 	}
 	stateDir := l.stateDir
 	if stateDir == "" {
-		stateDir = statefile.DefaultDir()
+		stateDir = statefile.DefaultStateDir()
 	}
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("create agent state directory: %w", err)
