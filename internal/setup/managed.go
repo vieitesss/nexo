@@ -195,18 +195,6 @@ func readRemoteFile(ctx context.Context, commandRunner runner.CommandRunner, mac
 	}
 }
 
-func remoteManagedChange(ctx context.Context, commandRunner runner.CommandRunner, machine, sshConfig, path, body string) (Change, error) {
-	before, exists, err := readRemoteFile(ctx, commandRunner, machine, sshConfig, path)
-	if err != nil {
-		return Change{}, err
-	}
-	after, _, err := ReplaceManagedBlock(string(before), body)
-	if err != nil {
-		return Change{}, fmt.Errorf("prepare %s: %w", path, err)
-	}
-	return Change{Machine: machine, Path: path, Before: before, After: []byte(after), Mode: 0o600, Existed: exists, Remote: true}, nil
-}
-
 func applyRemoteChange(ctx context.Context, commandRunner runner.CommandRunner, machine, sshConfig, path string, contents []byte) error {
 	script := "set -eu; path=" + remote.ShellCommand(path) + "; dir=$(dirname \"$path\"); mkdir -p \"$dir\"; if test -f \"$path\" && test ! -e \"$path.nexo.bak\"; then cp -p \"$path\" \"$path.nexo.bak\"; fi; tmp=$(mktemp \"$dir/.nexo-setup.XXXXXX\"); trap 'rm -f \"$tmp\"' EXIT; cat >\"$tmp\"; if test -f \"$path\"; then chmod \"$(stat -c %a \"$path\" 2>/dev/null || stat -f %Lp \"$path\")\" \"$tmp\" 2>/dev/null || true; fi; mv -f \"$tmp\" \"$path\""
 	_, err := runInput(ctx, commandRunner, machine, sshConfig, contents, "sh", "-c", script)

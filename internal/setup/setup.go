@@ -70,6 +70,8 @@ type RemoteMachine struct {
 	Locale         string
 	UTF8Locale     string
 	WatcherRunning bool
+	TmuxRunning    bool
+	HerdrRunning   bool
 	Reachable      bool
 	Backend        string
 	Error          error
@@ -170,6 +172,8 @@ printf 'plugin=%s\n' "$(herdr plugin list 2>/dev/null | grep -q 'vieitesss/nexo'
 printf 'locale=%s\n' "$(locale charmap 2>/dev/null)"
 printf 'utf8locale=%s\n' "$(locale -a 2>/dev/null | grep -iE '(^|[._-])(utf-?8|c\.utf8)$' | head -n 1)"
 printf 'watcher=%s\n' "$(pgrep -f '[n]exo.*agents.*watch' >/dev/null 2>&1 && echo yes || echo no)"
+printf 'tmux_running=%s\n' "$(tmux list-sessions >/dev/null 2>&1 && echo yes || echo no)"
+printf 'herdr_running=%s\n' "$(herdr status server --json 2>/dev/null | grep -q '"running"[[:space:]]*:[[:space:]]*true' && echo yes || echo no)"
 `
 	out, err := run(ctx, commandRunner, result.Machine, sshConfig, "sh", "-c", script)
 	if err != nil {
@@ -211,6 +215,10 @@ printf 'watcher=%s\n' "$(pgrep -f '[n]exo.*agents.*watch' >/dev/null 2>&1 && ech
 			result.UTF8Locale = value
 		case "watcher":
 			result.WatcherRunning = value == "yes"
+		case "tmux_running":
+			result.TmuxRunning = value == "yes"
+		case "herdr_running":
+			result.HerdrRunning = value == "yes"
 		}
 	}
 	if result.HasNexo {
@@ -317,14 +325,15 @@ func readLocalFile(path string) ([]byte, os.FileMode, bool, error) {
 }
 
 type remotePlan struct {
-	Machine  RemoteMachine
-	Changes  []Change
-	Backend  string
-	Install  bool
-	BinaryAt string
-	BuildRef string
-	Actions  []string
-	Error    error
+	Machine      RemoteMachine
+	Changes      []Change
+	Backend      string
+	Install      bool
+	BinaryAt     string
+	BuildRef     string
+	BinarySource string
+	Actions      []string
+	Error        error
 }
 
 func planRemote(ctx context.Context, in Input, options Options, machine, sshConfig, configuredBackend string, localConfig []byte) remotePlan {
@@ -348,20 +357,26 @@ func planRemote(ctx context.Context, in Input, options Options, machine, sshConf
 			kind = string(result.Kind)
 		}
 	}
-	if kind != "tmux" && kind != "herdr" {
+	if strings.TrimSpace(configuredBackend) == "" && facts.TmuxRunning && facts.HerdrRunning {
+		plan.Error = errors.New("both tmux and Herdr are running; choose this machine's backend in [remote.backends] (or run setup in a TTY to choose it)")
+	}
+	if kind != "tmux" && kind != "herdr" && plan.Error == nil {
 		switch {
 		case facts.HasTmux && !facts.HasHerdr:
 			kind = "tmux"
 		case facts.HasHerdr && !facts.HasTmux:
 			kind = "herdr"
 		case facts.HasTmux && facts.HasHerdr:
-			plan.Error = errors.New("both tmux and Herdr are running; configure remote.backends or rerun with an explicit choice")
+			plan.Error = errors.New("both tmux and Herdr are available; configure remote.backends or rerun with an explicit choice")
 		default:
 			plan.Error = errors.New("remote has no supported multiplexer")
 		}
 	}
 	plan.Backend = kind
 	plan.Machine.Backend = kind
+	if plan.Error != nil {
+		return plan
+	}
 	if !facts.HasNexo {
 		platform := install.LocalPlatform()
 		if facts.OS != platform.OS || facts.Arch != platform.Arch {
@@ -405,16 +420,30 @@ func planRemote(ctx context.Context, in Input, options Options, machine, sshConf
 	}
 	if kind == "tmux" {
 		path := filepath.Join(defaultRemoteHome(facts), ".tmux.conf")
-		change, changeErr := remoteManagedChange(machineCtx, in.Runner, machine, sshConfig, path, TmuxBlock(false))
-		if changeErr != nil {
-			plan.Error = changeErr
+		before, exists, readErr := readRemoteFile(machineCtx, in.Runner, machine, sshConfig, path)
+		if readErr != nil {
+			plan.Error = readErr
 			return plan
 		}
+		tuiKey, agentsKey := bindingsFromContents(string(before), "tmux")
+		if validationErr := validateBindings("tmux", tuiKey, agentsKey); validationErr != nil {
+			plan.Error = validationErr
+			return plan
+		}
+		after, _, replaceErr := ReplaceManagedBlock(string(before), TmuxBlock(false, tuiKey, agentsKey))
+		if replaceErr != nil {
+			plan.Error = fmt.Errorf("prepare %s: %w", path, replaceErr)
+			return plan
+		}
+		change := Change{Machine: machine, Path: path, Before: before, After: []byte(after), Mode: 0o600, Existed: exists, Remote: true}
 		if change.Changed() {
 			plan.Changes = append(plan.Changes, change)
 		}
-		if len(plan.Changes) > 0 || !facts.HasNexo {
+		if len(plan.Changes) > 0 || !facts.HasNexo || !facts.WatcherRunning {
 			plan.Actions = append(plan.Actions, "reload tmux and initialize watcher")
+		}
+		if !facts.WatcherRunning {
+			plan.Actions = append(plan.Actions, "start tmux watcher")
 		}
 	} else {
 		if err := requireHerdrVersion(machineCtx, in.Runner, machine, sshConfig); err != nil {
@@ -422,16 +451,26 @@ func planRemote(ctx context.Context, in Input, options Options, machine, sshConf
 			return plan
 		}
 		path := filepath.Join(defaultRemoteHome(facts), ".config", "herdr", "config.toml")
-		change, changeErr := remoteManagedChange(machineCtx, in.Runner, machine, sshConfig, path, "")
-		if changeErr != nil {
-			plan.Error = changeErr
+		before, exists, readErr := readRemoteFile(machineCtx, in.Runner, machine, sshConfig, path)
+		if readErr != nil {
+			plan.Error = readErr
 			return plan
 		}
+		tuiKey, agentsKey := bindingsFromContents(string(before), "herdr")
+		after, _, replaceErr := ReplaceManagedBlock(string(before), HerdrBlock(tuiKey, agentsKey))
+		if replaceErr != nil {
+			plan.Error = fmt.Errorf("prepare %s: %w", path, replaceErr)
+			return plan
+		}
+		change := Change{Machine: machine, Path: path, Before: before, After: []byte(after), Mode: 0o600, Existed: exists, Remote: true}
 		if change.Changed() {
 			plan.Changes = append(plan.Changes, change)
 		}
 		if !facts.HasHerdrPlugin {
-			plan.Actions = append(plan.Actions, "install Herdr plugin and reload config")
+			plan.Actions = append(plan.Actions, "install Herdr plugin")
+		}
+		if change.Changed() {
+			plan.Actions = append(plan.Actions, "reload Herdr config")
 		}
 	}
 	if options.RemoteConfig && len(localConfig) > 0 {
@@ -481,6 +520,10 @@ func remoteShellChange(ctx context.Context, commandRunner runner.CommandRunner, 
 	if err != nil {
 		return Change{}, err
 	}
+	// Keep a successful prior locale repair when the current effective locale is
+	// already UTF-8. Removing LC_ALL from the managed block makes the next
+	// invocation undo the repair it just performed.
+	body = preserveManagedLocale(string(before), body)
 	after, changed, err := ReplaceManagedBlock(string(before), body)
 	if err != nil {
 		return Change{}, fmt.Errorf("prepare %s: %w", path, err)
@@ -500,6 +543,23 @@ func remoteShellChange(ctx context.Context, commandRunner runner.CommandRunner, 
 		}
 	}
 	return Change{Machine: machine, Path: path, Before: before, After: []byte(after), Mode: 0o600, Existed: exists, Remote: true}, nil
+}
+
+func preserveManagedLocale(before, body string) string {
+	if strings.Contains(body, "LC_ALL") {
+		return body
+	}
+	managed := managedBody(before)
+	for _, line := range strings.Split(managed, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "LC_ALL") && (strings.HasPrefix(trimmed, "export LC_ALL=") || strings.HasPrefix(trimmed, "set -gx LC_ALL ")) {
+			if strings.TrimSpace(body) == "" {
+				return trimmed
+			}
+			return body + "\n" + trimmed
+		}
+	}
+	return body
 }
 
 func shellPathBody(shell, locale string, repairLocale bool) string {
@@ -568,12 +628,21 @@ func Run(ctx context.Context, in Input, options Options) error {
 	if options.Check {
 		return runCheck(ctx, in, options, backendName)
 	}
-	machines, err := selectedMachines(options, in, sshConfigPath(options, in.Home))
+	sshConfig := sshConfigPath(options, in.Home)
+	machines, err := selectedMachines(options, in, sshConfig)
 	if err != nil {
 		return err
 	}
+	configuredBackends := map[string]string{}
+	if existing, loadErr := config.LoadOptional(options.ConfigPath); loadErr == nil {
+		for machine, value := range existing.Remote.Backends {
+			configuredBackends[machine] = value
+		}
+	}
+	ambiguous := ambiguousRemoteBackends(ctx, in, options, machines, sshConfig, configuredBackends)
 	paths := append([]string(nil), options.Paths...)
 	var tuiKey, agentsKey string
+	remoteAnswers := make(map[string]string, len(ambiguous))
 	if !in.TTY || options.Yes {
 		tuiKey, agentsKey = existingBindings(in.Home, backendName)
 	}
@@ -584,7 +653,7 @@ func Run(ctx context.Context, in Input, options Options) error {
 			hosts = append([]string(nil), machines...)
 		}
 		existingTUI, existingAgents := existingBindings(in.Home, backendName)
-		answers, promptErr := tui.PromptSetup(ctx, in.Stdin, in.Stdout, tui.SetupPromptDefaults{Backend: backendName, Notify: *options.Notify, Hosts: hosts, SelectedHosts: machines, LocalOnly: options.LocalOnly, ScopeLocked: len(options.Machines) > 0, Paths: pathsOrDefaults(paths, in.Home), TUIKey: existingTUI, AgentsKey: existingAgents})
+		answers, promptErr := tui.PromptSetup(ctx, in.Stdin, in.Stdout, tui.SetupPromptDefaults{Backend: backendName, Notify: *options.Notify, Hosts: hosts, SelectedHosts: machines, LocalOnly: options.LocalOnly, ScopeLocked: len(options.Machines) > 0, Paths: pathsOrDefaults(paths, in.Home), TUIKey: existingTUI, AgentsKey: existingAgents, RemoteBackends: ambiguous})
 		if promptErr != nil {
 			return promptErr
 		}
@@ -595,6 +664,13 @@ func Run(ctx context.Context, in Input, options Options) error {
 		notify := answers.Notify
 		options.Notify = &notify
 		tuiKey, agentsKey = answers.TUIKey, answers.AgentsKey
+		for machine, backend := range answers.RemoteBackends {
+			remoteAnswers[machine] = backend
+			configuredBackends[machine] = backend
+		}
+	}
+	if err := validateBindings(backendName, tuiKey, agentsKey); err != nil {
+		return err
 	}
 	if backendName != "tmux" && backendName != "herdr" {
 		return fmt.Errorf("invalid setup backend %q", backendName)
@@ -604,11 +680,8 @@ func Run(ctx context.Context, in Input, options Options) error {
 			return err
 		}
 	}
-	configuredBackends := map[string]string{}
-	if existing, loadErr := config.LoadOptional(options.ConfigPath); loadErr == nil {
-		for machine, value := range existing.Remote.Backends {
-			configuredBackends[machine] = value
-		}
+	for machine, backend := range remoteAnswers {
+		configuredBackends[machine] = backend
 	}
 	remoteBackends := make(map[string]string, len(machines))
 	localChange, err := configPlan(options, in.Home, backendName, pathsOrDefaults(paths, in.Home), machines, remoteBackends, options.Notify)
@@ -638,30 +711,27 @@ func Run(ctx context.Context, in Input, options Options) error {
 			changes = append(changes, herdrChange)
 		}
 	}
-	sshConfig := sshConfigPath(options, in.Home)
 	plans := make([]remotePlan, len(machines))
 	var wg sync.WaitGroup
 	for index, machine := range machines {
 		wg.Add(1)
 		go func(index int, machine string) {
 			defer wg.Done()
-			configured := configuredBackends[machine]
-			if configured == "" {
-				for configuredMachine, configuredValue := range configuredBackends {
-					if strings.EqualFold(configuredMachine, machine) {
-						configured = configuredValue
-						break
-					}
-				}
-			}
+			configured := configuredBackend(configuredBackends, machine)
 			plans[index] = planRemote(ctx, in, options, machine, sshConfig, configured, localChange.After)
 		}(index, machine)
 	}
 	wg.Wait()
+	planningFailures := []string{}
 	for index := range plans {
 		plan := &plans[index]
 		if plan.Error != nil {
-			writeLine(in.Stdout, "%s: failed (%v)\n", plan.Machine.Machine, plan.Error)
+			name := plan.Machine.Machine
+			if name == "" {
+				name = machines[index]
+			}
+			planningFailures = append(planningFailures, name+": "+plan.Error.Error())
+			writeLine(in.Stdout, "%s: failed (%v)\n", name, plan.Error)
 			continue
 		}
 		if plan.Backend != "" {
@@ -698,7 +768,12 @@ func Run(ctx context.Context, in Input, options Options) error {
 		if backendName == "tmux" {
 			writeLine(in.Stdout, "local: action reload tmux and initialize watcher\n")
 		} else {
-			writeLine(in.Stdout, "local: action install Herdr plugin and reload config\n")
+			if localRepair {
+				writeLine(in.Stdout, "local: action install Herdr plugin\n")
+			}
+			if len(changes) > 0 {
+				writeLine(in.Stdout, "local: action reload Herdr config\n")
+			}
 		}
 	}
 	if !options.DryRun {
@@ -713,6 +788,10 @@ func Run(ctx context.Context, in Input, options Options) error {
 	}
 	if options.DryRun {
 		writeLine(in.Stdout, "dry run: no changes written\n")
+		if len(planningFailures) > 0 {
+			sort.Strings(planningFailures)
+			return fmt.Errorf("setup planning failed on %s", strings.Join(planningFailures, ", "))
+		}
 		return nil
 	}
 	localChanged := len(changes) > 0 || localRepair
@@ -736,7 +815,7 @@ func Run(ctx context.Context, in Input, options Options) error {
 		}
 	} else if localChanged {
 		pluginOutput, pluginErr := in.Runner.Run(ctx, "herdr", "plugin", "list")
-		if pluginErr != nil || !strings.Contains(string(pluginOutput), "vieitesss/nexo") {
+		if pluginErr != nil || !pluginInstalled(string(pluginOutput)) {
 			if _, err := in.Runner.Run(ctx, "herdr", "plugin", "install", "vieitesss/nexo"); err != nil {
 				return fmt.Errorf("install Herdr plugin: %w", err)
 			}
@@ -747,6 +826,19 @@ func Run(ctx context.Context, in Input, options Options) error {
 			}
 		}
 	}
+	crossBuilds, buildErr := prepareCrossBuilds(ctx, in, plans)
+	if buildErr != nil {
+		for index := range plans {
+			if plans[index].Error == nil && plans[index].Install && isCrossPlatform(plans[index].Machine) && plans[index].BinarySource == "" {
+				plans[index].Error = buildErr
+			}
+		}
+	}
+	defer func() {
+		for _, path := range crossBuilds {
+			_ = os.Remove(path)
+		}
+	}()
 	results := make([]string, len(plans))
 	var applyWG sync.WaitGroup
 	for index := range plans {
@@ -783,30 +875,58 @@ func Run(ctx context.Context, in Input, options Options) error {
 	return nil
 }
 
+func isCrossPlatform(machine RemoteMachine) bool {
+	platform := install.LocalPlatform()
+	return machine.OS != platform.OS || machine.Arch != platform.Arch
+}
+
+// prepareCrossBuilds runs the potentially cold Go build outside each machine's
+// short SSH apply deadline. Builds are shared by target platform.
+func prepareCrossBuilds(ctx context.Context, in Input, plans []remotePlan) ([]string, error) {
+	built := map[string]string{}
+	cleanup := []string{}
+	for index := range plans {
+		plan := &plans[index]
+		if plan.Error != nil || !plan.Install || !isCrossPlatform(plan.Machine) {
+			continue
+		}
+		if strings.TrimSpace(plan.BuildRef) == "" {
+			return cleanup, errors.New("remote plan has no usable revision for cross-build")
+		}
+		key := plan.Machine.OS + "/" + plan.Machine.Arch
+		if source := built[key]; source != "" {
+			plan.BinarySource = source
+			continue
+		}
+		file, err := os.CreateTemp("", "nexo-cross-build-*")
+		if err != nil {
+			return cleanup, fmt.Errorf("create cross-build output: %w", err)
+		}
+		path := file.Name()
+		if err := file.Close(); err != nil {
+			_ = os.Remove(path)
+			return cleanup, fmt.Errorf("close cross-build output: %w", err)
+		}
+		buildCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		err = (&install.LocalBuilder{Runner: in.Runner}).Build(buildCtx, upgrade.DefaultRepository, plan.BuildRef, install.Platform{OS: plan.Machine.OS, Arch: plan.Machine.Arch}, path)
+		cancel()
+		if err != nil {
+			_ = os.Remove(path)
+			return cleanup, fmt.Errorf("cross-build nexo for %s/%s: %w", plan.Machine.OS, plan.Machine.Arch, err)
+		}
+		built[key] = path
+		cleanup = append(cleanup, path)
+		plan.BinarySource = path
+	}
+	// The files remain available to the apply goroutines until the caller's
+	// deferred cleanup runs.
+	return cleanup, nil
+}
+
 func applyRemotePlan(ctx context.Context, in Input, options Options, sshConfig string, plan remotePlan) error {
 	if plan.Install {
-		platform := install.LocalPlatform()
-		var source string
-		if plan.Machine.OS != platform.OS || plan.Machine.Arch != platform.Arch {
-			if strings.TrimSpace(plan.BuildRef) == "" {
-				return errors.New("remote plan has no usable revision for cross-build")
-			}
-			file, createErr := os.CreateTemp("", "nexo-cross-build-*")
-			if createErr != nil {
-				return fmt.Errorf("create cross-build output: %w", createErr)
-			}
-			built := file.Name()
-			if closeErr := file.Close(); closeErr != nil {
-				_ = os.Remove(built)
-				return fmt.Errorf("close cross-build output: %w", closeErr)
-			}
-			defer func() { _ = os.Remove(built) }()
-			builder := &install.LocalBuilder{Runner: in.Runner}
-			if buildErr := builder.Build(ctx, upgrade.DefaultRepository, plan.BuildRef, install.Platform{OS: plan.Machine.OS, Arch: plan.Machine.Arch}, built); buildErr != nil {
-				return buildErr
-			}
-			source = built
-		} else {
+		var source = plan.BinarySource
+		if source == "" {
 			var err error
 			source, err = os.Executable()
 			if err != nil {
@@ -825,7 +945,7 @@ func applyRemotePlan(ctx context.Context, in Input, options Options, sshConfig s
 			return err
 		}
 	}
-	if plan.Backend == "tmux" && (plan.Install || len(plan.Changes) > 0) {
+	if plan.Backend == "tmux" && (plan.Install || len(plan.Changes) > 0 || !plan.Machine.WatcherRunning) {
 		path := filepath.Join(defaultRemoteHome(plan.Machine), ".tmux.conf")
 		if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "tmux", "source-file", path); err != nil {
 			return err
@@ -833,13 +953,20 @@ func applyRemotePlan(ctx context.Context, in Input, options Options, sshConfig s
 		if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "nexo", "tmux", "init", "--backend=tmux"); err != nil {
 			return err
 		}
-	}
-	if plan.Backend == "herdr" && (!plan.Machine.HasHerdrPlugin || len(plan.Changes) > 0) {
-		if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "herdr", "plugin", "install", "vieitesss/nexo"); err != nil {
-			return err
+		if out, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "sh", "-c", "pgrep -f '[n]exo.*agents.*watch' >/dev/null"); err != nil || strings.TrimSpace(string(out)) != "" {
+			return errors.New("remote tmux watcher did not become ready")
 		}
-		if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "herdr", "server", "reload-config"); err != nil {
-			return err
+	}
+	if plan.Backend == "herdr" {
+		if !plan.Machine.HasHerdrPlugin {
+			if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "herdr", "plugin", "install", "vieitesss/nexo"); err != nil {
+				return err
+			}
+		}
+		if !plan.Machine.HasHerdrPlugin || len(plan.Changes) > 0 {
+			if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "herdr", "server", "reload-config"); err != nil {
+				return err
+			}
 		}
 	}
 	if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "sh", "-c", "command -v nexo"); err != nil {
@@ -849,6 +976,38 @@ func applyRemotePlan(ctx context.Context, in Input, options Options, sshConfig s
 		return errors.New("remote non-interactive shell is not using a UTF-8 locale")
 	}
 	return nil
+}
+
+func ambiguousRemoteBackends(ctx context.Context, in Input, options Options, machines []string, sshConfig string, configured map[string]string) map[string]string {
+	ambiguous := map[string]string{}
+	if options.LocalOnly || len(machines) == 0 {
+		return ambiguous
+	}
+	for _, machine := range machines {
+		if configuredBackend(configured, machine) != "" {
+			continue
+		}
+		facts := ProbeRemote(ctx, in.Runner, machine, sshConfig)
+		if facts.Error == nil && facts.TmuxRunning && facts.HerdrRunning {
+			ambiguous[machine] = ""
+		}
+	}
+	return ambiguous
+}
+
+func configuredBackend(configured map[string]string, machine string) string {
+	if value := strings.ToLower(strings.TrimSpace(configured[machine])); value == "tmux" || value == "herdr" {
+		return value
+	}
+	for alias, value := range configured {
+		if strings.EqualFold(alias, machine) {
+			value = strings.ToLower(strings.TrimSpace(value))
+			if value == "tmux" || value == "herdr" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func selectedMachines(options Options, in Input, sshConfig string) ([]string, error) {
@@ -899,10 +1058,36 @@ func pathsOrDefaults(paths []string, home string) []string {
 func localRepairNeeded(ctx context.Context, in Input, backendName string) bool {
 	if backendName == "herdr" {
 		out, err := in.Runner.Run(ctx, "herdr", "plugin", "list")
-		return err != nil || !strings.Contains(string(out), "vieitesss/nexo")
+		return err != nil || !pluginInstalled(string(out))
 	}
 	_, err := in.Runner.Run(ctx, "sh", "-c", "pgrep -f '[n]exo.*agents.*watch' >/dev/null")
 	return err != nil
+}
+
+func pluginInstalled(output string) bool {
+	for _, raw := range strings.Split(output, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.Contains(line, "vieitesss/nexo") {
+			return true
+		}
+	}
+	return false
+}
+
+func activeTmuxConfigLine(contents string, needle string) bool {
+	for _, raw := range strings.Split(contents, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.Contains(line, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func bindingConflicts(ctx context.Context, in Input, home, backendName, tuiKey, agentsKey string) []string {
@@ -949,34 +1134,76 @@ func existingBindings(home, backendName string) (string, string) {
 	if err != nil {
 		return "", ""
 	}
-	body := managedBody(string(contents))
+	return bindingsFromContents(string(contents), backendName)
+}
+
+// bindingsFromContents identifies bindings by their nexo action, not by their
+// position. This preserves an agents-only block and both bindings on reruns.
+func bindingsFromContents(contents, backendName string) (string, string) {
+	body := managedBody(contents)
 	if backendName == "tmux" {
-		for _, line := range strings.Split(body, "\n") {
-			fields := strings.Fields(line)
-			if len(fields) >= 3 && fields[0] == "bind" && fields[1] == "-n" {
-				return fields[2], ""
-			}
-			if len(fields) >= 2 && fields[0] == "bind" && fields[1] != "-n" {
-				return "", fields[1]
-			}
-		}
-	} else {
 		var tuiKey, agentsKey string
-		for _, line := range strings.Split(body, "\n") {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(line, "key = ") {
+		for _, raw := range strings.Split(body, "\n") {
+			line := strings.TrimSpace(raw)
+			if strings.HasPrefix(line, "#") {
 				continue
 			}
-			key := strings.Trim(strings.TrimPrefix(line, "key = "), "\"")
-			if tuiKey == "" {
-				tuiKey = key
-			} else {
+			fields := strings.Fields(line)
+			if len(fields) < 2 || (fields[0] != "bind" && fields[0] != "bind-key") {
+				continue
+			}
+			keyIndex := 1
+			if fields[1] == "-n" {
+				keyIndex++
+			}
+			if keyIndex >= len(fields) {
+				continue
+			}
+			key := fields[keyIndex]
+			switch {
+			case strings.Contains(line, "nexo tui agents"):
 				agentsKey = key
+			case strings.Contains(line, "nexo tui"):
+				tuiKey = key
 			}
 		}
 		return tuiKey, agentsKey
 	}
-	return "", ""
+	var tuiKey, agentsKey string
+	for _, block := range strings.Split(body, "[[keys.command]]") {
+		var key, command string
+		for _, raw := range strings.Split(block, "\n") {
+			line := strings.TrimSpace(raw)
+			if strings.HasPrefix(line, "#") {
+				continue
+			}
+			if strings.HasPrefix(line, "key = ") {
+				key = strings.Trim(strings.TrimPrefix(line, "key = "), "\"")
+			}
+			if strings.HasPrefix(line, "command = ") {
+				command = strings.Trim(strings.TrimPrefix(line, "command = "), "\"")
+			}
+		}
+		switch command {
+		case "nexo.tui-agents":
+			agentsKey = key
+		case "nexo.tui":
+			tuiKey = key
+		}
+	}
+	return tuiKey, agentsKey
+}
+
+func validateBindings(backendName, tuiKey, agentsKey string) error {
+	for label, key := range map[string]string{"TUI": tuiKey, "agents": agentsKey} {
+		if err := config.ValidateBindingKey(key); err != nil {
+			return fmt.Errorf("%s binding: %w", label, err)
+		}
+		if backendName == "tmux" && strings.ContainsAny(strings.TrimSpace(key), "+/:") {
+			return fmt.Errorf("%s binding: tmux expects one key name such as C-s or a", label)
+		}
+	}
+	return nil
 }
 
 func managedBody(contents string) string {
@@ -1043,22 +1270,26 @@ func runCheck(ctx context.Context, in Input, options Options, backendName string
 	}
 	configInfo, configErr := os.Stat(configPath)
 	configOK := configErr == nil && !configInfo.IsDir()
+	localeOut, localeErr := in.Runner.Run(ctx, "sh", "-c", "locale charmap")
+	localeOK := localeErr == nil && isUTF8Locale(string(localeOut))
 	focusOK, initOK, watcherOK := false, false, false
 	if backendName == "tmux" {
+		focusOut, focusErr := in.Runner.Run(ctx, "tmux", "show-options", "-gv", "focus-events")
+		focusOK = focusErr == nil && strings.EqualFold(strings.TrimSpace(string(focusOut)), "on")
 		contents, err := os.ReadFile(filepath.Join(in.Home, ".tmux.conf"))
-		focusOK = err == nil && strings.Contains(string(contents), "focus-events on")
-		initOK = err == nil && strings.Contains(string(contents), "nexo tmux init")
-		if out, err := in.Runner.Run(ctx, "sh", "-c", "pgrep -f '[n]exo.*agents.*watch' >/dev/null"); err == nil && len(out) == 0 {
+		initOK = err == nil && (activeTmuxConfigLine(string(contents), "nexo tmux init") || activeTmuxConfigLine(string(contents), "@plugin 'vieitesss/nexo'") || activeTmuxConfigLine(string(contents), `@plugin "vieitesss/nexo"`))
+		if _, err := in.Runner.Run(ctx, "sh", "-c", "pgrep -f '[n]exo.*agents.*watch' >/dev/null"); err == nil {
 			watcherOK = true
 		}
 	} else {
-		contents, err := os.ReadFile(filepath.Join(in.Home, ".config", "herdr", "config.toml"))
-		initOK = err == nil && strings.Contains(string(contents), "nexo")
-		focusOK = initOK
-		watcherOK = initOK
+		pluginOut, pluginErr := in.Runner.Run(ctx, "herdr", "plugin", "list")
+		statusOut, statusErr := in.Runner.Run(ctx, "herdr", "status", "server", "--json")
+		initOK = pluginErr == nil && pluginInstalled(string(pluginOut))
+		focusOK = statusErr == nil && herdrServerRunning(string(statusOut))
+		watcherOK = focusOK
 	}
-	writeLine(in.Stdout, "local: binary=%s path=%s version=%s config=%s focus=%s init/plugin=%s watcher=%s backend=%s\n", boolString(localPathErr == nil && localPath != ""), localPath, localVersion, boolString(configOK), boolString(focusOK), boolString(initOK), boolString(watcherOK), backendName)
-	if localPathErr != nil || localPath == "" || localVersion == "" || !configOK || !focusOK || !initOK || !watcherOK {
+	writeLine(in.Stdout, "local: binary=%s path=%s version=%s config=%s locale=%s focus=%s init/plugin=%s watcher=%s backend=%s\n", boolString(localPathErr == nil && localPath != ""), localPath, localVersion, boolString(configOK), boolString(localeOK), boolString(focusOK), boolString(initOK), boolString(watcherOK), backendName)
+	if localPathErr != nil || localPath == "" || localVersion == "" || !configOK || !localeOK || !focusOK || !initOK || !watcherOK {
 		failures = append(failures, "local")
 	}
 	machines, err := checkMachines(options, in, configPath)
@@ -1078,15 +1309,7 @@ func runCheck(ctx context.Context, in Input, options Options, backendName string
 		wg.Add(1)
 		go func(index int, machine string) {
 			defer wg.Done()
-			configured := configuredBackends[machine]
-			if configured == "" {
-				for configuredMachine, configuredValue := range configuredBackends {
-					if strings.EqualFold(configuredMachine, machine) {
-						configured = configuredValue
-						break
-					}
-				}
-			}
+			configured := configuredBackend(configuredBackends, machine)
 			results[index] = planRemote(ctx, in, options, machine, sshConfig, configured, nil)
 		}(index, machine)
 	}
@@ -1114,7 +1337,7 @@ func runCheck(ctx context.Context, in Input, options Options, backendName string
 		for _, change := range result.Changes {
 			fileMissing[filepath.Base(change.Path)] = true
 		}
-		focusOK := result.Backend == "herdr" || (result.Backend == "tmux" && !fileMissing[".tmux.conf"])
+		focusOK := result.Backend == "herdr" && result.Machine.HerdrRunning || result.Backend == "tmux" && !fileMissing[".tmux.conf"]
 		initOK := result.Backend == "herdr" && result.Machine.HasHerdrPlugin || result.Backend == "tmux" && !fileMissing[".tmux.conf"]
 		watcherOK := result.Backend == "herdr" || result.Machine.WatcherRunning
 		if !focusOK {
@@ -1167,6 +1390,21 @@ func requireHerdrVersion(ctx context.Context, commandRunner runner.CommandRunner
 		return fmt.Errorf("herdr %d.%d.%d is too old (need 0.9.0 or newer)", major, minor, patch)
 	}
 	return nil
+}
+
+func isUTF8Locale(value string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(value))
+	return strings.Contains(upper, "UTF-8") || strings.Contains(upper, "UTF8")
+}
+
+func herdrServerRunning(value string) bool {
+	compact := strings.Map(func(r rune) rune {
+		if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
+			return -1
+		}
+		return r
+	}, value)
+	return strings.Contains(compact, `"running":true`)
 }
 
 func boolString(value bool) string {
