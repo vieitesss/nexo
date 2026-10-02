@@ -15,11 +15,10 @@ import (
 
 // ListingConfig controls the remote machines' listing protocol.
 type ListingConfig struct {
-	Backend    backend.Kind
-	SSHConfig  string
-	Timeout    time.Duration
-	DetectKind bool
-	Backends   map[string]string
+	Backend   backend.Kind
+	SSHConfig string
+	Timeout   time.Duration
+	Backends  map[string]string
 }
 
 // OperationPolicy is the adapter seam for remote-machine operations. The

@@ -60,9 +60,6 @@ func newMachineListing(commandRunner runner.CommandRunner, config ListingConfig)
 		config.Timeout = DefaultMachineTimeout
 	}
 	config.Backends = normalizedBackends(config.Backends)
-	if len(config.Backends) > 0 {
-		config.DetectKind = true
-	}
 	return machineListing{runner: commandRunner, config: config}
 }
 
@@ -151,7 +148,6 @@ func (l machineListing) listMachine(ctx context.Context, machine string, withAge
 // list queries all configured machines in parallel. Results retain the input
 // order while each machine's own timeout controls completion.
 func (l machineListing) list(ctx context.Context, machines []string, withAgents bool) []MachineResult {
-	l.config.DetectKind = true
 	machines = uniqueMachines(machines)
 	results := make([]MachineResult, len(machines))
 	var wg sync.WaitGroup
@@ -182,12 +178,6 @@ func uniqueMachines(machines []string) []string {
 }
 
 func (l machineListing) run(ctx context.Context, machine string, withAgents bool) ([]byte, error) {
-	if !l.config.DetectKind {
-		if withAgents {
-			return l.runCommand(ctx, machine, l.backendAgentsCommand())
-		}
-		return l.runCommand(ctx, machine, l.backendCommand())
-	}
 	return l.runCommand(ctx, machine, l.remoteListingCommand(machine, withAgents))
 }
 
@@ -264,7 +254,7 @@ func (l machineListing) runCommand(ctx context.Context, machine, command string)
 			// Detection emits the kind before tmux reports its no-server status.
 			// Preserve that frame so a stopped tmux machine is a successful empty
 			// listing rather than an incorrectly decoded Herdr result.
-			if l.config.DetectKind && bytesHasRemoteKind(output) {
+			if bytesHasRemoteKind(output) {
 				return output, nil
 			}
 			return []byte{}, nil
@@ -281,26 +271,11 @@ func (l machineListing) runCommand(ctx context.Context, machine, command string)
 	return output, nil
 }
 
-func (l machineListing) backendCommand() string {
-	return l.backendCommandFor(l.config.Backend)
-}
-
 func (l machineListing) backendCommandFor(selected backend.Kind) string {
 	if selected == backend.Tmux {
 		return l.backendTmuxCommand()
 	}
 	return ShellCommand("herdr", "workspace", "list")
-}
-
-func (l machineListing) backendAgentsCommand() string {
-	listing := l.backendCommand()
-	agents := ShellCommand("nexo", "--backend", string(l.config.Backend), "agents", "--json")
-	return strings.Join([]string{
-		"listing_status=0",
-		listing + " || listing_status=$?",
-		agentCapture(agents),
-		"exit $listing_status",
-	}, "; ")
 }
 
 func splitRemoteKind(output []byte, fallback backend.Kind) (Kind, []byte) {

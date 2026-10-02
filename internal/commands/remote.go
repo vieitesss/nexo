@@ -28,10 +28,9 @@ func newRemoteOrchestrator(invocation Invocation, resolver capabilities.Containe
 		proxy = candidate
 	}
 	return remote.NewOrchestrator(invocation.Runner, remote.ListingConfig{
-		Backend:    invocation.Selection.Kind,
-		SSHConfig:  invocation.Config.Remote.SSHConfig,
-		DetectKind: true,
-		Backends:   invocation.Config.Remote.Backends,
+		Backend:   invocation.Selection.Kind,
+		SSHConfig: invocation.Config.Remote.SSHConfig,
+		Backends:  invocation.Config.Remote.Backends,
 	}, remote.OperationPolicy{
 		Backend:  invocation.Selection.Kind,
 		Proxy:    proxy,
