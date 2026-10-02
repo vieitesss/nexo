@@ -49,8 +49,8 @@ Agent state is one dot:
 | 🔴 red | `stopped` / unseen | The agent stopped and its exact pane has not been focused yet. |
 | 🟢 green | `stopped` / seen | The stopped agent has been seen. |
 
-The tmux glance row uses these default colours (`[glance] colors`); the TUI
-draws the seen dot in its muted grey instead. See
+The tmux glance row and the TUI both use these colours by default;
+`[glance] colors` restyles the glance row only. See
 [docs/tui.md](docs/tui.md) for the row behaviour and
 [docs/agents.md](docs/agents.md) for the watcher, notifications, and the
 unseen window highlight. For the domain model see [CONTEXT.md](CONTEXT.md),
