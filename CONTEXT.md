@@ -175,3 +175,18 @@ The one-line container view orders unseen-stopped agents first, then containers
 by most recent backend activity. A backend without a native activity timestamp
 uses deterministic container-name order within its activity bucket; Herdr is
 currently such a backend.
+
+### Distribution
+
+**Install method**:
+The machine-local method that owns a nexo executable: Homebrew, Go install, or
+release binary. Upgrade preserves this method when installing a tagged release;
+source-built nightly binaries are atomically copied when a target has no Go
+toolchain.
+
+**Upgrade**:
+The command that resolves an authenticated tagged release (or `main` with
+`--nightly`) and installs it on the local machine and selected configured
+machines. Every replacement writes a temporary file in the destination
+directory before renaming it. The tmux watcher re-executes its replaced binary;
+upgrade never stops or signals the watcher.

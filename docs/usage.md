@@ -24,8 +24,9 @@ before or after a command, so `nexo --backend=herdr tui projects` and
 | `nexo focus` | Record the container named by a backend focus event; it is the command declared by the Herdr plugin's `[[events]]` hook. |
 | `nexo worktree create REPO BRANCH DESTINATION` | Create and open a Git worktree; add `--new-branch`, `--add-parent`, or `--no-focus`. |
 | `nexo worktree extract REPO DESTINATION` | Move the branch checked out in `REPO` into a new worktree and leave a return branch behind; add `--return-branch`, `--add-parent`, or `--no-focus`. |
-| `nexo tmux init` | Install tmux focus hooks and replace the agent watcher (tmux backend only). |
+| `nexo tmux init` | Install tmux focus hooks and start the agent watcher (tmux backend only). |
 | `nexo tmux glance on\|off\|toggle` | Show, hide or toggle the glance row that lists agent panes (tmux backend only). Bind it yourself; nexo installs no key. |
+| `nexo upgrade` / `nexo update` | Atomically install a release or `--nightly` on this machine and configured remotes; `--machine`, `--local-only`, and `--dry-run` limit the operation. |
 
 Help lists `focus`, `agents watch`, and the tmux integration commands because
 users invoke them from backend hooks or bindings and may need to inspect them.
@@ -53,6 +54,10 @@ nexo --backend=tmux list --places --json
 nexo --backend=herdr agents --json
 nexo --backend=tmux tui agents
 nexo --backend=tmux agents watch
+
+# Upgrade every configured machine, or inspect a nightly without changing files.
+nexo upgrade --dry-run
+nexo upgrade --nightly --machine devbox
 
 # Open a project already found by `list`.
 nexo --backend=tmux open ~/src/api

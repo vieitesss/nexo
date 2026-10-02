@@ -268,8 +268,14 @@ working-pattern = { pi = "⠋" }
 
 ## Upgrading
 
+Use `nexo upgrade` (or its identical `nexo update` alias) to atomically install
+the latest tagged release on this machine and every configured remote. Use
+`--nightly` for `main`, `--version vX.Y.Z` for a specific release, and
+`--dry-run` or `--machine ALIAS` to inspect or limit the targets. The default
+fails with guidance to use `--nightly` until the first release is published.
+
 The tmux watcher reloads itself when its nexo binary is replaced atomically, as
-`just install` does, so upgrades need no manual step. Changing
+`nexo upgrade` and `just install` do, so upgrades need no manual step. Changing
 `[agents] highlight-color` or any `[glance]` key still needs a restart, because
 the watcher reads those values once at startup. See
 [docs/agents.md](docs/agents.md) for details and the non-Linux startup-window
@@ -332,6 +338,7 @@ command reference and examples.
 | `nexo clone`, `nexo delete`, `nexo worktree` | Clone repositories, delete candidates, and create or extract Git worktrees. |
 | `nexo backend` | Print the selected backend and its capabilities. |
 | `nexo tmux init`, `nexo tmux glance on\|off\|toggle` | Install the tmux adapter, or show, hide, or toggle the glance row. |
+| `nexo upgrade` / `nexo update` | Atomically upgrade this machine and configured remotes; use `--nightly`, `--version`, `--machine`, or `--dry-run`. |
 
 Add `--json` for structured output where offered. See
 [docs/usage.md](docs/usage.md) for the complete command reference and

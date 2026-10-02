@@ -130,8 +130,10 @@ a single write publishes it atomically.
 The watcher keeps the row current on every poll, so agent state changes appear
 without another command, and only writes when the rendered row or an option
 actually changed. Sessions created while the row is on are picked up on the
-next poll. Rerun `nexo tmux init` for `[glance]` changes to take effect, like
-the window highlight; init replaces the existing watcher. A configured
+next poll. Replacing the nexo binary (for example with `nexo upgrade`) makes
+the watcher re-exec itself without a stop/start cycle. Rerun `nexo tmux init`
+for `[glance]` changes to take effect, like the window highlight; init keeps
+the configured command and refreshes the watcher configuration. A configured
 `[glance] tint` paints the row background, either with a tmux colour or with a
 theme palette option such as `@thm_surface_0`; with no tint the row keeps the
 normal status background.

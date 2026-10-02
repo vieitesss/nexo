@@ -354,6 +354,27 @@ restoring that branch, and output failures perform the same extraction-aware
 rollback. Recovery uses a bounded context independent of caller cancellation;
 cleanup errors are returned rather than hidden.
 
+## Upgrade and update
+
+`nexo upgrade` and `nexo update` are identical text commands. They resolve the
+latest authenticated `v*` tag, install it on the local machine and every
+configured remote, and print one result line per machine. Until a first tag is
+published, the default fails with guidance to use `--nightly`:
+
+```console
+nexo upgrade --nightly
+nexo upgrade --version v1.2.3 --machine devbox
+nexo update --dry-run --local-only
+```
+
+`--machine` may be repeated; `--local-only` and `--dry-run` limit scope or
+avoid writes. Remote work runs in parallel, and a failed machine makes the
+process exit non-zero after all result lines are printed. Binary replacement is
+atomic. The tmux watcher re-executes the replaced binary itself; rerun
+`nexo tmux init` only after changing watcher configuration such as
+`[agents] highlight-color` or `[glance]` keys. No JSON shape is emitted by
+this command.
+
 ## Global flags and errors
 
 - `--backend auto|tmux|herdr` selects the one backend for this invocation.
