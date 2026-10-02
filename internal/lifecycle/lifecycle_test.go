@@ -121,6 +121,35 @@ func TestCreateWorktreeRejectsExistingDestinationBeforeAdapter(t *testing.T) {
 	}
 }
 
+func TestOpenProjectRejectsEmptyPathBeforeAdapter(t *testing.T) {
+	called := false
+	_, err := OpenProject(context.Background(), "", capabilities.OpenOptions{}, func(context.Context, string, capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
+		called = true
+		return capabilities.OpenedContainer{}, nil
+	})
+	if err == nil || err.Error() != "project path is empty" {
+		t.Fatalf("OpenProject() error = %v, want empty-path rejection", err)
+	}
+	if called {
+		t.Fatal("adapter called for empty project path")
+	}
+}
+
+func TestOpenProjectNormalizesPathBeforeAdapter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app")
+	var gotPath string
+	got, err := OpenProject(context.Background(), path+string(filepath.Separator)+".."+string(filepath.Separator)+"app", capabilities.OpenOptions{}, func(_ context.Context, adapterPath string, _ capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
+		gotPath = adapterPath
+		return capabilities.OpenedContainer{ID: "workspace-1"}, nil
+	})
+	if err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+	if gotPath != path || got.Path != path {
+		t.Fatalf("path = %q, container = %#v; want normalized %q", gotPath, got, path)
+	}
+}
+
 func TestOpenProjectPreservesExistingContainerNativeLabel(t *testing.T) {
 	path := "/work/acme/app"
 	got, err := OpenProject(context.Background(), path, capabilities.OpenOptions{NoFocus: true}, func(_ context.Context, gotPath string, options capabilities.OpenOptions) (capabilities.OpenedContainer, error) {

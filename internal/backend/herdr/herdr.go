@@ -285,17 +285,13 @@ func (b *Backend) createWorktree(ctx context.Context, options capabilities.Workt
 		cleanupErr := b.rollbackPartialCreate(options, workspaceID(output), ctx)
 		return capabilities.Worktree{}, errors.Join(err, cleanupErr)
 	}
-	name := workspace.Label
-	if name == "" {
-		name = projects.TargetName(options.Destination)
-	}
 	return capabilities.Worktree{
 		Path:        options.Destination,
 		Branch:      options.Branch,
 		Repo:        options.Repo,
 		NewBranch:   options.NewBranch,
 		ContainerID: workspace.ID,
-		Container:   capabilities.OpenedContainer{ID: workspace.ID, Name: name, Path: options.Destination, Created: true},
+		Container:   capabilities.OpenedContainer{ID: workspace.ID, Name: workspace.Label, Path: options.Destination, Created: true},
 	}, nil
 }
 
@@ -588,11 +584,7 @@ func (b *Backend) openProjectNative(ctx context.Context, path string, options ca
 	if err != nil {
 		return capabilities.OpenedContainer{}, err
 	}
-	name := created.Label
-	if name == "" {
-		name = target
-	}
-	return capabilities.OpenedContainer{ID: created.ID, Name: name, Path: path, Created: true}, nil
+	return capabilities.OpenedContainer{ID: created.ID, Name: created.Label, Path: path, Created: true}, nil
 }
 
 // openWorkspaceByID resolves the workspace label from the workspace list so the

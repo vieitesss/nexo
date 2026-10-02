@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
@@ -35,6 +36,10 @@ type WorktreeAdapter struct {
 func OpenProject(ctx context.Context, path string, options capabilities.OpenOptions, adapter ProjectAdapter) (capabilities.OpenedContainer, error) {
 	if adapter == nil {
 		return capabilities.OpenedContainer{}, errors.New("project lifecycle requires an adapter")
+	}
+	path, err := PreflightProjectPath(path)
+	if err != nil {
+		return capabilities.OpenedContainer{}, err
 	}
 	container, err := adapter(ctx, path, options)
 	container = normalizeContainer(path, container)
@@ -87,10 +92,9 @@ func createAndOpenWorktree(ctx context.Context, options capabilities.WorktreeCre
 		return capabilities.Worktree{}, openErr
 	}
 
-	container, openErr := adapter.Open(ctx, options.Destination, capabilities.OpenOptions{NoFocus: options.NoFocus})
-	result.Container = normalizeContainer(options.Destination, container)
+	container, openErr := OpenProject(ctx, options.Destination, capabilities.OpenOptions{NoFocus: options.NoFocus}, adapter.Open)
+	result.Container = container
 	result = normalizeWorktree(options, result)
-	result.Container = normalizeContainer(options.Destination, result.Container)
 	if openErr == nil {
 		return result, nil
 	}
@@ -103,6 +107,20 @@ func createAndOpenWorktree(ctx context.Context, options capabilities.WorktreeCre
 		return capabilities.Worktree{}, errors.Join(openErr, rollbackErr)
 	}
 	return capabilities.Worktree{}, openErr
+}
+
+// PreflightProjectPath returns the lexical absolute path used by every
+// project-open operation. It deliberately does not resolve symlinks: a
+// configured symlink is a project candidate in its own right.
+func PreflightProjectPath(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("project path is empty")
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve project path: %w", err)
+	}
+	return filepath.Clean(absolute), nil
 }
 
 func preflightDestination(path string) (string, error) {
