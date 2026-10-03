@@ -167,6 +167,65 @@ func TestRemotePreviousSkipsCurrentAndUnconfiguredMachines(t *testing.T) {
 	}
 }
 
+// remoteListingRunner answers every remote listing with the same output, or
+// fails every call when err is set.
+type remoteListingRunner struct {
+	listing string
+	err     error
+	calls   int
+}
+
+func (r *remoteListingRunner) Run(context.Context, string, ...string) ([]byte, error) {
+	r.calls++
+	return []byte(r.listing), r.err
+}
+
+func TestRemotePreviousSkipsContainersGoneFromTheMachine(t *testing.T) {
+	adapter := &historyAdapter{
+		entries: []containerstate.Entry{
+			{ID: "$9", Name: "removed", Machine: "devbox", Proxy: true},
+			{ID: "$8", Name: "api", Machine: "devbox", Proxy: true},
+		},
+	}
+	runner := &remoteListingRunner{listing: "$1\tapi\n"}
+	if err := (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
+		Adapter:   adapter,
+		Runner:    runner,
+		Args:      []string{"previous"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Proxying to a missing tmux session ends the proxy at once, which
+	// detaches the client from the local server.
+	if adapter.proxied != [2]string{"devbox", "api"} {
+		t.Fatalf("proxy = %#v, want devbox/api", adapter.proxied)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("listed devbox %d times, want once", runner.calls)
+	}
+}
+
+func TestRemotePreviousKeepsEntriesOnUnreachableMachines(t *testing.T) {
+	adapter := &historyAdapter{
+		entries: []containerstate.Entry{{ID: "$9", Name: "api", Machine: "devbox", Proxy: true}},
+	}
+	if err := (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
+		Adapter:   adapter,
+		Runner:    &remoteListingRunner{err: errTemporaryConnection},
+		Args:      []string{"previous"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The proxy's reconnect loop rides out the outage.
+	if adapter.proxied != [2]string{"devbox", "api"} {
+		t.Fatalf("proxy = %#v, want devbox/api", adapter.proxied)
+	}
+}
+
 func TestRemotePreviousPropagatesTemporaryConnectionFailure(t *testing.T) {
 	adapter := &failingProxyHistory{historyAdapter: historyAdapter{
 		entries: []containerstate.Entry{{ID: "$1", Name: "api", Machine: "devbox", Proxy: true}},
