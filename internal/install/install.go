@@ -210,8 +210,8 @@ func (b *LocalBuilder) Build(ctx context.Context, repository, ref string, target
 	return nil
 }
 
-// Probe reports a target's platform without requiring nexo to be installed.
-func Probe(ctx context.Context, target Target) (Platform, error) {
+// probe reports a target's platform without requiring nexo to be installed.
+func probe(ctx context.Context, target Target) (Platform, error) {
 	return detectPlatform(ctx, target)
 }
 
@@ -221,7 +221,7 @@ func Probe(ctx context.Context, target Target) (Platform, error) {
 // belongs to the formula's keg, so another nexo earlier on PATH keeps its own
 // method.
 func Detect(ctx context.Context, target Target) (Installation, error) {
-	platform, err := Probe(ctx, target)
+	platform, err := probe(ctx, target)
 	if err != nil {
 		return Installation{}, err
 	}

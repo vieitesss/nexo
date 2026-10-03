@@ -55,9 +55,9 @@ func platformRunner(extra func(name string, args ...string) ([]byte, error)) fun
 
 func TestProbeReportsPlatformWithoutNexo(t *testing.T) {
 	fake := &fakeRunner{run: platformRunner(nil)}
-	platform, err := Probe(context.Background(), NewLocalTarget(fake))
+	platform, err := probe(context.Background(), NewLocalTarget(fake))
 	if err != nil {
-		t.Fatalf("Probe() error = %v", err)
+		t.Fatalf("probe() error = %v", err)
 	}
 	if platform.String() != "linux/amd64" {
 		t.Fatalf("platform = %q, want linux/amd64", platform)
