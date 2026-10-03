@@ -12,6 +12,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/charmbracelet/bubbles/cursor"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
@@ -23,7 +25,7 @@ type inputState struct {
 	deps Deps
 
 	tab         Tab
-	query       []rune
+	query       textinput.Model
 	cursor      string
 	forceFirst  bool
 	cursorMoved bool
@@ -36,7 +38,7 @@ type inputState struct {
 	form             *stagedForm
 	deleteForm       *deleteForm
 	renameMode       bool
-	renameInput      []rune
+	renameInput      textinput.Model
 	renameTarget     picker.ContainerRef
 	actionInFlight   bool
 	actionGeneration uint64
@@ -83,14 +85,59 @@ func (f inputFrame) layout() renderFrame {
 }
 
 func newInputState(tab Tab, deps Deps, ctx context.Context) *inputState {
-	return &inputState{ctx: ctx, deps: deps, tab: tab,
+	query := newInputTextInput("⌕ ")
+	return &inputState{ctx: ctx, deps: deps, tab: tab, query: query,
 		folded: make(map[string]bool), expanded: make(map[string]bool), marked: make(map[picker.ContainerRef]bool)}
 }
 
+func newInputTextInput(prompt string) textinput.Model {
+	input := newFormTextInput(formField{}, nil)
+	input.Prompt = prompt
+	input.PromptStyle = accent()
+	input.Cursor.Style = accent()
+	input.Cursor.SetMode(cursor.CursorStatic)
+	input.Focus()
+	return input
+}
+
 func (s *inputState) setQuery(query string) {
-	wasEmpty := len(s.query) == 0
-	s.query = []rune(query)
-	s.forceFirst = wasEmpty && len(s.query) > 0
+	wasEmpty := s.query.Value() == ""
+	s.query.SetValue(query)
+	s.query.CursorEnd()
+	s.forceFirst = wasEmpty && s.query.Value() != ""
+}
+
+func (s *inputState) updateQuery(msg tea.Msg) inputEffect {
+	before := s.query.Value()
+	updated, cmd := s.query.Update(msg)
+	s.query = updated
+	if before == updated.Value() {
+		return inputEffect{cmd: wrapInputCmd(cmd, false)}
+	}
+	return inputEffect{rebuild: true, cmd: wrapInputCmd(cmd, false)}
+}
+
+func (s *inputState) updateRenameInput(msg tea.Msg) inputEffect {
+	updated, cmd := s.renameInput.Update(msg)
+	s.renameInput = updated
+	return inputEffect{cmd: wrapInputCmd(cmd, true)}
+}
+
+type inputMsg struct {
+	rename bool
+	msg    tea.Msg
+}
+
+func wrapInputCmd(cmd tea.Cmd, rename bool) tea.Cmd {
+	if cmd == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		if msg := cmd(); msg != nil {
+			return inputMsg{rename: rename, msg: msg}
+		}
+		return nil
+	}
 }
 
 // reconcileSelection applies identity-stable selection after a projection
@@ -364,29 +411,27 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 		switch msg.Type {
 		case tea.KeyEsc:
 			s.renameMode = false
-			s.renameInput = nil
+			s.renameInput.Blur()
 		case tea.KeyEnter:
-			if strings.TrimSpace(string(s.renameInput)) != "" {
+			if strings.TrimSpace(s.renameInput.Value()) != "" {
 				s.renameMode = false
-				name := string(s.renameInput)
-				s.renameInput = nil
+				name := s.renameInput.Value()
+				s.renameInput.Blur()
 				s.actionInFlight = true
 				return inputEffect{cmd: s.runRename(s.renameTarget, name)}
 			}
-		case tea.KeyBackspace, tea.KeyDelete:
-			if len(s.renameInput) > 0 {
-				s.renameInput = s.renameInput[:len(s.renameInput)-1]
-			}
-		case tea.KeyRunes:
-			s.renameInput = append(s.renameInput, msg.Runes...)
-		case tea.KeySpace:
-			s.renameInput = append(s.renameInput, ' ')
+		default:
+			return s.updateRenameInput(msg)
 		}
 		return inputEffect{}
 	}
+	if msg.String() == "shift+tab" {
+		s.switchTab(-1)
+		return inputEffect{rebuild: true}
+	}
 	switch msg.Type {
 	case tea.KeyEsc:
-		if len(s.query) > 0 {
+		if s.query.Value() != "" {
 			s.setQuery("")
 			return inputEffect{rebuild: true}
 		}
@@ -459,28 +504,11 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 	case tea.KeyCtrlR:
 		if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ContainerKind && current.place.ContainerID != "" {
 			s.renameMode = true
-			s.renameInput = nil
+			s.renameInput = newInputTextInput("")
 			s.renameTarget = picker.ContainerRef{Machine: current.place.Machine, ID: current.place.ContainerID}
+			return inputEffect{cmd: wrapInputCmd(s.renameInput.Focus(), true)}
 		}
 		return inputEffect{}
-	case tea.KeyCtrlW:
-		s.setQuery(string(deleteBackToWhitespace(s.query)))
-		return inputEffect{rebuild: true}
-	case tea.KeyCtrlU:
-		s.setQuery("")
-		return inputEffect{rebuild: true}
-	case tea.KeyBackspace:
-		if msg.Alt {
-			s.setQuery(string(deleteBackToBoundary(s.query)))
-		} else if len(s.query) > 0 {
-			s.setQuery(string(s.query[:len(s.query)-1]))
-		}
-		return inputEffect{rebuild: true}
-	case tea.KeyDelete:
-		if len(s.query) > 0 {
-			s.setQuery(string(s.query[:len(s.query)-1]))
-		}
-		return inputEffect{rebuild: true}
 	case tea.KeyUp:
 		s.moveCursor(-1, frame.rows)
 		return inputEffect{}
@@ -511,43 +539,40 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 		return inputEffect{}
 	case tea.KeyEnter:
 		return s.accept(frame.rows)
-	case tea.KeyRunes:
-		if len(msg.Runes) > 0 {
-			query := append(append([]rune(nil), s.query...), msg.Runes...)
-			s.setQuery(string(query))
+	case tea.KeyBackspace:
+		if msg.Alt {
+			if deleteQueryBoundary(&s.query) {
+				return inputEffect{rebuild: true}
+			}
+			return inputEffect{}
 		}
-		return inputEffect{rebuild: true}
-	case tea.KeySpace:
-		s.setQuery(string(append(append([]rune(nil), s.query...), ' ')))
-		return inputEffect{rebuild: true}
+		return s.updateQuery(msg)
+	default:
+		return s.updateQuery(msg)
 	}
-	if msg.String() == "shift+tab" {
-		s.switchTab(-1)
-		return inputEffect{rebuild: true}
-	}
-	return inputEffect{}
 }
 
-func deleteBackToWhitespace(query []rune) []rune {
-	end := len(query)
-	for end > 0 && unicode.IsSpace(query[end-1]) {
+func deleteQueryBoundary(input *textinput.Model) bool {
+	position := input.Position()
+	if position == 0 {
+		return false
+	}
+	value := []rune(input.Value())
+	before := value[:position]
+	end := len(before)
+	for end > 0 && !unicode.IsLetter(before[end-1]) && !unicode.IsDigit(before[end-1]) {
 		end--
 	}
-	for end > 0 && !unicode.IsSpace(query[end-1]) {
+	for end > 0 && (unicode.IsLetter(before[end-1]) || unicode.IsDigit(before[end-1])) {
 		end--
 	}
-	return query[:end]
-}
-
-func deleteBackToBoundary(query []rune) []rune {
-	end := len(query)
-	for end > 0 && !unicode.IsLetter(query[end-1]) && !unicode.IsDigit(query[end-1]) {
-		end--
+	if end == position {
+		return false
 	}
-	for end > 0 && (unicode.IsLetter(query[end-1]) || unicode.IsDigit(query[end-1])) {
-		end--
-	}
-	return query[:end]
+	updated := append(append([]rune(nil), before[:end]...), value[position:]...)
+	input.SetValue(string(updated))
+	input.SetCursor(end)
+	return true
 }
 
 func (s *inputState) switchTab(delta int) {
@@ -653,7 +678,7 @@ func (s *inputState) revealProjectAncestors(projects []picker.Place, path string
 }
 
 func (s *inputState) foldLeft(rows []row) bool {
-	if s.tab != ProjectsTab || string(s.query) != "" {
+	if s.tab != ProjectsTab || s.query.Value() != "" {
 		return false
 	}
 	current, ok := s.currentRow(rows)
@@ -700,7 +725,7 @@ func (s *inputState) accept(rows []row) inputEffect {
 		return inputEffect{}
 	}
 	if current.kind == newContainerRow {
-		name := strings.TrimSpace(string(s.query))
+		name := strings.TrimSpace(s.query.Value())
 		target := RemoteTarget{Machine: current.machine, Backend: current.backend}
 		if name == "" {
 			s.form = newRemoteNewForm(s.ctx, target, "")

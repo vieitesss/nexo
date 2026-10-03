@@ -34,12 +34,12 @@ func TestInputTransitionOwnsQueryAndFoldingState(t *testing.T) {
 	input := newInputState(ProjectsTab, Deps{}, context.Background())
 	frame := inputFrame{height: 10}
 	effect := input.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}, frame)
-	if !effect.rebuild || string(input.query) != "n" {
-		t.Fatalf("query transition = %#v, query %q", effect, input.query)
+	if !effect.rebuild || input.query.Value() != "n" {
+		t.Fatalf("query transition = %#v, query %q", effect, input.query.Value())
 	}
 	rows := []row{{id: "group:/work", kind: groupRow, cursorable: true, foldable: true}}
 	input.cursor = rows[0].id
-	input.query = nil
+	input.query.Reset()
 	effect = input.key(tea.KeyMsg{Type: tea.KeyRight}, inputFrame{rows: rows})
 	if !effect.rebuild || !input.expanded[rows[0].id] {
 		t.Fatalf("fold transition = %#v, expanded=%v", effect, input.expanded)

@@ -9,7 +9,7 @@ import "github.com/vieitesss/nexo/internal/capabilities"
 func (m Model) Tab() Tab { return m.input.tab }
 
 // Query reports the current search query.
-func (m Model) Query() string { return string(m.input.query) }
+func (m Model) Query() string { return m.input.query.Value() }
 
 // Rows returns a compact copy of the visible row identities for model tests.
 func (m Model) Rows() []string {

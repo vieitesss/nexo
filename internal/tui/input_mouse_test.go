@@ -31,9 +31,8 @@ func TestSearchWordDeletes(t *testing.T) {
 	}{
 		{name: "ctrl w stops at whitespace", query: "hello/world again", key: tea.KeyMsg{Type: tea.KeyCtrlW}, want: "hello/world "},
 		{name: "ctrl w treats punctuation as part of a word", query: "hello/world", key: tea.KeyMsg{Type: tea.KeyCtrlW}, want: ""},
-		{name: "alt backspace stops at punctuation", query: "hello/world", key: tea.KeyMsg{Type: tea.KeyBackspace, Alt: true}, want: "hello/"},
-		{name: "alt backspace handles unicode", query: "δοκιμή/日本語", key: tea.KeyMsg{Type: tea.KeyBackspace, Alt: true}, want: "δοκιμή/"},
-		{name: "alt backspace handles punctuation runs", query: "one/two-three", key: tea.KeyMsg{Type: tea.KeyBackspace, Alt: true}, want: "one/two-"},
+		{name: "alt backspace stops at punctuation", query: "nexo-wt/foo", key: tea.KeyMsg{Type: tea.KeyBackspace, Alt: true}, want: "nexo-wt/"},
+		{name: "alt backspace removes punctuation before the word", query: "foo  bar--", key: tea.KeyMsg{Type: tea.KeyBackspace, Alt: true}, want: "foo  "},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -51,6 +50,68 @@ func TestSearchWordDeletes(t *testing.T) {
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlU})
 	if model.Query() != "" {
 		t.Fatalf("ctrl-u query = %q, want empty", model.Query())
+	}
+}
+
+func TestRenameTextInputUsesWordAndLineDeletion(t *testing.T) {
+	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlR})
+	for _, value := range "hello world" {
+		model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{value}})
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if got := model.input.renameInput.Value(); got != "hello " {
+		t.Fatalf("rename word delete = %q, want %q", got, "hello ")
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if got := model.input.renameInput.Value(); got != "" {
+		t.Fatalf("rename line delete = %q, want empty", got)
+	}
+}
+
+func TestSearchTextInputExposesPasteCommand(t *testing.T) {
+	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if updated.(Model).input.query.Value() != "" {
+		t.Fatal("paste changed an empty query before its command ran")
+	}
+	if cmd == nil {
+		t.Fatal("textinput paste command missing")
+	}
+}
+
+func TestRenameTextInputCursorControlsInsertionAndRendering(t *testing.T) {
+	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
+	model.SetSize(40, 6)
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlR})
+	for _, value := range "abc" {
+		model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{value}})
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyLeft})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	if got := model.input.renameInput.Value(); got != "abXc" {
+		t.Fatalf("rename value = %q, want %q", got, "abXc")
+	}
+	footer := shell.Plain(strings.Split(model.View(), "\n")[5])
+	if !strings.Contains(footer, "abX▌c") {
+		t.Fatalf("rename cursor rendering = %q, want cursor before c", footer)
+	}
+}
+
+func TestSearchTextInputCursorControlsInsertionAndRendering(t *testing.T) {
+	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
+	model.SetSize(40, 6)
+	for _, value := range "abc" {
+		model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{value}})
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlA})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	if got := model.Query(); got != "Xabc" {
+		t.Fatalf("search value = %q, want %q", got, "Xabc")
+	}
+	search := shell.Plain(strings.Split(model.View(), "\n")[1])
+	if !strings.Contains(search, "X▌abc") {
+		t.Fatalf("search cursor rendering = %q, want cursor before a", search)
 	}
 }
 

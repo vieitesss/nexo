@@ -10,7 +10,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/vieitesss/nexo/internal/config"
-	"github.com/vieitesss/nexo/internal/shell"
 )
 
 // SetupPromptDefaults seeds the guided setup form. Explicit scope selections
@@ -347,11 +346,6 @@ func setupViewportLines(lines []string, height int) []string {
 	if bodyHeight == 0 {
 		return []string{footer}
 	}
-	active := activeFormLine(body)
-	start := 0
-	if len(body) > bodyHeight {
-		start = shell.ViewportStart(len(body), bodyHeight, active)
-		body = body[start : start+bodyHeight]
-	}
+	body = viewportFormLines(body, bodyHeight, 0, false)
 	return append(body, footer)
 }

@@ -47,7 +47,7 @@ type rowProjection struct {
 func (m Model) projection() rowProjection {
 	return rowProjection{
 		snapshot:       m.catalogSnapshot(),
-		query:          string(m.input.query),
+		query:          m.input.query.Value(),
 		width:          m.width,
 		folded:         m.input.folded,
 		expanded:       m.input.expanded,
