@@ -79,6 +79,19 @@ func TestCoveredRecognizesSymlinkedParent(t *testing.T) {
 	}
 }
 
+func TestCoveredMatchesHomeAndGlobSpellings(t *testing.T) {
+	home := t.TempDir()
+	configured := []string{"~/src", "~/work/*"}
+	for _, parent := range []string{"~/src", "$HOME/src", filepath.Join(home, "src"), "~/src/*", "~/work", "~/work/*", filepath.Join(home, "work")} {
+		if !Covered(configured, parent, home) {
+			t.Errorf("Covered(%q) = false; want covered", parent)
+		}
+	}
+	if Covered(configured, "~/code", home) {
+		t.Errorf("Covered(~/code) = true; want not covered")
+	}
+}
+
 func TestResolverExpandsHome(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "projects"), 0o755); err != nil {

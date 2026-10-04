@@ -20,13 +20,13 @@ func newCloneForm(deps Deps, ctx context.Context) *stagedForm {
 	}
 	form := newStagedForm(ctx, []formStage{
 		{
-			ID: "source", Title: "source", Fields: []formField{
+			ID: "source", Title: "Source", Fields: []formField{
 				{ID: "protocol", Label: "protocol", Default: clone.EffectiveProtocol(), Kind: formChoice, Options: []string{config.CloneProtocolSSH, config.CloneProtocolHTTPS}},
 				{ID: "source", Label: "repository or Git operand", Default: "", Kind: formText, Placeholder: "owner/repository"},
 				{ID: "prefix", Label: "prefix (editable)", Default: clone.Prefix(clone.EffectiveProtocol()), Kind: formText, Expandable: true},
 			},
 		},
-		{ID: "destination", Title: "destination", Fields: destinationFields},
+		{ID: "destination", Title: "Destination", Fields: destinationFields},
 	}, cloneFormValidation(deps), cloneFormSubmit(deps))
 	form.busyLabel = "cloning…"
 	return form

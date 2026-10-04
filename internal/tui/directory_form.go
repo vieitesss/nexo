@@ -21,7 +21,7 @@ func newDirectoryForm(deps Deps, ctx context.Context) *stagedForm {
 		fields = append(fields, formField{ID: "add-parent", Label: "add parent", Default: "no", Kind: formToggle})
 	}
 	form := newStagedForm(ctx, []formStage{
-		{ID: "destination", Title: "directory", Fields: fields},
+		{ID: "destination", Title: "New directory", Fields: fields},
 	}, directoryFormValidation(deps), directoryFormSubmit(deps))
 	form.busyLabel = "creating…"
 	return form

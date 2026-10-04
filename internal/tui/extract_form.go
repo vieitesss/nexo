@@ -28,8 +28,8 @@ func newExtractForm(deps Deps, place picker.Place, ctx context.Context) *stagedF
 		returnBranch = strings.TrimSpace(returnBranch)
 	}
 	form := newStagedForm(ctx, []formStage{
-		{ID: "destination", Title: "destination", Fields: []formField{{ID: "destination", Label: "path", Default: destinationSuggestion, Kind: formText, Placeholder: "worktree directory", AbbreviateHome: true}}},
-		{ID: "return-branch", Title: "return branch", Fields: []formField{{ID: "return-branch", Label: "branch", Default: returnBranch, Kind: formText, Placeholder: "optional branch"}}},
+		{ID: "destination", Title: "Destination", Fields: []formField{{ID: "destination", Label: "path", Default: destinationSuggestion, Kind: formText, Placeholder: "worktree directory", AbbreviateHome: true}}},
+		{ID: "return-branch", Title: "Return branch", Fields: []formField{{ID: "return-branch", Label: "branch", Default: returnBranch, Kind: formText, Placeholder: "optional branch"}}},
 	}, extractFormValidation(deps), extractFormSubmit(deps, place.Path))
 	form.busyLabel = "extracting…"
 	if suggestionErr != nil {

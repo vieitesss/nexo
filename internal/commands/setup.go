@@ -55,7 +55,7 @@ func (setupCommand) Run(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return UsageError{Err: err}
 	}
-	input := setup.Input{Runner: invocation.Runner, Stdout: invocation.Stdout, Stderr: invocation.Stderr, Stdin: invocation.Stdin, Home: homeDir(), TTY: interactiveTerminal(), SelectedBackend: string(invocation.Selection.Kind), ConfigPath: invocation.ConfigPath}
+	input := setup.Input{Runner: invocation.Runner, Stdout: invocation.Stdout, Stderr: invocation.Stderr, Stdin: invocation.Stdin, Home: homeDir(), TTY: interactiveTerminal(), SelectedBackend: string(invocation.Selection.Kind), SelectedSource: invocation.Selection.Source, ConfigPath: invocation.ConfigPath}
 	if opts.Check {
 		return setup.Run(ctx, input, opts)
 	}

@@ -47,8 +47,11 @@ type Input struct {
 	Home            string
 	TTY             bool
 	SelectedBackend string
-	ConfigPath      string
-	LocalTmuxInit   func(context.Context) error
+	// SelectedSource says where SelectedBackend came from, as backend.Selection
+	// reports it: "flag", "config" or "auto-detect".
+	SelectedSource string
+	ConfigPath     string
+	LocalTmuxInit  func(context.Context) error
 }
 
 // RemoteMachine is the result of a short, non-interactive remote probe.
@@ -133,12 +136,88 @@ func TmuxBlock(tpm bool, keys ...string) string {
 		lines = append(lines, "if-shell 'command -v nexo >/dev/null 2>&1' 'run-shell \"nexo tmux init --backend=tmux\"'")
 	}
 	if len(keys) > 0 && strings.TrimSpace(keys[0]) != "" {
-		lines = append(lines, "bind -n "+strings.TrimSpace(keys[0])+" display-popup -E -B -w 100% -h 100% \"nexo tui\"")
+		lines = append(lines, tmuxBind(keys[0], "nexo tui"))
 	}
 	if len(keys) > 1 && strings.TrimSpace(keys[1]) != "" {
-		lines = append(lines, "bind "+strings.TrimSpace(keys[1])+" display-popup -E -B -w 100% -h 100% \"nexo tui agents\"")
+		lines = append(lines, tmuxBind(keys[1], "nexo tui agents"))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// tmuxBind binds prefix+KEY in the prefix table and any other key in the root
+// table, so either nexo action can be reached with or without the prefix.
+func tmuxBind(key, command string) string {
+	tmuxKey, afterPrefix := config.SplitTmuxBinding(strings.TrimSpace(key))
+	table := "-n "
+	if afterPrefix {
+		table = ""
+	}
+	return "bind " + table + tmuxKey + " display-popup -E -B -w 100% -h 100% \"" + command + "\""
+}
+
+// parseTmuxBind reads a bind/bind-key line from a config file or from
+// tmux list-keys. It returns the key in setup's spelling (prefix+a for the
+// prefix table) and false for lines that bind outside root and prefix.
+func parseTmuxBind(line string) (string, bool) {
+	fields := strings.Fields(line)
+	if len(fields) < 2 || (fields[0] != "bind" && fields[0] != "bind-key") {
+		return "", false
+	}
+	table := "prefix"
+	index := 1
+	for index < len(fields) && strings.HasPrefix(fields[index], "-") {
+		flag := fields[index]
+		index++
+		switch flag {
+		case "-n":
+			table = "root"
+		case "-T":
+			if index < len(fields) {
+				table = fields[index]
+				index++
+			}
+		case "-N":
+			// The note is quoted and may contain spaces; nexo never writes one,
+			// so a line carrying it is left alone.
+			return "", false
+		}
+	}
+	if index >= len(fields) {
+		return "", false
+	}
+	switch table {
+	case "root":
+		return fields[index], true
+	case "prefix":
+		return config.TmuxPrefixMarker + fields[index], true
+	}
+	return "", false
+}
+
+// sameTmuxKey compares two keys in setup's spelling the way tmux resolves
+// them: ^x is C-x, modifiers are case-insensitive, and so are key names.
+func sameTmuxKey(a, b string) bool {
+	return canonicalTmuxKey(a) == canonicalTmuxKey(b)
+}
+
+func canonicalTmuxKey(key string) string {
+	key, afterPrefix := config.SplitTmuxBinding(key)
+	var mods strings.Builder
+	if strings.HasPrefix(key, "^") && len(key) > 1 {
+		mods.WriteString("C-")
+		key = key[1:]
+	}
+	for len(key) > 2 && key[1] == '-' {
+		mods.WriteString(strings.ToUpper(key[:2]))
+		key = key[2:]
+	}
+	if len([]rune(key)) > 1 {
+		key = strings.ToLower(key)
+	}
+	if afterPrefix {
+		return config.TmuxPrefixMarker + mods.String() + key
+	}
+	return mods.String() + key
 }
 
 // HerdrBlock contains only user-selected bindings. Empty choices keep the
@@ -263,16 +342,25 @@ func normalizeArch(value string) string {
 	}
 }
 
-func chooseBackend(ctx context.Context, in Input, options Options) (string, error) {
+// chooseBackend picks the backend setup integrates with and says how it knew.
+// An empty reason means the answer is only a suggestion: both multiplexers are
+// installed and nothing chose between them, so the form asks.
+func chooseBackend(ctx context.Context, in Input, options Options) (string, string, error) {
 	selected := strings.ToLower(strings.TrimSpace(options.Backend))
+	reason := "set by --backend"
 	if selected == "" || selected == "none" || selected == "auto" {
 		selected = strings.ToLower(strings.TrimSpace(in.SelectedBackend))
-	}
-	if selected == "none" || selected == "auto" {
-		selected = ""
+		switch in.SelectedSource {
+		case "flag":
+			reason = "set by --backend"
+		case "config":
+			reason = "set in config"
+		default:
+			reason = "detected in this terminal"
+		}
 	}
 	if selected == "tmux" || selected == "herdr" {
-		return selected, nil
+		return selected, reason, nil
 	}
 	var tmuxOK, herdrOK bool
 	if in.Runner != nil {
@@ -285,17 +373,17 @@ func chooseBackend(ctx context.Context, in Input, options Options) (string, erro
 	}
 	switch {
 	case tmuxOK && !herdrOK:
-		return "tmux", nil
+		return "tmux", "the only one installed", nil
 	case herdrOK && !tmuxOK:
-		return "herdr", nil
+		return "herdr", "the only one installed", nil
 	case tmuxOK && herdrOK && in.TTY:
-		return "tmux", nil
+		return "tmux", "", nil
 	case tmuxOK && herdrOK:
-		return "", errors.New("both tmux and Herdr are available; pass --backend or run setup in a multiplexer")
+		return "", "", errors.New("both tmux and Herdr are available; pass --backend or run setup in a multiplexer")
 	case options.Check:
-		return "none", nil
+		return "none", "", nil
 	default:
-		return "", errors.New("no tmux or Herdr installation found; install one or pass --backend")
+		return "", "", errors.New("no tmux or Herdr installation found; install one or pass --backend")
 	}
 }
 
@@ -315,7 +403,7 @@ func configPlan(options Options, home string, backendName string, paths []string
 	if err != nil {
 		return Change{}, err
 	}
-	after, err := config.PrepareSetup(before, path, home, config.SetupValues{Backend: backendName, Notify: notify, Machines: machines, Backends: backends, Paths: paths})
+	after, err := config.PrepareSetup(before, path, home, config.SetupValues{Notify: notify, Machines: machines, Backends: backends, Paths: paths})
 	if err != nil {
 		return Change{}, err
 	}
@@ -643,7 +731,7 @@ func Run(ctx context.Context, in Input, options Options) error {
 			options.Notify = &value
 		}
 	}
-	backendName, err := chooseBackend(ctx, in, options)
+	backendName, backendReason, err := chooseBackend(ctx, in, options)
 	if err != nil {
 		return err
 	}
@@ -656,10 +744,14 @@ func Run(ctx context.Context, in Input, options Options) error {
 		return err
 	}
 	configuredBackends := map[string]string{}
+	theme := config.ThemeAuto
+	var configuredPaths []string
 	if existing, loadErr := config.LoadOptional(options.ConfigPath); loadErr == nil {
 		for machine, value := range existing.Remote.Backends {
 			configuredBackends[machine] = value
 		}
+		theme = existing.TUI.EffectiveTheme()
+		configuredPaths = existing.Paths
 	}
 	paths := append([]string(nil), options.Paths...)
 	var tuiKey, agentsKey string
@@ -672,8 +764,12 @@ func Run(ctx context.Context, in Input, options Options) error {
 		if len(options.Machines) > 0 {
 			hosts = append([]string(nil), machines...)
 		}
-		existingTUI, existingAgents := existingBindings(in.Home, backendName)
-		answers, promptErr := tui.PromptSetup(ctx, in.Stdin, in.Stdout, tui.SetupPromptDefaults{Backend: backendName, Notify: *options.Notify, Hosts: hosts, SelectedHosts: machines, LocalOnly: options.LocalOnly, ScopeLocked: len(options.Machines) > 0, Paths: pathsOrDefaults(paths, in.Home), TUIKey: existingTUI, AgentsKey: existingAgents})
+		bindings := make(map[string]tui.SetupBindings, 2)
+		for _, name := range []string{"tmux", "herdr"} {
+			tuiKey, agentsKey := existingBindings(in.Home, name)
+			bindings[name] = tui.SetupBindings{TUIKey: tuiKey, AgentsKey: agentsKey}
+		}
+		answers, promptErr := tui.PromptSetup(ctx, in.Stdin, in.Stdout, tui.SetupPromptDefaults{Backend: backendName, BackendDetected: backendReason, Notify: *options.Notify, Hosts: hosts, SelectedHosts: machines, LocalOnly: options.LocalOnly, ScopeLocked: len(options.Machines) > 0, Paths: pathsOrDefaults(paths, configuredPaths, in.Home), Bindings: bindings, Theme: theme})
 		if promptErr != nil {
 			return promptErr
 		}
@@ -700,7 +796,7 @@ func Run(ctx context.Context, in Input, options Options) error {
 	// after the form has finalized the machine list, so typed aliases are
 	// included and each result can be retained for the final plan.
 	facts := probeRemoteMachines(ctx, in, machines, sshConfig)
-	ambiguous := ambiguousFromFacts(machines, facts, configuredBackends)
+	ambiguous := ambiguousFromFacts(machines, facts, configuredBackends, backendName)
 	if in.TTY && !options.Yes && len(ambiguous) > 0 {
 		answers, promptErr := tui.PromptRemoteBackends(ctx, in.Stdin, in.Stdout, ambiguous)
 		if promptErr != nil {
@@ -711,7 +807,7 @@ func Run(ctx context.Context, in Input, options Options) error {
 		}
 	}
 	remoteBackends := make(map[string]string, len(machines))
-	localChange, err := configPlan(options, in.Home, backendName, pathsOrDefaults(paths, in.Home), machines, remoteBackends, options.Notify)
+	localChange, err := configPlan(options, in.Home, backendName, pathsOrDefaults(paths, configuredPaths, in.Home), machines, remoteBackends, options.Notify)
 	if err != nil {
 		return fmt.Errorf("plan config: %w", err)
 	}
@@ -774,7 +870,7 @@ func Run(ctx context.Context, in Input, options Options) error {
 		}
 	}
 	// Rebuild the config plan now that detected backend choices are known.
-	localChange, err = configPlan(options, in.Home, backendName, pathsOrDefaults(paths, in.Home), machines, remoteBackends, options.Notify)
+	localChange, err = configPlan(options, in.Home, backendName, pathsOrDefaults(paths, configuredPaths, in.Home), machines, remoteBackends, options.Notify)
 	if err != nil {
 		return fmt.Errorf("plan config: %w", err)
 	}
@@ -1025,7 +1121,13 @@ func probeRemoteMachines(ctx context.Context, in Input, machines []string, sshCo
 	return facts
 }
 
-func ambiguousFromFacts(machines []string, facts []RemoteMachine, configured map[string]string) map[string]string {
+// ambiguousFromFacts maps each machine running both multiplexers to the answer
+// its question starts on: the local backend, so one Enter keeps them alike.
+func ambiguousFromFacts(machines []string, facts []RemoteMachine, configured map[string]string, local string) map[string]string {
+	suggested := ""
+	if local == "tmux" || local == "herdr" {
+		suggested = local
+	}
 	ambiguous := map[string]string{}
 	for index, machine := range machines {
 		if configuredBackend(configured, machine) != "" || index >= len(facts) {
@@ -1033,7 +1135,7 @@ func ambiguousFromFacts(machines []string, facts []RemoteMachine, configured map
 		}
 		fact := facts[index]
 		if fact.Error == nil && fact.TmuxRunning && fact.HerdrRunning {
-			ambiguous[machine] = ""
+			ambiguous[machine] = suggested
 		}
 	}
 	return ambiguous
@@ -1092,9 +1194,16 @@ func unique(values []string) []string {
 	return out
 }
 
-func pathsOrDefaults(paths []string, home string) []string {
+// pathsOrDefaults picks the project roots setup offers: the ones passed on
+// the command line, else the ones already configured, else the common roots
+// that exist. Configured roots come first so a re-run starts from them
+// instead of proposing defaults the config may already cover.
+func pathsOrDefaults(paths, configured []string, home string) []string {
 	if len(paths) > 0 {
 		return paths
+	}
+	if len(configured) > 0 {
+		return append([]string(nil), configured...)
 	}
 	return DefaultPaths(home, nil)
 }
@@ -1145,25 +1254,41 @@ func bindingConflicts(ctx context.Context, in Input, home, backendName, tuiKey, 
 	if len(keys) == 0 {
 		return nil
 	}
-	var text string
 	if backendName == "tmux" {
 		out, err := in.Runner.Run(ctx, "tmux", "list-keys")
 		if err != nil {
 			return nil
 		}
-		text = string(out)
-	} else {
-		out, err := os.ReadFile(filepath.Join(home, ".config", "herdr", "config.toml"))
-		if err != nil {
-			return nil
-		}
-		text = string(out)
+		return tmuxBindingConflicts(string(out), keys)
 	}
+	out, err := os.ReadFile(filepath.Join(home, ".config", "herdr", "config.toml"))
+	if err != nil {
+		return nil
+	}
+	text := string(out)
 	text = strings.ReplaceAll(text, managedBody(text), "")
 	conflicts := []string{}
 	for _, key := range keys {
 		if strings.Contains(text, key) {
 			conflicts = append(conflicts, key)
+		}
+	}
+	return conflicts
+}
+
+// tmuxBindingConflicts reports keys that tmux list-keys already binds in the
+// same table, ignoring the nexo bindings a previous setup run installed.
+func tmuxBindingConflicts(listKeys string, keys []string) []string {
+	conflicts := []string{}
+	for _, key := range keys {
+		for _, line := range strings.Split(listKeys, "\n") {
+			if strings.Contains(line, "nexo tui") {
+				continue
+			}
+			if bound, ok := parseTmuxBind(line); ok && sameTmuxKey(bound, key) {
+				conflicts = append(conflicts, key)
+				break
+			}
 		}
 	}
 	return conflicts
@@ -1192,18 +1317,10 @@ func bindingsFromContents(contents, backendName string) (string, string) {
 			if strings.HasPrefix(line, "#") {
 				continue
 			}
-			fields := strings.Fields(line)
-			if len(fields) < 2 || (fields[0] != "bind" && fields[0] != "bind-key") {
+			key, ok := parseTmuxBind(line)
+			if !ok {
 				continue
 			}
-			keyIndex := 1
-			if fields[1] == "-n" {
-				keyIndex++
-			}
-			if keyIndex >= len(fields) {
-				continue
-			}
-			key := fields[keyIndex]
 			switch {
 			case strings.Contains(line, "nexo tui agents"):
 				agentsKey = key
@@ -1258,22 +1375,6 @@ func managedBody(contents string) string {
 		return ""
 	}
 	return strings.Trim(contents[start:start+end], " \r\n")
-}
-
-// FormatDiff renders a compact diff for one planned file.
-func FormatDiff(change Change) string {
-	if !change.Changed() {
-		return ""
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "--- %s (%s)\n+++ %s\n", change.Path, change.Machine, change.Path)
-	for _, line := range strings.Split(strings.TrimSuffix(string(change.Before), "\n"), "\n") {
-		b.WriteString("-" + line + "\n")
-	}
-	for _, line := range strings.Split(strings.TrimSuffix(string(change.After), "\n"), "\n") {
-		b.WriteString("+" + line + "\n")
-	}
-	return b.String()
 }
 
 func printChange(w io.Writer, change Change) {

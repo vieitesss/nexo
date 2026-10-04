@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,10 +106,23 @@ func (field *formField) setError(message string) {
 	}
 }
 
+// formStage is one step of a form. Prompt is the question the stage asks and
+// Examples pair a sample input with what it means; both are shown under the
+// title only while the stage is current. Detected marks a stage the caller
+// already answered: it shows as done with that reason beside its answer, and
+// navigation never stops on it.
 type formStage struct {
-	ID     string
-	Title  string
-	Fields []formField
+	ID       string
+	Title    string
+	Prompt   string
+	Detected string
+	Examples []formExample
+	Fields   []formField
+}
+
+type formExample struct {
+	Input   string
+	Meaning string
 }
 
 type formValidation struct {
@@ -134,6 +148,9 @@ type stagedFormMsg struct {
 }
 
 type stagedForm struct {
+	// title heads a standalone form with a step counter. Overlay forms leave it
+	// empty because their stage titles already say what the dialog does.
+	title      string
 	ctx        context.Context
 	stages     []formStage
 	stage      int
@@ -209,8 +226,22 @@ func newStagedForm(ctx context.Context, stages []formStage, validate func(*stage
 			}
 		}
 	}
+	if first := form.askedStage(0, 1); first >= 0 {
+		form.stage = first
+	}
 	form.initialFocus = form.focusCurrent()
 	return form
+}
+
+// askedStage returns the first stage that still needs an answer, walking from
+// index in direction step, or -1 when there is none.
+func (f stagedForm) askedStage(index, step int) int {
+	for ; index >= 0 && index < len(f.stages); index += step {
+		if f.stages[index].Detected == "" {
+			return index
+		}
+	}
+	return -1
 }
 
 func newFormTextInput(field formField, validate textinput.ValidateFunc) textinput.Model {
@@ -238,6 +269,9 @@ func formHelp() help.Model {
 	model.Styles.FullKey = model.Styles.ShortKey
 	model.Styles.FullDesc = model.Styles.ShortDesc
 	model.Styles.FullSeparator = model.Styles.ShortSeparator
+	// The default bullet separator is ambiguous-width and renders wide in
+	// some terminals; two spaces keep the footer aligned everywhere.
+	model.ShortSeparator = "  "
 	return model
 }
 
@@ -279,7 +313,11 @@ func (f *stagedForm) setViewportWidth(width int) {
 		for fieldIndex := range f.stages[stageIndex].Fields {
 			field := &f.stages[stageIndex].Fields[fieldIndex]
 			if field.Kind == formText {
-				labelWidth := shell.StringWidth("▸ " + field.Label + ": ")
+				labelWidth := 2
+				if field.Label != "" {
+					// Labels are padded to the stage's widest one.
+					labelWidth += max(f.labelWidth(stageIndex), shell.StringWidth(field.Label)) + 2
+				}
 				// textinput renders one cursor cell in addition to Width when
 				// the cursor is at the end of the value.
 				field.input.Width = max(1, width-labelWidth-1)
@@ -447,8 +485,8 @@ func (f *stagedForm) key(msg tea.KeyMsg) formEffect {
 		if field != nil && (field.Kind == formChoice || field.Kind == formToggle) {
 			return f.cycle(field, false)
 		}
-		if field == nil && f.stage > 0 {
-			f.stage--
+		if previous := f.askedStage(f.stage-1, -1); field == nil && previous >= 0 {
+			f.stage = previous
 			f.field = 0
 			f.stageError = ""
 			return formEffect{Changed: true, Cmd: f.focusCurrent()}
@@ -506,16 +544,17 @@ func (f *stagedForm) updateInput(msg tea.Msg) formEffect {
 	}
 	before := field.input.Value()
 	updated, cmd := field.input.Update(msg)
-	updated.Cursor.Blink = true
 	field.input = updated
+	// Cursor blinks and other component messages reach here too. Only an edit
+	// may clear the errors, or a blink would erase them right after Enter.
 	if before != updated.Value() {
 		field.invalidDefault = ""
+		f.stageError = ""
+		field.Error = ""
 	}
-	field.Error = ""
 	if updated.Err != nil {
 		field.Error = updated.Err.Error()
 	}
-	f.stageError = ""
 	return formEffect{Changed: true, Cmd: f.wrapComponentCmd(cmd)}
 }
 
@@ -591,8 +630,8 @@ func (f *stagedForm) advance() formEffect {
 	if !f.applyValidation() {
 		return formEffect{Changed: true}
 	}
-	if f.stage+1 < len(f.stages) {
-		f.stage++
+	if next := f.askedStage(f.stage+1, 1); next >= 0 {
+		f.stage = next
 		f.field = 0
 		f.stageError = ""
 		return formEffect{Changed: true, Cmd: f.focusCurrent()}
@@ -626,8 +665,8 @@ func (f *stagedForm) previousField() formEffect {
 			}
 		}
 	}
-	if f.stage > 0 {
-		f.stage--
+	if previous := f.askedStage(f.stage-1, -1); previous >= 0 {
+		f.stage = previous
 		f.field = len(f.stages[f.stage].Fields) - 1
 		for !f.fieldVisible(f.field) && f.field > 0 {
 			f.field--
@@ -651,87 +690,264 @@ func (f *stagedForm) finish(err error) {
 
 func (f stagedForm) renderLines() []string {
 	lines := []string{}
-	for stageIndex, stage := range f.stages {
-		if stageIndex < f.stage {
-			parts := []string{}
-			for fieldIndex, field := range stage.Fields {
-				if !f.fieldShown(stageIndex, fieldIndex) {
-					continue
-				}
-				value := f.summaryFieldValue(field)
-				if value != "" {
-					parts = append(parts, field.Label+": "+value)
+	if f.title != "" {
+		step, steps := 0, 0
+		for index, stage := range f.stages {
+			if stage.Detected == "" {
+				steps++
+				if index <= f.stage {
+					step++
 				}
 			}
-			lines = append(lines, "✓ "+stage.Title+summaryJoin(parts))
+		}
+		lines = append(lines, bold().Render(f.title)+muted().Render(fmt.Sprintf("  step %d of %d", max(1, step), steps)), "")
+	}
+	titleWidth := f.titleWidth()
+	for stageIndex, stage := range f.stages {
+		if stageIndex < f.stage || stage.Detected != "" {
+			lines = append(lines, f.summaryLine(stageIndex, titleWidth)...)
 			continue
 		}
 		if stageIndex > f.stage {
-			lines = append(lines, "○ "+stage.Title)
+			lines = append(lines, "  "+muted().Render(stage.Title))
 			continue
 		}
-		lines = append(lines, "› "+stage.Title)
+		lines = append(lines, accent().Render("❯ ")+bold().Render(stage.Title))
+		lines = append(lines, f.proseLines(stage.Prompt, "  ", muted())...)
+		lines = append(lines, f.exampleLines(stage.Examples)...)
+		multi := f.visibleFieldCount(stageIndex) > 1
+		labelWidth := f.labelWidth(stageIndex)
 		for fieldIndex, field := range stage.Fields {
 			if !f.fieldVisible(fieldIndex) {
 				continue
 			}
 			active := fieldIndex == f.field
-			prefix := "  "
-			if active {
-				prefix = "▸ "
-			}
 			if field.Kind == formMultiSelect {
-				lines = append(lines, prefix+field.Label)
-				for index, option := range field.Options {
-					marker := "○"
-					if index < len(field.multiSelected) && field.multiSelected[index] {
-						marker = "●"
-					}
-					if active && field.multiCursor == index {
-						lines = append(lines, "    ▸ "+marker+" "+option)
-					} else {
-						lines = append(lines, "      "+marker+" "+option)
-					}
+				if field.Label != "" {
+					lines = append(lines, "  "+field.Label)
 				}
+				lines = append(lines, checklistLines(field, active)...)
 			} else {
-				lines = append(lines, prefix+field.Label+": "+f.fieldValue(field, active))
+				prefix := "  "
+				if active && multi {
+					prefix = accent().Render("▸ ")
+				}
+				label := ""
+				if field.Label != "" {
+					label = field.Label + ": " + strings.Repeat(" ", max(0, labelWidth-shell.StringWidth(field.Label)))
+				}
+				lines = append(lines, prefix+label+f.fieldValue(field, active))
 			}
 			if field.Error != "" {
-				lines = append(lines, "    "+field.Error)
+				lines = append(lines, f.proseLines(field.Error, "    ", red())...)
 			}
 		}
-		if stageIndex == f.stage {
-			if f.stageLinesHook != nil {
-				lines = append(lines, f.stageLinesHook(stage)...)
-			}
-			for _, field := range stage.Fields {
-				if field.Expandable && !f.expanded[field.ID] {
-					lines = append(lines, "  Ctrl-P edit "+field.Label)
-					break
-				}
+		if f.stageLinesHook != nil {
+			lines = append(lines, f.stageLinesHook(stage)...)
+		}
+		for _, field := range stage.Fields {
+			if field.Expandable && !f.expanded[field.ID] {
+				lines = append(lines, "  "+muted().Render("ctrl+p edit "+field.Label))
+				break
 			}
 		}
+		if stageIndex < len(f.stages)-1 {
+			// Pending titles share the field indent; a gap keeps them from
+			// reading as part of the current stage.
+			lines = append(lines, "")
+		}
 	}
-	if f.stageError != "" {
-		lines = append(lines, "! "+f.stageError)
-	}
-	if f.notice != "" {
-		lines = append(lines, "? "+f.notice)
-	}
+	lines = append(lines, f.proseLines(prefixed("! ", f.stageError), "", red())...)
+	lines = append(lines, f.proseLines(prefixed("? ", f.notice), "", yellow())...)
+	lines = append(lines, "")
 	if f.inFlight {
-		lines = append(lines, "  "+f.busyLabel)
-	} else {
-		if f.viewportWidth > 0 {
-			f.help.Width = f.viewportWidth
-		} else {
-			f.help.Width = 0
+		lines = append(lines, "  "+muted().Render(f.busyLabel))
+		return lines
+	}
+	f.help.Width = max(0, f.viewportWidth-2)
+	keys := focusedFormKeyMap(f.currentField(), formKeyContext{
+		multiField: f.visibleFieldCount(f.stage) > 1,
+		canGoBack:  f.askedStage(f.stage-1, -1) >= 0 || f.field > 0,
+		final:      f.askedStage(f.stage+1, 1) < 0,
+	})
+	if footer := f.help.View(keys); footer != "" {
+		lines = append(lines, "  "+footer)
+	}
+	return lines
+}
+
+// summaryLines renders every stage as answered, for the frame a standalone
+// form leaves behind once it is submitted.
+func (f stagedForm) summaryLines() []string {
+	lines := []string{}
+	if f.title != "" {
+		lines = append(lines, bold().Render(f.title), "")
+	}
+	titleWidth := f.titleWidth()
+	for stageIndex := range f.stages {
+		lines = append(lines, f.summaryLine(stageIndex, titleWidth)...)
+	}
+	return lines
+}
+
+func (f stagedForm) titleWidth() int {
+	width := 0
+	for _, stage := range f.stages {
+		width = max(width, shell.StringWidth(stage.Title))
+	}
+	return width
+}
+
+// summaryLine renders a completed stage as a title column and its answer. A
+// single field needs no label; several fields keep theirs so the answers stay
+// distinguishable, one per line under the answer column when they do not fit
+// on one. Paths keep their tail when they must be shortened.
+func (f stagedForm) summaryLine(stageIndex, titleWidth int) []string {
+	stage := f.stages[stageIndex]
+	head := green().Render("✓ ") + stage.Title + strings.Repeat(" ", max(0, titleWidth-shell.StringWidth(stage.Title))) + "  "
+	shown := []formField{}
+	for fieldIndex, field := range stage.Fields {
+		if f.fieldShown(stageIndex, fieldIndex) {
+			shown = append(shown, field)
 		}
-		final := f.stage >= len(f.stages)-1
-		if footer := f.help.View(focusedFormKeyMap(f.currentField(), final)); footer != "" {
-			lines = append(lines, "  "+footer)
+	}
+	if len(shown) == 0 {
+		return []string{strings.TrimRight(head, " ")}
+	}
+	parts := []string{}
+	for _, field := range shown {
+		value := f.summaryFieldValue(field)
+		if value == "" {
+			continue
+		}
+		if len(shown) > 1 && field.Label != "" {
+			value = field.Label + ": " + value
+		}
+		parts = append(parts, value)
+	}
+	if len(parts) == 0 {
+		return []string{head + muted().Render("—")}
+	}
+	detected := ""
+	if stage.Detected != "" {
+		detected = "  " + muted().Render(stage.Detected)
+	}
+	summary := strings.Join(parts, ", ")
+	available := f.viewportWidth - shell.StringWidth(head)
+	if f.viewportWidth > 0 && available > 1 && len(shown) == 1 && shown[0].AbbreviateHome {
+		summary = shell.TruncateLeft(summary, available, "…")
+	}
+	if f.viewportWidth <= 0 || len(parts) == 1 || shell.StringWidth(summary+detected) <= available {
+		return []string{head + summary + detected}
+	}
+	lines := []string{head + parts[0]}
+	indent := strings.Repeat(" ", shell.StringWidth(head))
+	for _, part := range parts[1:] {
+		lines = append(lines, indent+part)
+	}
+	lines[len(lines)-1] += detected
+	return lines
+}
+
+// proseLines wraps prompts, errors and notices before styling each line, so a
+// continuation keeps its colour and narrow forms never truncate a message.
+func (f stagedForm) proseLines(text, indent string, style lipgloss.Style) []string {
+	if text == "" {
+		return nil
+	}
+	wrapped := []string{text}
+	if available := f.viewportWidth - len(indent); f.viewportWidth > 0 && available > 0 {
+		wrapped = wrapFormText(text, available)
+	}
+	lines := make([]string, 0, len(wrapped))
+	for _, line := range wrapped {
+		lines = append(lines, indent+style.Render(line))
+	}
+	return lines
+}
+
+// exampleLines aligns the meanings in one column after the widest input. The
+// input keeps its normal colour so it reads as something to type. A meaning
+// too long for the window wraps under its own column, and one with too little
+// room beside the inputs moves under its input instead.
+func (f stagedForm) exampleLines(examples []formExample) []string {
+	inputWidth := 0
+	for _, example := range examples {
+		inputWidth = max(inputWidth, shell.StringWidth(example.Input))
+	}
+	const indent, gap, minMeaning = 4, 2, 16
+	column := indent + inputWidth + gap
+	stacked := f.viewportWidth > 0 && f.viewportWidth-column < minMeaning
+	if stacked {
+		column = indent + gap
+	}
+	lines := make([]string, 0, len(examples))
+	for _, example := range examples {
+		meaning := []string{example.Meaning}
+		if available := f.viewportWidth - column; f.viewportWidth > 0 && available > 0 {
+			meaning = wrapFormText(example.Meaning, available)
+		}
+		input := strings.Repeat(" ", indent) + normal().Render(example.Input)
+		if stacked {
+			lines = append(lines, input)
+		} else {
+			padding := strings.Repeat(" ", inputWidth-shell.StringWidth(example.Input)+gap)
+			lines = append(lines, input+padding+muted().Render(meaning[0]))
+			meaning = meaning[1:]
+		}
+		for _, line := range meaning {
+			lines = append(lines, strings.Repeat(" ", column)+muted().Render(line))
 		}
 	}
 	return lines
+}
+
+func prefixed(prefix, text string) string {
+	if text == "" {
+		return ""
+	}
+	return prefix + text
+}
+
+func checklistLines(field formField, active bool) []string {
+	lines := make([]string, 0, len(field.Options))
+	for index, option := range field.Options {
+		marker := muted().Render("[ ]")
+		if index < len(field.multiSelected) && field.multiSelected[index] {
+			marker = accent().Render("[x]")
+		}
+		if active && field.multiCursor == index {
+			lines = append(lines, "    "+accent().Render("▸ ")+marker+" "+option)
+		} else {
+			lines = append(lines, "      "+marker+" "+option)
+		}
+	}
+	return lines
+}
+
+// labelWidth is the widest visible label in a stage, so the values of a
+// multi-field stage start in one column.
+func (f stagedForm) labelWidth(stage int) int {
+	width := 0
+	for index, field := range f.stages[stage].Fields {
+		if f.fieldShown(stage, index) && field.Kind != formMultiSelect {
+			width = max(width, shell.StringWidth(field.Label))
+		}
+	}
+	return width
+}
+
+func (f stagedForm) visibleFieldCount(stage int) int {
+	if stage < 0 || stage >= len(f.stages) {
+		return 0
+	}
+	count := 0
+	for index := range f.stages[stage].Fields {
+		if f.fieldShown(stage, index) {
+			count++
+		}
+	}
+	return count
 }
 
 func (f stagedForm) summaryFieldValue(field formField) string {
@@ -785,29 +1001,31 @@ func (f stagedForm) fieldValue(field formField, active bool) string {
 		return field.input.View()
 	}
 	if field.Kind == formToggle {
-		return "[" + boolLabel(field.toggleValue) + "]"
+		selected := 1
+		if field.toggleValue {
+			selected = 0
+		}
+		return radioView([]string{"yes", "no"}, selected)
 	}
 	if field.Kind == formChoice {
-		return choiceView(field)
+		return radioView(field.Options, field.choiceIndex)
 	}
 	return f.fieldStringValue(field)
 }
 
-func choiceView(field formField) string {
-	if len(field.Options) == 0 {
-		return ""
-	}
-	selected := lipgloss.NewStyle().Foreground(palette.Accent).Bold(true)
-	muted := lipgloss.NewStyle().Foreground(palette.Muted)
-	options := make([]string, 0, len(field.Options))
-	for index, option := range field.Options {
-		if index == field.choiceIndex {
-			options = append(options, selected.Render(option))
+// radioView shows every option of a choice or toggle with the selected one
+// marked. ASCII markers keep the row width stable in terminals that render
+// ambiguous-width circles as two cells.
+func radioView(options []string, selected int) string {
+	rendered := make([]string, 0, len(options))
+	for index, option := range options {
+		if index == selected {
+			rendered = append(rendered, accent().Bold(true).Render("(x) "+option))
 		} else {
-			options = append(options, muted.Render(option))
+			rendered = append(rendered, muted().Render("( ) "+option))
 		}
 	}
-	return strings.Join(options, muted.Render(" · "))
+	return strings.Join(rendered, "  ")
 }
 
 func abbreviatePathList(value string) string {
@@ -844,39 +1062,34 @@ type formKeyMap struct{ bindings []key.Binding }
 func (m formKeyMap) ShortHelp() []key.Binding  { return m.bindings }
 func (m formKeyMap) FullHelp() [][]key.Binding { return [][]key.Binding{m.bindings} }
 
-func focusedFormKeyMap(field *formField, final bool) formKeyMap {
+// formKeyContext is what the footer needs to know about the focused stage.
+type formKeyContext struct {
+	multiField bool
+	canGoBack  bool
+	final      bool
+}
+
+func focusedFormKeyMap(field *formField, state formKeyContext) formKeyMap {
 	bindings := []key.Binding{}
 	if field != nil {
 		switch field.Kind {
-		case formText:
-			bindings = append(bindings,
-				key.NewBinding(key.WithKeys("left", "right"), key.WithHelp("←/→", "move")),
-				key.NewBinding(key.WithKeys("ctrl+w"), key.WithHelp("ctrl+w", "delete word")),
-			)
-		case formChoice:
+		case formChoice, formToggle:
 			bindings = append(bindings, key.NewBinding(key.WithKeys("left", "right"), key.WithHelp("←/→", "choose")))
-		case formToggle:
-			bindings = append(bindings, key.NewBinding(key.WithKeys("space", "left", "right"), key.WithHelp("space", "toggle")))
 		case formMultiSelect:
 			bindings = append(bindings, key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑/↓", "move")), key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "select")))
 		}
 	}
-	enterDesc := "next"
-	if final {
+	if state.multiField {
+		bindings = append(bindings, key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next field")))
+	}
+	enterDesc := "continue"
+	if state.final {
 		enterDesc = "submit"
 	}
-	bindings = append(bindings,
-		key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next")),
-		key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous")),
-		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", enterDesc)),
-		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
-	)
-	return formKeyMap{bindings: bindings}
-}
-
-func summaryJoin(parts []string) string {
-	if len(parts) == 0 {
-		return ""
+	bindings = append(bindings, key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", enterDesc)))
+	if state.canGoBack {
+		bindings = append(bindings, key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "back")))
 	}
-	return " — " + strings.Join(parts, ", ")
+	bindings = append(bindings, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")))
+	return formKeyMap{bindings: bindings}
 }

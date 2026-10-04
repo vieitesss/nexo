@@ -49,7 +49,7 @@ func TestSummaryAbbreviatesHomePath(t *testing.T) {
 		{ID: "next", Title: "next"},
 	}, nil, nil)
 	form.stage = 1
-	if got := strings.Join(form.renderLines(), "\n"); !strings.Contains(got, "path: ~/src") {
+	if got := shell.Plain(strings.Join(form.renderLines(), "\n")); !strings.Contains(got, "delete project  ~/src") {
 		t.Fatalf("summary path = %q, want ~/src", got)
 	}
 }

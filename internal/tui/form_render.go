@@ -71,17 +71,17 @@ func viewportFormLines(lines []string, height, start int, customStart bool) []st
 	return lines[start : start+height]
 }
 
-// activeFormLine returns the index of the line the cursor is on, preferring
-// the checklist option marker over the focused-field marker. It returns -1
-// when neither is present.
+// activeFormLine returns the index of the line the cursor is on: the first
+// ▸ marker (a checklist option or a focused field), else the current stage
+// title. It returns -1 when neither is present.
 func activeFormLine(lines []string) int {
 	for index, line := range lines {
-		if strings.HasPrefix(line, "    ▸ ") {
+		if strings.HasPrefix(strings.TrimLeft(shell.Plain(line), " "), "▸ ") {
 			return index
 		}
 	}
 	for index, line := range lines {
-		if strings.HasPrefix(line, "▸ ") {
+		if strings.HasPrefix(shell.Plain(line), "❯ ") {
 			return index
 		}
 	}
@@ -95,7 +95,7 @@ func formLinesForWidth(lines []string, width int) []string {
 			out = append(out, line)
 			continue
 		}
-		trimmed := strings.TrimSpace(line)
+		trimmed := strings.TrimSpace(shell.Plain(line))
 		// Findings are safety-critical content, not editable label/value pairs.
 		// Wrap their complete text so narrow dialogs never hide a phrase.
 		if strings.HasPrefix(trimmed, "!") || strings.HasPrefix(trimmed, "?") ||
