@@ -253,25 +253,30 @@ func (b *Backend) proxySessionName(ctx context.Context, machine string) (string,
 	if err != nil && !isNoServer(err) {
 		return "", err
 	}
+	// tmux rewrites '.' and ':' when it creates a session, so occupancy must
+	// be compared in tmux's canonical spelling, including suffixed candidates.
 	used := make(map[string]bool)
 	machineNameUsed := false
+	canonicalMachine := proxy.CanonicalContainerName(machine)
 	for _, line := range strings.Split(strings.TrimRight(string(output), "\r\n"), "\n") {
 		fields := strings.SplitN(line, "\t", 2)
 		if len(fields) > 0 && fields[0] != "" {
-			used[fields[0]] = true
-			if strings.EqualFold(fields[0], machine) {
+			name := proxy.CanonicalContainerName(fields[0])
+			used[name] = true
+			if strings.EqualFold(name, canonicalMachine) {
 				machineNameUsed = true
 			}
 		}
 	}
 	if !machineNameUsed {
-		return machine, nil
+		return canonicalMachine, nil
 	}
 	for suffix := 1; ; suffix++ {
 		candidate := fmt.Sprintf("%s~remote", machine)
 		if suffix > 1 {
 			candidate = fmt.Sprintf("%s~remote%d", machine, suffix)
 		}
+		candidate = proxy.CanonicalContainerName(candidate)
 		if !used[candidate] {
 			return candidate, nil
 		}

@@ -129,6 +129,36 @@ func TestMachineProxyDoesNotAdoptLegacyOrLocalNameOnThrowawayTmux(t *testing.T) 
 	}
 }
 
+func TestMachineProxySuffixesCanonicalNameCollisionsOnThrowawayTmux(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is unavailable")
+	}
+	socket := "nexo-test-canonical-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	r := isolatedTmuxRunner{socket: socket}
+	ctx := context.Background()
+	t.Cleanup(func() { _, _ = r.Run(ctx, "tmux", "kill-server") })
+	// tmux rewrites '.' to '_' when it creates a session, so both the base
+	// name and the first suffix candidate are already occupied in tmux's
+	// canonical spelling.
+	for _, name := range []string{"review_box", "review_box~remote"} {
+		if _, err := r.Run(ctx, "tmux", "new-session", "-d", "-s", name, "sleep 600"); err != nil {
+			t.Fatalf("create local session %q: %v", name, err)
+		}
+	}
+	backend := New(r, false)
+	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"review.box"}}, "")
+	if err := backend.Proxy(ctx, "review.box", ""); err != nil {
+		t.Fatalf("create proxy over canonical name collision: %v", err)
+	}
+	output, err := r.Run(ctx, "tmux", "list-sessions", "-F", "#{session_name}\t#{@nexo-proxy}")
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if !strings.Contains(string(output), "review_box~remote2\treview.box") {
+		t.Fatalf("sessions = %q, want canonical suffix candidate tagged with the machine identity", output)
+	}
+}
+
 // showTmuxOption reads an option without tmux's fallback semantics: with
 // global it reads the global table, otherwise the target's session-local
 // value. ok is false when the option is unset.
