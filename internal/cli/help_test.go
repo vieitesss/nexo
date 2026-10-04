@@ -133,7 +133,7 @@ func TestUsageErrorsIncludeUsageAndHelpHint(t *testing.T) {
 	}{
 		{name: "nested", args: []string{"remote", "unknown"}, want: "nexo: unknown remote subcommand \"unknown\" (want list, open, new, close, paste, passthrough, or previous)\nUsage: nexo remote <subcommand>\nRun 'nexo remote --help' for more.\n"},
 		{name: "top-level", args: []string{"unknown"}, want: "nexo: unknown subcommand \"unknown\"\nUsage: nexo [flags] <command> [args]\nRun 'nexo --help' for more.\n"},
-		{name: "target", args: []string{"--backend", "tmux", "remote", "open", "not-a-target"}, want: "nexo: remote open requires MACHINE/CONTAINER: remote target must be MACHINE/CONTAINER\nUsage: nexo remote open MACHINE/CONTAINER\nRun 'nexo remote open --help' for more.\n"},
+		{name: "target", args: []string{"--backend", "tmux", "remote", "open", "not-a-target"}, want: "nexo: remote open requires MACHINE/CONTAINER\nUsage: nexo remote open MACHINE/CONTAINER\nRun 'nexo remote open --help' for more.\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var out, errOut strings.Builder

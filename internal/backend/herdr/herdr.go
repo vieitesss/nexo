@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/git"
 	"github.com/vieitesss/nexo/internal/lifecycle"
@@ -27,15 +28,15 @@ type Backend struct {
 	Runner runner.CommandRunner
 	agents *Source
 
+	proxyConfig     config.RemoteConfig
 	proxyConfigPath string
 	remoteMachines  proxyidentity.MachineSet
-	proxyPolicy     proxyidentity.Policy
 	usageStateDir   string
 }
 
 // New constructs a Herdr backend using the supplied command runner.
 func New(r runner.CommandRunner) *Backend {
-	return &Backend{Runner: r, agents: NewAgentSource(r), remoteMachines: proxyidentity.NewMachineSet(nil), proxyPolicy: proxyidentity.NewPolicy(nil)}
+	return &Backend{Runner: r, agents: NewAgentSource(r), remoteMachines: proxyidentity.NewMachineSet(nil)}
 }
 
 // OpenContainer focuses an existing Herdr workspace by stable workspace ID.
@@ -489,8 +490,8 @@ func (b *Backend) recordWorkspace(ctx context.Context, workspaceID string) error
 		if workspace.ID != workspaceID {
 			continue
 		}
-		if machine, container, ok := b.proxyWorkspaceTarget(workspace); ok {
-			return b.recordContainer(containerstate.Entry{ID: workspace.ID, Name: container, Machine: machine, Proxy: true})
+		if machine, _, ok := b.proxyWorkspaceTarget(workspace); ok {
+			return b.recordContainer(containerstate.Entry{ID: workspace.ID, Machine: machine, Proxy: true})
 		}
 		return b.recordContainer(containerstate.Entry{ID: workspace.ID, Name: workspace.Label, Machine: containerstate.LocalMachine()})
 	}

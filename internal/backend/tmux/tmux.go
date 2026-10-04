@@ -477,8 +477,8 @@ func (b *Backend) recordTarget(ctx context.Context, target string) error {
 		}
 	}
 	if len(fields) >= 3 {
-		if machine, container, ok := b.proxyTarget(fields[2]); ok {
-			return b.recordContainer(ctx, containerstate.Entry{ID: strings.TrimSpace(fields[0]), Name: container, Machine: machine, Proxy: true})
+		if machine, _, ok := b.proxyTarget(fields[2]); ok {
+			return b.recordContainer(ctx, containerstate.Entry{ID: strings.TrimSpace(fields[0]), Machine: machine, Proxy: true})
 		}
 	}
 	id := strings.TrimSpace(fields[0])

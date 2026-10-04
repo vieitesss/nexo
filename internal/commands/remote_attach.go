@@ -14,18 +14,58 @@ import (
 	"github.com/vieitesss/nexo/internal/proxy"
 )
 
-func parseRemoteAttachArgs(args []string) (bool, error) {
-	if len(args) == 2 && args[1] == "--from-env" {
-		return true, nil
+type remoteAttachOptions struct {
+	fromEnv bool
+	initial string
+	machine string
+}
+
+func parseRemoteAttachOptions(args []string) (remoteAttachOptions, error) {
+	if len(args) == 0 || args[0] != "attach" {
+		return remoteAttachOptions{}, errors.New("remote attach requires [--initial C] -- MACHINE or [--initial C] --from-env")
 	}
-	if len(args) != 3 || args[1] == "--from-env" || args[2] == "--from-env" {
-		return false, errors.New("remote attach requires MACHINE CONTAINER or --from-env")
+	var options remoteAttachOptions
+	seenInitial, seenMachine, seenFromEnv := false, false, false
+	for index := 1; index < len(args); index++ {
+		arg := args[index]
+		switch arg {
+		case "--initial":
+			if seenInitial || index+1 >= len(args) || strings.TrimSpace(args[index+1]) == "" {
+				return remoteAttachOptions{}, errors.New("remote attach requires --initial C")
+			}
+			options.initial = args[index+1]
+			seenInitial = true
+			index++
+		case "--from-env":
+			if seenFromEnv || seenMachine {
+				return remoteAttachOptions{}, errors.New("remote attach accepts either MACHINE or --from-env")
+			}
+			seenFromEnv = true
+			options.fromEnv = true
+		case "--":
+			if seenFromEnv || seenMachine || index+1 != len(args)-1 || strings.TrimSpace(args[index+1]) == "" {
+				return remoteAttachOptions{}, errors.New("remote attach requires [--initial C] -- MACHINE or [--initial C] --from-env")
+			}
+			options.machine = args[index+1]
+			seenMachine = true
+			index++
+		default:
+			if strings.HasPrefix(arg, "-") || seenFromEnv || seenMachine {
+				return remoteAttachOptions{}, errors.New("remote attach requires [--initial C] -- MACHINE or [--initial C] --from-env")
+			}
+			options.machine = arg
+			seenMachine = true
+		}
 	}
-	return false, nil
+	if seenFromEnv == seenMachine {
+		return remoteAttachOptions{}, errors.New("remote attach requires [--initial C] -- MACHINE or [--initial C] --from-env")
+	}
+	return options, nil
 }
 
 func runRemoteAttach(ctx context.Context, invocation Invocation) error {
-	fromEnv, err := parseRemoteAttachArgs(invocation.Args)
+	options, err := parseRemoteAttachOptions(invocation.Args)
+	fromEnv := options.fromEnv
 	if err != nil {
 		return UsageError{Err: err}
 	}
@@ -39,44 +79,46 @@ func runRemoteAttach(ctx context.Context, invocation Invocation) error {
 	if _, ok := invocation.Adapter.(capabilities.RemoteProxy); !ok {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
-	var machine, container string
+	var machine string
 	if fromEnv {
 		machine = os.Getenv("NEXO_PROXY_MACHINE")
-		container = os.Getenv("NEXO_PROXY_CONTAINER")
-		if err := herdr.ValidateProxyIdentity(machine, container); err != nil {
+		if err := herdr.ValidateProxyIdentity(machine, ""); err != nil {
 			return err
 		}
 	} else {
-		machine = strings.TrimSpace(invocation.Args[1])
-		container = strings.TrimSpace(invocation.Args[2])
+		machine = strings.TrimSpace(options.machine)
 		if err := invocation.Config.Remote.ValidateMachine(machine); err != nil {
 			return err
-		}
-		if container == "" {
-			return errors.New("remote attach requires a container")
 		}
 	}
 	if invocation.Selection.Kind == backend.Herdr && !invocation.Config.Remote.IsMachineConfigured(machine) {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
 	transport := tmux.NewCommandTransport(invocation.Config.Remote)
-	if invocation.Config.Remote.EffectiveTransport() != "ssh" {
-		attachErr := transport.Attach(ctx, machine, container)
-		if fromEnv {
-			return finishHerdrProxyAttach(invocation, attachErr)
-		}
-		return attachErr
-	}
 	initial, maximum := invocation.Config.Remote.ReconnectDelays()
 	input := invocation.Stdin
 	if input == nil {
 		input = os.Stdin
 	}
-	attachErr := proxy.RunReconnect(ctx, transport, nil, input, machine, container, initial, maximum)
+	attachErr := proxy.RunReconnect(ctx, &firstAttachTransport{transport: transport, initial: options.initial}, nil, input, machine, "", initial, maximum)
 	if fromEnv {
 		return finishHerdrProxyAttach(invocation, attachErr)
 	}
 	return attachErr
+}
+
+type firstAttachTransport struct {
+	transport proxy.Transport
+	initial   string
+	used      bool
+}
+
+func (t *firstAttachTransport) Attach(ctx context.Context, machine, _ string) error {
+	if t.used || t.initial == "" {
+		return t.transport.Attach(ctx, machine, "")
+	}
+	t.used = true
+	return t.transport.Attach(ctx, machine, t.initial)
 }
 
 func finishHerdrProxyAttach(invocation Invocation, attachErr error) error {

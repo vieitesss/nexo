@@ -36,8 +36,8 @@ func init() {
 func (remoteCommand) Name() string { return "remote" }
 func (remoteCommand) Help() Help {
 	return Help{Summary: "List and operate on containers on remote machines.", Usage: "nexo remote <subcommand>", Subcommands: []SubcommandHelp{
-		{Name: "attach", Summary: "Attach the proxy pane to a remote container.", Usage: "nexo remote attach [--from-env] [MACHINE CONTAINER]", Description: "Use MACHINE CONTAINER for tmux, or --from-env inside a Herdr proxy workspace.", Flags: []FlagHelp{{Long: "--from-env", Description: "Read the proxy identity from Herdr environment variables."}}, Examples: []string{"nexo remote attach devbox api", "nexo remote attach --from-env"}, Hidden: true},
-		{Name: "close", Summary: "Close a local proxy container.", Usage: "nexo remote close [MACHINE/CONTAINER]"},
+		{Name: "attach", Summary: "Attach the proxy pane to a remote machine.", Usage: "nexo remote attach [--initial C] -- MACHINE | [--initial C] --from-env", Description: "Resolve the most recently attached remote tmux session, or use --initial for the first explicit open. Herdr proxies read the machine from --from-env.", Flags: []FlagHelp{{Long: "--from-env", Description: "Read the proxy machine from Herdr environment variables."}, {Long: "--initial", Description: "Target this remote container for the first attachment only."}}, Examples: []string{"nexo remote attach -- devbox", "nexo remote attach --initial api -- devbox", "nexo remote attach --from-env"}, Hidden: true},
+		{Name: "close", Summary: "Close a local proxy container.", Usage: "nexo remote close [MACHINE|MACHINE/CONTAINER]"},
 		{Name: "list", Summary: "List containers on configured remote machines.", Usage: "nexo remote list"},
 		{Name: "new", Summary: "Create a remote container and open its proxy.", Usage: "nexo remote new MACHINE [NAME]"},
 		{Name: "open", Summary: "Open a remote container locally or through a proxy.", Usage: "nexo remote open MACHINE/CONTAINER", Description: "Herdr opens the remote container natively; tmux uses a local proxy."},
@@ -91,8 +91,12 @@ func validateRemoteSyntax(args []string) error {
 		if len(args) != 2 {
 			return errors.New("remote open requires MACHINE/CONTAINER")
 		}
-		if _, err := proxyidentity.ParseTarget(args[1]); err != nil {
-			return fmt.Errorf("remote open requires MACHINE/CONTAINER: %w", err)
+		target, err := proxyidentity.ParseTarget(args[1])
+		if err != nil || target.Container == "" {
+			if err != nil {
+				return fmt.Errorf("remote open requires MACHINE/CONTAINER: %w", err)
+			}
+			return errors.New("remote open requires MACHINE/CONTAINER")
 		}
 	case "new":
 		if len(args) < 2 || len(args) > 3 || strings.TrimSpace(args[1]) == "" {
@@ -100,15 +104,15 @@ func validateRemoteSyntax(args []string) error {
 		}
 	case "close":
 		if len(args) > 2 {
-			return errors.New("remote close accepts at most MACHINE/CONTAINER")
+			return errors.New("remote close accepts at most MACHINE or MACHINE/CONTAINER")
 		}
 		if len(args) == 2 {
 			if _, err := proxyidentity.ParseTarget(args[1]); err != nil {
-				return fmt.Errorf("remote close requires MACHINE/CONTAINER: %w", err)
+				return fmt.Errorf("remote close requires MACHINE or MACHINE/CONTAINER: %w", err)
 			}
 		}
 	case "attach":
-		if _, err := parseRemoteAttachArgs(args); err != nil {
+		if _, err := parseRemoteAttachOptions(args); err != nil {
 			return err
 		}
 	case "paste":

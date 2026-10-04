@@ -241,15 +241,15 @@ func TestProxyHistorySurvivesReconnectWithChangedNativeID(t *testing.T) {
 	stateDir := t.TempDir()
 	socket := "/tmp/tmux-1000/default"
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"list-sessions -F #{session_id}\t#{session_name}\t#{@nexo-proxy}":                         []byte("$1\tdevbox/api\tdevbox/api\n"),
+		"list-sessions -F #{session_id}\t#{@nexo-proxy}":                                          []byte("$1\tdevbox\n"),
 		"display-message -p #{socket_path}":                                                       []byte(socket + "\n"),
-		"display-message -p -t $1 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}": []byte("$1\tdevbox/api\tdevbox/api\t" + socket + "\n"),
-		"display-message -p -t %2 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}": []byte("$2\tdevbox/api\tdevbox/api\t" + socket + "\n"),
+		"display-message -p -t $1 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}": []byte("$1\tdevbox\tdevbox\t" + socket + "\n"),
+		"display-message -p -t %2 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}": []byte("$2\tdevbox\tdevbox\t" + socket + "\n"),
 	}}
 	backend := New(runner, true)
 	backend.usageStateDir = stateDir
 	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"devbox"}}, "")
-	if err := backend.Proxy(context.Background(), "devbox", "api"); err != nil {
+	if err := backend.Proxy(context.Background(), "devbox", ""); err != nil {
 		t.Fatal(err)
 	}
 	// The reconnect transport loop never touches history; a later focus event
@@ -272,7 +272,7 @@ func TestProxyHistorySurvivesReconnectWithChangedNativeID(t *testing.T) {
 		t.Fatalf("entries = %#v, want one canonical proxy identity", entries)
 	}
 	entry := entries[0]
-	if entry.Machine != "devbox" || entry.Name != "api" || !entry.Proxy || entry.ID != "$2" {
+	if entry.Machine != "devbox" || entry.Name != "" || !entry.Proxy || entry.ID != "$2" {
 		t.Fatalf("proxy history = %#v, want devbox/api proxy with the recreated native id", entry)
 	}
 
@@ -307,21 +307,40 @@ func TestProxySessionIDMatchesMetadataExactly(t *testing.T) {
 
 func TestProxySwitchesExistingSessionWithoutCreatingDuplicate(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"list-sessions -F #{session_id}\t#{@nexo-proxy}": []byte("$1\tdevbox/$1\n"),
+		"list-sessions -F #{session_id}\t#{@nexo-proxy}": []byte("$1\tdevbox\n"),
 	}}
 	backend := New(runner, true)
 	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "")
 	if err := backend.Proxy(context.Background(), "devbox", "$1"); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
-	if len(runner.calls) != 5 {
-		t.Fatalf("tmux calls = %#v, want list, two options, switch, and classification", runner.calls)
+	if len(runner.calls) != 7 {
+		t.Fatalf("tmux calls = %#v, want list, remote switch, three options, switch, and classification", runner.calls)
 	}
-	if runner.calls[0].args[1] != "list-sessions" || runner.calls[1].args[1] != "set-option" || runner.calls[2].args[1] != "set-option" || runner.calls[3].args[0] != "switch-client" || runner.calls[4].args[1] != "display-message" {
+	if runner.calls[0].args[1] != "list-sessions" || runner.calls[1].name != "ssh" || runner.calls[2].args[1] != "set-option" || runner.calls[3].args[1] != "set-option" || runner.calls[4].args[1] != "set-option" || runner.calls[5].args[0] != "switch-client" || runner.calls[6].args[1] != "display-message" {
 		t.Fatalf("tmux calls = %#v, want existing proxy switch", runner.calls)
 	}
-	if got := runner.calls[3].args[2]; got != "$1" {
+	if got := runner.calls[5].args[2]; got != "$1" {
 		t.Fatalf("switch target = %q, want stable session id", got)
+	}
+	if got := runner.calls[4].args[5]; got != "off" || runner.calls[4].args[4] != "detach-on-destroy" {
+		t.Fatalf("detach-on-destroy option = %#v, want off on proxy session", runner.calls[4].args)
+	}
+}
+
+func TestMOMachineProxyNeverRetargetsExistingRemoteClient(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"list-sessions -F #{session_id}\t#{@nexo-proxy}":                                          []byte("$1\tdevbox\n"),
+		"display-message -p -t $1 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}": []byte("$1\tdevbox\tdevbox\t/tmp/tmux-test\n"),
+	}}
+	backend := New(runner, true)
+	if err := backend.Proxy(context.Background(), "devbox", ""); err != nil {
+		t.Fatalf("Proxy() error = %v", err)
+	}
+	for _, call := range runner.calls {
+		if call.name == "ssh" || (len(call.args) > 1 && call.args[1] == "respawn-pane") {
+			t.Fatalf("M-o retargeted or restarted existing proxy: %#v", runner.calls)
+		}
 	}
 }
 
@@ -342,15 +361,18 @@ func TestProxyCreatesSessionWithQuotedAttachCommand(t *testing.T) {
 	if err := backend.Proxy(context.Background(), "devbox", "$1"); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
-	if got := runner.calls[1].args[1]; got != "new-session" {
-		t.Fatalf("second tmux call = %#v, want new-session", runner.calls[1])
+	if got := runner.calls[2].args[1]; got != "new-session" {
+		t.Fatalf("third tmux call = %#v, want new-session", runner.calls[2])
 	}
-	if got := runner.calls[1].args[5]; got != "#{session_id}" {
+	if got := runner.calls[2].args[5]; got != "#{session_id}" {
 		t.Fatalf("new-session format = %q, want session id format", got)
 	}
-	command := runner.calls[1].args[len(runner.calls[1].args)-1]
-	if !strings.Contains(command, " --backend tmux ") || !strings.Contains(command, " remote attach -- '") || !strings.Contains(command, "--config-file '/tmp/my config.toml'") {
+	command := runner.calls[2].args[len(runner.calls[2].args)-1]
+	if !strings.Contains(command, " --backend tmux ") || !strings.Contains(command, " remote attach --initial '") || !strings.Contains(command, "--config-file '/tmp/my config.toml'") {
 		t.Fatalf("proxy pane command = %q, want backend/config flags before positional boundary", command)
+	}
+	if strings.HasPrefix(command, "NEXO_PROXY_ID=") {
+		t.Fatalf("proxy pane command = %q, want no unused NEXO_PROXY_ID prefix", command)
 	}
 }
 
@@ -358,23 +380,18 @@ func TestTransportArgsHonorSSHConfigOnlyForSSH(t *testing.T) {
 	keepalive := []string{"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
 	remote := config.RemoteConfig{SSHConfig: "/tmp/ssh config", Transport: "ssh"}
 	sshWant := append([]string{"ssh", "-t"}, keepalive...)
-	sshWant = append(sshWant, "-F", "/tmp/ssh config", "devbox", "tmux attach-session -t '=$1'")
-	if got := transportArgs(remote, "devbox", "$1"); !reflect.DeepEqual(got, sshWant) {
-		t.Fatalf("ssh transport args = %#v, want %#v", got, sshWant)
+	sshWant = append(sshWant, "-F", "/tmp/ssh config", "devbox")
+	got := transportArgs(remote, "devbox", "")
+	if !reflect.DeepEqual(got[:len(sshWant)], sshWant) || !strings.Contains(got[len(got)-1], "session_last_attached") || !strings.Contains(got[len(got)-1], "attach-session") {
+		t.Fatalf("ssh transport args = %#v, want keepalive and last-attached resolver", got)
 	}
 	remote.Transport = "mosh"
-	if got, want := transportArgs(remote, "devbox", "$1"), []string{"mosh", "devbox", "--", "tmux", "attach-session", "-t", "=$1"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("mosh transport args = %#v, want %#v", got, want)
+	if got := transportArgs(remote, "devbox", ""); len(got) != 6 || got[0] != "mosh" || got[2] != "--" || got[3] != "sh" || got[4] != "-c" || !strings.Contains(got[5], "session_last_attached") {
+		t.Fatalf("mosh transport args = %#v, want shell resolver", got)
 	}
 	remote.Transport = "et"
-	if got, want := transportArgs(remote, "devbox", "$1"), []string{"et", "devbox", "-c", "tmux attach-session -t '=$1'"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("et transport args = %#v, want %#v", got, want)
-	}
-	remote.Transport = "ssh"
-	canonicalWant := append([]string{"ssh", "-t"}, keepalive...)
-	canonicalWant = append(canonicalWant, "-F", "/tmp/ssh config", "devbox", "tmux attach-session -t '=app_v1_blue'")
-	if got := transportArgs(remote, "devbox", "app.v1:blue"); !reflect.DeepEqual(got, canonicalWant) {
-		t.Fatalf("canonical SSH transport args = %#v, want %#v", got, canonicalWant)
+	if got := transportArgs(remote, "devbox", ""); len(got) != 4 || got[0] != "et" || !strings.HasPrefix(got[3], "sh -c '") || !strings.Contains(got[3], "session_last_attached") {
+		t.Fatalf("et transport args = %#v, want quoted shell resolver", got)
 	}
 }
 

@@ -159,6 +159,13 @@ func MergeContainerPlaces(base, extra []Place) []Place {
 }
 
 func containerPlaceKey(place Place) string {
+	if place.Proxy {
+		// A machine proxy is named for its machine, while the remote session it
+		// currently shows may legitimately have the same name. Keep proxy rows
+		// keyed by their local identity so closing one can never target the
+		// remote row that happens to share its display label.
+		return "proxy\x00" + strings.ToLower(strings.TrimSpace(place.Machine)) + "\x00" + place.ContainerID
+	}
 	return strings.ToLower(strings.TrimSpace(place.Machine)) + "\x00" + place.ContainerName
 }
 

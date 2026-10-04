@@ -115,8 +115,8 @@ func TestListPlacesMergesLocalProxyWithRemoteContainer(t *testing.T) {
 	if err := json.Unmarshal([]byte(output.String()), &places); err != nil {
 		t.Fatalf("JSON = %q: %v", output.String(), err)
 	}
-	if len(places) != 1 || places[0].Machine != "dev" || places[0].ContainerName != "api" || places[0].ContainerID != "workspace-1" || !places[0].Proxy {
-		t.Fatalf("places = %#v, want one local proxy place", places)
+	if len(places) != 2 || places[0].Machine != "dev" || places[0].ContainerName != "api" || places[0].ContainerID != "workspace-1" || !places[0].Proxy || places[1].ContainerID != "$9" || places[1].Proxy {
+		t.Fatalf("places = %#v, want separate local proxy and remote place", places)
 	}
 }
 

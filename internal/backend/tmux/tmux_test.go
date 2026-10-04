@@ -159,7 +159,7 @@ func TestOpenContainerRecordsProxyClassification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || !entries[0].Proxy || entries[0].Machine != "devbox" || entries[0].Name != "api" {
+	if len(entries) != 1 || !entries[0].Proxy || entries[0].Machine != "devbox" || entries[0].Name != "" {
 		t.Fatalf("entries = %#v, want the proxy identity rather than a local one", entries)
 	}
 }

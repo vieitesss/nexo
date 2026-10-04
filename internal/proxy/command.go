@@ -2,38 +2,187 @@ package proxy
 
 import (
 	"errors"
+	"os"
+	"os/exec"
 	"strings"
 	"unicode"
+
+	"github.com/vieitesss/nexo/internal/config"
 )
 
-// AttachCommand builds the shell command typed into a proxy pane. The target
-// arguments are included for tmux proxies; Herdr proxies pass an empty target
-// and read it from the workspace environment instead.
-func AttachCommand(binary, backend, configPath, machine, container string, fromEnv bool) (string, error) {
-	values := []string{binary, configPath}
-	if !fromEnv {
-		values = append(values, machine, container)
-	}
+// AttachCommand builds the shell command typed into a proxy pane. A non-empty
+// initial target is used only for the first attachment; reconnects resolve an
+// unpinned target on the remote machine.
+func AttachCommand(binary, backend, configPath, machine, initial string, fromEnv bool) (string, error) {
+	values := []string{binary, configPath, machine, initial}
 	for _, value := range values {
 		if err := rejectControl(value); err != nil {
 			return "", err
 		}
 	}
-	parts := []string{"exec", shellQuote(binary), "--backend", backend}
+	parts := []string{"exec", ShellQuote(binary), "--backend", backend}
 	if configPath != "" {
-		parts = append(parts, "--config-file", shellQuote(configPath))
+		parts = append(parts, "--config-file", ShellQuote(configPath))
 	}
 	parts = append(parts, "remote", "attach")
+	if initial != "" {
+		parts = append(parts, "--initial", ShellQuote(initial))
+	}
 	if fromEnv {
 		parts = append(parts, "--from-env")
 	} else {
-		parts = append(parts, "--", shellQuote(machine), shellQuote(container))
+		parts = append(parts, "--", ShellQuote(machine))
 	}
 	return strings.Join(parts, " "), nil
 }
 
-func shellQuote(value string) string {
+// ShellQuote returns a POSIX single-quoted shell word.
+func ShellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+// CanonicalContainerName applies tmux's session-name canonicalization for
+// punctuation that tmux rewrites when creating a session.
+func CanonicalContainerName(name string) string {
+	return strings.NewReplacer(".", "_", ":", "_").Replace(name)
+}
+
+// ProxyDisplayName supplies the machine when a machine-only proxy has no
+// remote container name to display.
+func ProxyDisplayName(name, machine string) string {
+	if name == "" {
+		return machine
+	}
+	return name
+}
+
+// ProxyRendezvousKey uniquely identifies one attachment backend and machine.
+// The backend is part of the key because tmux and Herdr proxies for the same
+// machine can coexist on the local machine.
+func ProxyRendezvousKey(backend, machine string) string {
+	host, err := os.Hostname()
+	if err != nil {
+		host = "local"
+	}
+	parts := []string{host, backend, machine}
+	var out strings.Builder
+	for index, part := range parts {
+		if index > 0 {
+			out.WriteByte('-')
+		}
+		for _, r := range strings.ToLower(strings.TrimSpace(part)) {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+				out.WriteRune(r)
+			} else {
+				out.WriteByte('_')
+			}
+		}
+	}
+	if out.Len() == 0 {
+		return "proxy"
+	}
+	return out.String()
+}
+
+// rendezvousFile is the sole builder for the remote attachment rendezvous
+// path. The shell expands XDG_RUNTIME_DIR on the remote machine.
+func rendezvousFile(key, suffix string) string {
+	return `"${XDG_RUNTIME_DIR:-/tmp}/nexo-proxy-` + key + `.` + suffix + `"`
+}
+
+// RemoteAttachShell resolves a remote tmux attachment target. An initial
+// target is attempted once; if it no longer exists, the unpinned resolver is
+// used immediately. When the attached session disappears, the shell loops
+// instead of treating tmux's successful exit as a deliberate detach.
+func RemoteAttachShell(key, machine, initial string) string {
+	ttyFile := rendezvousFile(key, "tty")
+	stateFile := rendezvousFile(key, "target")
+	lines := []string{
+		"tty_file=" + ttyFile,
+		"state_file=" + stateFile,
+	}
+	if initial != "" {
+		lines = append(lines, "initial="+ShellQuote("="+CanonicalContainerName(initial)))
+	} else {
+		lines = append(lines, "initial=")
+	}
+	lines = append(lines,
+		"while :; do",
+		"  target=",
+		"  if [ -n \"$initial\" ]; then",
+		"    target=\"$initial\"",
+		"    initial=",
+		"  fi",
+		"  if [ -z \"$target\" ]; then",
+		"    target=$(tmux list-sessions -F '#{session_last_attached} #{session_id}' 2>/dev/null | sort -rn | head -n1)",
+		"    target=${target#* }",
+		"  fi",
+		"  if [ -n \"$target\" ] && ! tmux has-session -t \"$target\" 2>/dev/null; then",
+		"    target=",
+		"  fi",
+		"  if [ -z \"$target\" ]; then",
+		"    printf '%s\\n' "+ShellQuote("no sessions on "+machine+" — press r to retry, q to close")+" >&2",
+		"    tty_state=$(stty -g 2>/dev/null) || tty_state=",
+		"    if [ -n \"$tty_state\" ]; then stty -icanon -echo min 1 time 0 2>/dev/null || tty_state=; fi",
+		"    key=$(dd bs=1 count=1 2>/dev/null)",
+		"    if [ -n \"$tty_state\" ]; then stty \"$tty_state\" 2>/dev/null || :; fi",
+		"    case \"$key\" in r|R) ;; q|Q|'') exit 0 ;; esac",
+		"    continue",
+		"  fi",
+		"  tty=$(tty 2>/dev/null) || tty=",
+		"  printf '%s\\n' \"$tty\" > \"$tty_file\"",
+		"  printf '%s\\n' \"$target\" > \"$state_file\"",
+		"  track_client() { current=$(tmux list-clients -F '#{client_tty} #{client_session_id}' 2>/dev/null | awk -v tty=\"$tty\" '$1 == tty {print $2; exit}'); [ -n \"$current\" ] && printf '%s\\n' \"$current\" > \"$state_file\"; }",
+		"  ( while kill -0 $$ 2>/dev/null; do track_client; sleep 1; done ) & watcher=$!",
+		"  tmux attach-session -t \"$target\"",
+		"  kill \"$watcher\" 2>/dev/null || :; wait \"$watcher\" 2>/dev/null || :",
+		"  target=$(cat \"$state_file\" 2>/dev/null) || target=",
+		"  if tmux has-session -t \"$target\" 2>/dev/null; then exit 0; fi",
+		"done",
+	)
+	return strings.Join(lines, "\n")
+}
+
+const MissingRemoteTargetExitCode = 2
+
+// RemoteSwitchClientShell switches the existing remote proxy tmux client to
+// an explicit container identified by its attach-shell tty rendezvous file.
+// Exit code 2 means the requested remote target is missing; exit code 1 means
+// the proxy client could not be found and callers may restart the pane.
+func RemoteSwitchClientShell(key, machine, container string) string {
+	ttyFile := rendezvousFile(key, "tty")
+	stateFile := rendezvousFile(key, "target")
+	target := "=" + CanonicalContainerName(strings.TrimSpace(container))
+	lines := []string{
+		"target=" + ShellQuote(target),
+		"if ! tmux has-session -t \"$target\" 2>/dev/null; then",
+		"  printf '%s\\n' " + ShellQuote("no session "+container+" on "+machine) + " >&2",
+		"  exit 2",
+		"fi",
+		"tty=$(cat " + ttyFile + " 2>/dev/null) || exit 1",
+		"client=$(tmux list-clients -F '#{client_tty} #{client_name}' 2>/dev/null | awk -v tty=\"$tty\" '$1 == tty {print $2; exit}')",
+		"[ -n \"$client\" ] || exit 1",
+		"tmux switch-client -c \"$client\" -t \"$target\" && printf '%s\\n' \"$target\" > " + stateFile,
+	}
+	return strings.Join(lines, "\n")
+}
+
+// IsMissingRemoteTarget reports the explicit-open sentinel returned by the
+// remote client-switch shell.
+func IsMissingRemoteTarget(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == MissingRemoteTargetExitCode
+}
+
+// RemoteSwitchSSHArgs builds the plain SSH invocation used by both local
+// backends to switch an existing remote proxy client.
+func RemoteSwitchSSHArgs(remote config.RemoteConfig, backend, machine, container string) []string {
+	command := RemoteSwitchClientShell(ProxyRendezvousKey(backend, machine), machine, container)
+	args := []string{"-o", "BatchMode=yes"}
+	if strings.TrimSpace(remote.SSHConfig) != "" {
+		args = append(args, "-F", remote.SSHConfig)
+	}
+	return append(args, machine, "sh -c "+ShellQuote(command))
 }
 
 func rejectControl(value string) error {

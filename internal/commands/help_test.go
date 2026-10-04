@@ -90,7 +90,7 @@ func TestEveryParsedFlagIsDocumented(t *testing.T) {
 			return err
 		}},
 		{path: "remote attach", flag: "--from-env", parse: func() error {
-			_, err := parseRemoteAttachArgs([]string{"attach", "--from-env"})
+			_, err := parseRemoteAttachOptions([]string{"attach", "--from-env"})
 			return err
 		}},
 	}

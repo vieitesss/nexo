@@ -12,6 +12,7 @@ import (
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/proxy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 	"github.com/vieitesss/nexo/internal/runner"
 )
@@ -143,7 +144,7 @@ func (p OperationPolicy) openValidated(ctx context.Context, commandRunner runner
 	if kind == KindHerdr {
 		return p.openHerdr(ctx, commandRunner, machine, container)
 	}
-	container = tmux.CanonicalContainerName(container)
+	container = proxy.CanonicalContainerName(container)
 	if p.Resolver != nil {
 		actions, err := p.Resolver.ResolveContainerActions(ctx, machine)
 		if err != nil {
@@ -244,7 +245,7 @@ func createTmuxContainer(ctx context.Context, commandRunner runner.CommandRunner
 		canonical = canonical[:newline]
 	}
 	if canonical == "" {
-		canonical = tmux.CanonicalContainerName(name)
+		canonical = proxy.CanonicalContainerName(name)
 	}
 	return canonical, nil
 }

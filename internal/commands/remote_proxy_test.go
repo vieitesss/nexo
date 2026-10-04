@@ -133,7 +133,7 @@ func (p *policyBackedProxy) Proxy(ctx context.Context, machine, container string
 }
 
 func (p *policyBackedProxy) ProxySessionID(ctx context.Context, machine, container string) (string, error) {
-	return proxyidentity.NewPolicy(p.machines).Resolve(ctx, proxyidentity.NewIdentity(machine, container), p.store)
+	return proxyidentity.Resolve(ctx, proxyidentity.NewIdentity(machine, container), p.store)
 }
 
 func (p *policyBackedProxy) KillContainer(_ context.Context, id string) error {
@@ -247,6 +247,30 @@ func TestRemoteNewQuotesRemoteContainerName(t *testing.T) {
 	}
 }
 
+func TestRemoteAttachAcceptsOnlyMachineAndInitialForms(t *testing.T) {
+	for _, args := range [][]string{
+		{"attach", "--", "machine"},
+		{"attach", "machine"}, // the CLI flag parser removes the delimiter
+		{"attach", "--initial", "container", "--", "machine"},
+		{"attach", "--initial", "container", "machine"},
+		{"attach", "--from-env"},
+		{"attach", "--initial", "container", "--from-env"},
+	} {
+		if _, err := parseRemoteAttachOptions(args); err != nil {
+			t.Errorf("parseRemoteAttachOptions(%#v) = %v, want success", args, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"attach", "machine", "container"},
+		{"attach", "--initial", "container", "machine", "extra"},
+		{"attach", "--from-env", "machine"},
+	} {
+		if _, err := parseRemoteAttachOptions(args); err == nil {
+			t.Errorf("parseRemoteAttachOptions(%#v) succeeded, want rejection", args)
+		}
+	}
+}
+
 func TestRemoteAttachValidatesBackendAndMachine(t *testing.T) {
 	proxy := &recordingRemoteProxy{}
 	for _, test := range []struct {
@@ -262,7 +286,7 @@ func TestRemoteAttachValidatesBackendAndMachine(t *testing.T) {
 				Selection: test.selection,
 				Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
 				Adapter:   proxy,
-				Args:      []string{"attach", "other", "--help"},
+				Args:      []string{"attach", "--", "other"},
 			})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Run() error = %v, want %q", err, test.want)

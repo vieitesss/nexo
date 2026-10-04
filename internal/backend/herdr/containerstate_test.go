@@ -29,7 +29,7 @@ func TestRecordFocusEventRecordsLocalWorkspace(t *testing.T) {
 
 func TestRecordFocusEventClassifiesProxyWorkspace(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"proxy","label":"devbox/api","tokens":{"nexo-proxy":"devbox/api"}}]}}`),
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"proxy","label":"devbox","tokens":{"nexo-proxy":"devbox"}}]}}`),
 	}}
 	backend := New(runner)
 	backend.usageStateDir = t.TempDir()
@@ -42,8 +42,8 @@ func TestRecordFocusEventClassifiesProxyWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || !entries[0].Proxy || entries[0].Machine != "devbox" || entries[0].Name != "api" {
-		t.Fatalf("entries = %#v, want the devbox/api proxy identity", entries)
+	if len(entries) != 1 || !entries[0].Proxy || entries[0].Machine != "devbox" || entries[0].Name != "" {
+		t.Fatalf("entries = %#v, want the devbox machine proxy identity", entries)
 	}
 }
 
@@ -68,7 +68,7 @@ func TestRecordFocusEventIgnoresPayloadWithoutWorkspace(t *testing.T) {
 
 func TestOpenContainerRecordsProxyWorkspace(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"proxy","label":"devbox/api","tokens":{"nexo-proxy":"devbox/api"}}]}}`),
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"proxy","label":"devbox","tokens":{"nexo-proxy":"devbox"}}]}}`),
 	}}
 	backend := New(runner)
 	backend.usageStateDir = t.TempDir()
@@ -81,14 +81,14 @@ func TestOpenContainerRecordsProxyWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || !entries[0].Proxy || entries[0].Machine != "devbox" || entries[0].Name != "api" {
+	if len(entries) != 1 || !entries[0].Proxy || entries[0].Machine != "devbox" || entries[0].Name != "" {
 		t.Fatalf("entries = %#v, want the proxy identity rather than a local one", entries)
 	}
 }
 
 func TestHerdrProxyHistoryDeduplicatesRecreatedNativeID(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w2","label":"devbox/api","tokens":{"nexo-proxy":"devbox/api"}}]}}`),
+		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w2","label":"devbox","tokens":{"nexo-proxy":"devbox"}}]}}`),
 	}}
 	backend := New(runner)
 	backend.usageStateDir = t.TempDir()
@@ -96,7 +96,7 @@ func TestHerdrProxyHistoryDeduplicatesRecreatedNativeID(t *testing.T) {
 
 	// A reconnect or workspace recreation changes the native id but not the
 	// canonical machine/container identity.
-	if err := backend.recordContainer(containerstate.Entry{ID: "w1", Name: "api", Machine: "devbox", Proxy: true}); err != nil {
+	if err := backend.recordContainer(containerstate.Entry{ID: "w1", Machine: "devbox", Proxy: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.RecordFocusEvent(context.Background(), []byte(`{"type":"workspace_focused","workspace_id":"w2"}`)); err != nil {

@@ -33,14 +33,13 @@ func (t commandProxyTransport) Attach(ctx context.Context, machine, container st
 
 func transportArgs(remote config.RemoteConfig, machine, container string) []string {
 	transport := remote.EffectiveTransport()
-	container = CanonicalContainerName(container)
-	target := "=" + container
+	container = proxy.CanonicalContainerName(strings.TrimSpace(container))
+	command := proxy.RemoteAttachShell(proxy.ProxyRendezvousKey("tmux", machine), machine, container)
 	switch transport {
 	case "mosh":
-		return []string{"mosh", machine, "--", "tmux", "attach-session", "-t", target}
+		return []string{"mosh", machine, "--", "sh", "-c", command}
 	case "et":
-		command := "tmux attach-session -t " + shellQuote(target)
-		return []string{"et", machine, "-c", command}
+		return []string{"et", machine, "-c", "sh -c " + proxy.ShellQuote(command)}
 	default:
 		// ServerAliveInterval/CountMax let ssh notice a dropped link instead of
 		// blocking the pane indefinitely. They apply to the attachment only;
@@ -49,7 +48,7 @@ func transportArgs(remote config.RemoteConfig, machine, container string) []stri
 		if strings.TrimSpace(remote.SSHConfig) != "" {
 			args = append(args, "-F", remote.SSHConfig)
 		}
-		args = append(args, machine, "tmux attach-session -t "+shellQuote(target))
+		args = append(args, machine, "sh -c "+proxy.ShellQuote(command))
 		return args
 	}
 }
@@ -76,9 +75,6 @@ func ValidateProxyIdentity(machine, container string) error {
 	if strings.HasPrefix(machine, "-") {
 		return fmt.Errorf("machine %q starts with '-'", machine)
 	}
-	if container == "" {
-		return errors.New("tmux remote proxy requires a container")
-	}
 	if strings.HasSuffix(container, ";") {
 		return errors.New("tmux remote proxy container cannot end with ';'")
 	}
@@ -88,12 +84,6 @@ func ValidateProxyIdentity(machine, container string) error {
 		}
 	}
 	return nil
-}
-
-// CanonicalContainerName applies tmux's session-name canonicalization for
-// punctuation that tmux rewrites when creating a session.
-func CanonicalContainerName(name string) string {
-	return strings.NewReplacer(".", "_", ":", "_").Replace(name)
 }
 
 // EscapeSessionName escapes tmux's format marker while retaining the display
@@ -109,12 +99,12 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 		return "", errors.New("tmux remote proxy requires a command runner")
 	}
 	machine = strings.TrimSpace(machine)
-	container = CanonicalContainerName(strings.TrimSpace(container))
+	container = proxy.CanonicalContainerName(strings.TrimSpace(container))
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return "", err
 	}
 	identity := proxyidentity.NewIdentity(machine, container)
-	return proxyidentity.NewPolicy(b.configuredMachines()).Resolve(ctx, identity, tmuxProxyStore{backend: b, includeLabels: b.isRemoteMachine(machine)})
+	return proxyidentity.Resolve(ctx, identity, tmuxProxyStore{backend: b})
 }
 
 // ProxyTarget returns the identity recorded on a local proxy session.
@@ -183,27 +173,16 @@ func (b *Backend) SendPaneText(ctx context.Context, paneID, text string) error {
 	return err
 }
 
-func (b *Backend) configuredMachines() []string {
-	if b == nil {
-		return nil
-	}
-	return b.proxyConfig.ConfiguredMachines()
-}
-
 func (b *Backend) isRemoteMachine(machine string) bool {
 	return b != nil && b.remoteMachines.Contains(machine)
 }
 
 type tmuxProxyStore struct {
-	backend       *Backend
-	includeLabels bool
+	backend *Backend
 }
 
 func (s tmuxProxyStore) ListProxyCandidates(ctx context.Context) ([]proxyidentity.Candidate, error) {
 	format := "#{session_id}\t#{@nexo-proxy}"
-	if s.includeLabels {
-		format = "#{session_id}\t#{session_name}\t#{@nexo-proxy}"
-	}
 	output, err := s.backend.run(ctx, "list-sessions", "-F", format)
 	if err != nil {
 		if isNoServer(err) {
@@ -219,26 +198,9 @@ func (s tmuxProxyStore) ListProxyCandidates(ctx context.Context) ([]proxyidentit
 			continue
 		}
 		candidate := proxyidentity.Candidate{ID: fields[0], TaggedIdentity: fields[len(fields)-1]}
-		if len(fields) == 3 {
-			candidate.Label = canonicalProxyLabel(fields[1])
-		}
 		candidates = append(candidates, candidate)
 	}
 	return candidates, nil
-}
-
-func (s tmuxProxyStore) AdoptProxy(ctx context.Context, sessionID string, identity proxyidentity.Identity) error {
-	_, err := s.backend.run(ctx, "set-option", "-t", sessionID, proxySessionOption, identity.String())
-	return err
-}
-
-func canonicalProxyLabel(label string) string {
-	identity, ok := proxyidentity.ParseValue(label)
-	if !ok {
-		return label
-	}
-	identity.Container = CanonicalContainerName(identity.Container)
-	return identity.String()
 }
 
 // Proxy opens or switches to a local proxy container. The remote attachment
@@ -249,29 +211,44 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 		return errors.New("tmux remote proxy requires a command runner")
 	}
 	machine = strings.TrimSpace(machine)
-	container = CanonicalContainerName(strings.TrimSpace(container))
+	container = proxy.CanonicalContainerName(strings.TrimSpace(container))
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return err
 	}
-	identity := proxyidentity.NewIdentity(machine, container)
+	identity := proxyidentity.NewIdentity(machine, "")
 	machine = identity.Machine
 
-	name := identity.String()
-	if _, err := b.proxyPaneCommand(machine, container); err != nil {
-		return err
-	}
-	sessionID, err := b.ProxySessionID(ctx, machine, container)
+	sessionID, err := b.ProxySessionID(ctx, machine, "")
 	if err != nil {
 		return err
 	}
-	if sessionID == "" {
-		command, err := b.proxyPaneCommand(machine, container)
-		if err != nil {
-			return err
+	if sessionID != "" {
+		if container != "" {
+			if switchErr := b.switchRemoteProxy(ctx, machine, container); switchErr != nil {
+				if proxy.IsMissingRemoteTarget(switchErr) {
+					return fmt.Errorf("no session %s on %s", container, machine)
+				}
+				command, commandErr := proxy.AttachCommand(proxyBinary(), "tmux", b.proxyConfigPath, machine, container, false)
+				if commandErr != nil {
+					return commandErr
+				}
+				if _, respawnErr := b.run(ctx, "respawn-pane", "-k", "-t", sessionID, command); respawnErr != nil {
+					return errors.Join(switchErr, respawnErr)
+				}
+			}
 		}
-		output, err := b.run(ctx, "new-session", "-d", "-P", "-F", "#{session_id}", "-s", EscapeSessionName(name), command)
-		if err != nil {
-			return err
+	} else {
+		name, nameErr := b.proxySessionName(ctx, machine)
+		if nameErr != nil {
+			return nameErr
+		}
+		command, commandErr := proxy.AttachCommand(proxyBinary(), "tmux", b.proxyConfigPath, machine, container, false)
+		if commandErr != nil {
+			return commandErr
+		}
+		output, createErr := b.run(ctx, "new-session", "-d", "-P", "-F", "#{session_id}", "-s", EscapeSessionName(name), command)
+		if createErr != nil {
+			return createErr
 		}
 		sessionID = strings.TrimSpace(string(output))
 		if newline := strings.IndexByte(sessionID, '\n'); newline >= 0 {
@@ -292,6 +269,9 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	if _, err := b.run(ctx, "set-option", "-t", sessionID, "status", "off"); err != nil {
 		return err
 	}
+	if _, err := b.run(ctx, "set-option", "-t", sessionID, "detach-on-destroy", "off"); err != nil {
+		return err
+	}
 	if b.Inside {
 		_, err = b.runClient(ctx, "switch-client", "-t", sessionID)
 	} else {
@@ -303,8 +283,39 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	return b.recordTarget(ctx, sessionID)
 }
 
-func (b *Backend) proxyPaneCommand(machine, container string) (string, error) {
-	return proxy.AttachCommand(proxyBinary(), "tmux", b.proxyConfigPath, machine, container, false)
+func (b *Backend) proxySessionName(ctx context.Context, machine string) (string, error) {
+	output, err := b.run(ctx, "list-sessions", "-F", "#{session_name}\t#{@nexo-proxy}")
+	if err != nil && !isNoServer(err) {
+		return "", err
+	}
+	used := make(map[string]bool)
+	machineNameUsed := false
+	for _, line := range strings.Split(strings.TrimRight(string(output), "\r\n"), "\n") {
+		fields := strings.SplitN(line, "\t", 2)
+		if len(fields) > 0 && fields[0] != "" {
+			used[fields[0]] = true
+			if strings.EqualFold(fields[0], machine) {
+				machineNameUsed = true
+			}
+		}
+	}
+	if !machineNameUsed {
+		return machine, nil
+	}
+	for suffix := 1; ; suffix++ {
+		candidate := fmt.Sprintf("%s~remote", machine)
+		if suffix > 1 {
+			candidate = fmt.Sprintf("%s~remote%d", machine, suffix)
+		}
+		if !used[candidate] {
+			return candidate, nil
+		}
+	}
+}
+
+func (b *Backend) switchRemoteProxy(ctx context.Context, machine, container string) error {
+	_, err := b.Runner.Run(ctx, "ssh", proxy.RemoteSwitchSSHArgs(b.proxyConfig, "tmux", machine, container)...)
+	return err
 }
 
 func proxyBinary() string {

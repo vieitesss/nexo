@@ -162,8 +162,8 @@ func TestRemotePreviousSkipsCurrentAndUnconfiguredMachines(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if adapter.proxied != [2]string{"buildbox", "api"} {
-		t.Fatalf("proxy = %#v, want buildbox/api", adapter.proxied)
+	if adapter.proxied != [2]string{"buildbox", ""} {
+		t.Fatalf("proxy = %#v, want buildbox machine proxy", adapter.proxied)
 	}
 }
 
@@ -197,13 +197,11 @@ func TestRemotePreviousSkipsContainersGoneFromTheMachine(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// Proxying to a missing tmux session ends the proxy at once, which
-	// detaches the client from the local server.
-	if adapter.proxied != [2]string{"devbox", "api"} {
-		t.Fatalf("proxy = %#v, want devbox/api", adapter.proxied)
+	if adapter.proxied != [2]string{"devbox", ""} {
+		t.Fatalf("proxy = %#v, want devbox machine proxy", adapter.proxied)
 	}
-	if runner.calls != 1 {
-		t.Fatalf("listed devbox %d times, want once", runner.calls)
+	if runner.calls != 0 {
+		t.Fatalf("listed devbox %d times, want no remote listing", runner.calls)
 	}
 }
 
@@ -220,9 +218,8 @@ func TestRemotePreviousKeepsEntriesOnUnreachableMachines(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// The proxy's reconnect loop rides out the outage.
-	if adapter.proxied != [2]string{"devbox", "api"} {
-		t.Fatalf("proxy = %#v, want devbox/api", adapter.proxied)
+	if adapter.proxied != [2]string{"devbox", ""} {
+		t.Fatalf("proxy = %#v, want devbox machine proxy", adapter.proxied)
 	}
 }
 
@@ -283,8 +280,8 @@ func TestRemotePreviousTogglesBetweenLocalAndProxy(t *testing.T) {
 	if err := runRemotePreviousCommand(t, adapter, "devbox"); err != nil {
 		t.Fatal(err)
 	}
-	if adapter.proxied != [2]string{"devbox", "api"} {
-		t.Fatalf("first remote previous proxied %#v, want devbox/api", adapter.proxied)
+	if adapter.proxied != [2]string{"devbox", ""} {
+		t.Fatalf("first remote previous proxied %#v, want devbox machine proxy", adapter.proxied)
 	}
 
 	// Inside the proxy, the focus hook has recorded it as the newest entry.
@@ -322,7 +319,7 @@ func TestRemotePreviousFromProxySkipsDeadLocalContainers(t *testing.T) {
 func TestRemotePreviousFromProxyPicksMostRecentOtherMachine(t *testing.T) {
 	remoteFirst := &historyAdapter{
 		entries: []containerstate.Entry{
-			{ID: "$9", Name: "api", Machine: "devbox", Proxy: true},
+			{ID: "$9", Machine: "devbox", Proxy: true},
 			{ID: "$8", Name: "ci", Machine: "buildbox", Proxy: true},
 			localEntry("$1", "notes"),
 		},
@@ -332,8 +329,8 @@ func TestRemotePreviousFromProxyPicksMostRecentOtherMachine(t *testing.T) {
 	if err := runRemotePreviousCommand(t, remoteFirst, "devbox", "buildbox"); err != nil {
 		t.Fatal(err)
 	}
-	if remoteFirst.proxied != [2]string{"buildbox", "ci"} || remoteFirst.opened != "" {
-		t.Fatalf("proxied %#v and opened %q, want buildbox/ci", remoteFirst.proxied, remoteFirst.opened)
+	if remoteFirst.proxied != [2]string{"buildbox", ""} || remoteFirst.opened != "" {
+		t.Fatalf("proxied %#v and opened %q, want buildbox machine proxy", remoteFirst.proxied, remoteFirst.opened)
 	}
 
 	localFirst := &historyAdapter{
@@ -350,6 +347,59 @@ func TestRemotePreviousFromProxyPicksMostRecentOtherMachine(t *testing.T) {
 	}
 	if localFirst.opened != "$1" || localFirst.proxied != [2]string{} {
 		t.Fatalf("opened %q and proxied %#v, want local $1", localFirst.opened, localFirst.proxied)
+	}
+}
+
+func TestRemotePreviousFromLegacyTaggedProxyUsesItsMachine(t *testing.T) {
+	adapter := &historyAdapter{
+		entries: []containerstate.Entry{
+			{ID: "$9", Name: "api", Machine: "devbox", Proxy: true},
+			{ID: "$8", Name: "web", Machine: "buildbox", Proxy: true},
+		},
+		currentMachine: "devbox",
+	}
+	if err := runRemotePreviousCommand(t, adapter, "devbox", "buildbox"); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.proxied != [2]string{"buildbox", ""} {
+		t.Fatalf("proxied = %#v, want buildbox machine proxy", adapter.proxied)
+	}
+}
+
+type closeMachineProxyAdapter struct {
+	historyAdapter
+	target [2]string
+	killed string
+}
+
+func (a *closeMachineProxyAdapter) ProxyTarget(context.Context, string) (string, error) {
+	return "devbox", nil
+}
+func (a *closeMachineProxyAdapter) SendPaneKeys(context.Context, string, []string) error { return nil }
+func (a *closeMachineProxyAdapter) SendPaneText(context.Context, string, string) error   { return nil }
+func (a *closeMachineProxyAdapter) Proxy(context.Context, string, string) error          { return nil }
+func (a *closeMachineProxyAdapter) KillContainer(_ context.Context, id string) error {
+	a.killed = id
+	return nil
+}
+func (a *closeMachineProxyAdapter) ProxySessionID(_ context.Context, machine, container string) (string, error) {
+	a.target = [2]string{machine, container}
+	return "$7", nil
+}
+
+func TestRemoteCloseNoArgInsideMachineProxyUsesMachineIdentity(t *testing.T) {
+	t.Setenv("TMUX_PANE", "%1")
+	adapter := &closeMachineProxyAdapter{}
+	if err := (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Adapter:   adapter,
+		Runner:    &remoteListingRunner{},
+		Args:      []string{"close"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.target != [2]string{"devbox", ""} || adapter.killed != "$7" {
+		t.Fatalf("target = %#v, killed = %q, want machine-only devbox and $7", adapter.target, adapter.killed)
 	}
 }
 

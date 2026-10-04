@@ -32,7 +32,7 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 		f.metadataReported = true
 	}
 	if f.metadataReported && key == "workspace list" {
-		return []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"machine/container","tokens":{"nexo-proxy":"machine/container"}}]}}`), nil
+		return []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"machine/container","tokens":{"nexo-proxy":"machine"}}]}}`), nil
 	}
 	if err := f.errors[key]; err != nil {
 		return nil, err
@@ -40,7 +40,7 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	if output, ok := f.outputs[key]; ok {
 		return output, nil
 	}
-	if strings.HasPrefix(key, "workspace create --label machine/container --env") {
+	if strings.HasPrefix(key, "workspace create --label machine --env") {
 		return []byte(`{"result":{"type":"workspace_created","workspace":{"workspace_id":"w1"},"root_pane":{"pane_id":"p1"}}}`), nil
 	}
 	if strings.HasPrefix(key, "workspace create ") {
@@ -145,7 +145,7 @@ func TestListContainersUsesWorkspaceAndFocusedPane(t *testing.T) {
 	}
 }
 
-func TestListContainersMapsConfiguredProxyLabelsToRemoteMachine(t *testing.T) {
+func TestListContainersDoesNotMapWorkspaceLabelsToRemoteProxies(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"workspace list":              []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"proxy","label":"dev/api"},{"workspace_id":"local","label":"0"}]}}`),
 		"pane list --workspace proxy": []byte(`{"result":{"type":"pane_list","panes":[]}}`),
@@ -157,8 +157,8 @@ func TestListContainersMapsConfiguredProxyLabelsToRemoteMachine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(containers) != 2 || containers[0].Machine != "dev" || containers[0].Name != "api" || !containers[0].Proxy || containers[1].Machine == "dev" || containers[1].Name != "0" {
-		t.Fatalf("containers = %#v, want remote proxy and local workspace", containers)
+	if len(containers) != 2 || containers[0].Proxy || containers[0].Machine == "dev" || containers[0].Name != "dev/api" || containers[1].Proxy || containers[1].Machine == "dev" || containers[1].Name != "0" {
+		t.Fatalf("containers = %#v, want untagged workspaces as local rows", containers)
 	}
 }
 

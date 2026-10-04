@@ -10,8 +10,9 @@ import (
 )
 
 // Identity is the conceptual machine/container pair a proxy attaches to.
-// Machine comparisons are case-insensitive; Container remains native so an
-// adapter can apply its own canonicalization before crossing this seam.
+// A machine-only identity (Container empty) identifies the one proxy for a
+// machine. Machine comparisons are case-insensitive; Container remains native
+// so an adapter can apply its own canonicalization before crossing this seam.
 type Identity struct {
 	Machine   string
 	Container string
@@ -25,8 +26,13 @@ func NewIdentity(machine, container string) Identity {
 	}
 }
 
-// String returns the stable MACHINE/CONTAINER representation.
-func (i Identity) String() string { return i.Machine + "/" + i.Container }
+// String returns the stable machine-only or MACHINE/CONTAINER representation.
+func (i Identity) String() string {
+	if strings.TrimSpace(i.Container) == "" {
+		return i.Machine
+	}
+	return i.Machine + "/" + i.Container
+}
 
 // Equal compares two identities using the proxy identity contract.
 func (i Identity) Equal(other Identity) bool {
@@ -39,12 +45,13 @@ func (i Identity) Matches(value string) bool {
 	return ok && i.Equal(other)
 }
 
-// ParseTarget parses a user-facing MACHINE/CONTAINER target. Source spelling
-// is retained so callers can pass native values to the selected adapter.
+// ParseTarget parses a user-facing machine or MACHINE/CONTAINER target.
+// Source spelling is retained so callers can pass native values to the
+// selected adapter. Machine-only targets are used by proxy close and history.
 func ParseTarget(target string) (Identity, error) {
 	identity, ok := ParseValue(target)
 	if !ok {
-		return Identity{}, errors.New("remote target must be MACHINE/CONTAINER")
+		return Identity{}, errors.New("remote target must be MACHINE or MACHINE/CONTAINER")
 	}
 	if strings.HasPrefix(identity.Machine, "-") {
 		return Identity{}, errors.New("remote target has an invalid machine")
@@ -53,12 +60,19 @@ func ParseTarget(target string) (Identity, error) {
 }
 
 // ParseValue parses metadata or a target without applying native validation.
-// It is deliberately tolerant of extra separators: the first slash separates
-// the machine and the container, whose native adapter may permit slashes.
+// It accepts machine-only metadata and is deliberately tolerant of extra
+// separators: the first slash separates the machine and the container, whose
+// native adapter may permit slashes.
 func ParseValue(value string) (Identity, bool) {
 	value = strings.TrimSpace(value)
+	if value == "" {
+		return Identity{}, false
+	}
 	separator := strings.IndexByte(value, '/')
-	if separator <= 0 || separator == len(value)-1 {
+	if separator < 0 {
+		return Identity{Machine: value}, true
+	}
+	if separator == 0 || separator == len(value)-1 {
 		return Identity{}, false
 	}
 	machine := strings.TrimSpace(value[:separator])
@@ -99,37 +113,24 @@ func (s MachineSet) Contains(machine string) bool {
 }
 
 // Candidate is one native container that may be a proxy. TaggedIdentity is
-// authoritative when non-empty; Label is considered only for adoption.
+// authoritative; Label is display data only and never establishes identity.
 type Candidate struct {
 	ID             string
 	TaggedIdentity string
 	Label          string
 }
 
-// Store is the native adapter seam for proxy lookup and adoption. List must
-// return all local containers visible to the backend. Adopt writes the exact
-// identity into the backend's native metadata and verifies it when needed.
+// Store is the native adapter seam for proxy lookup. List must return all
+// local containers visible to the backend.
 type Store interface {
 	ListProxyCandidates(context.Context) ([]Candidate, error)
-	AdoptProxy(context.Context, string, Identity) error
 }
 
-// Policy centralizes exact proxy lookup, configured-machine gating, and safe
-// adoption. It never performs a remote operation, so callers can use it for
-// local-only close resolution even when the remote machine is unavailable.
-type Policy struct {
-	machines MachineSet
-}
-
-// NewPolicy creates proxy lookup policy for configured machines.
-func NewPolicy(machines []string) Policy {
-	return Policy{machines: NewMachineSet(machines)}
-}
-
-// Resolve finds a tagged exact identity first, then adopts an untagged exact
-// label only for a configured machine. A conflicting tag is authoritative and
-// cannot be adopted through its display label.
-func (p Policy) Resolve(ctx context.Context, target Identity, store Store) (string, error) {
+// Resolve finds a tagged exact identity. Display labels are never adopted:
+// only explicit proxy metadata establishes identity, so a local container named
+// like a machine cannot be hijacked. It never performs a remote operation, so
+// callers can use it for local-only close resolution while the remote is down.
+func Resolve(ctx context.Context, target Identity, store Store) (string, error) {
 	if store == nil {
 		return "", errors.New("proxy identity requires a store")
 	}
@@ -142,18 +143,6 @@ func (p Policy) Resolve(ctx context.Context, target Identity, store Store) (stri
 		if strings.TrimSpace(candidate.TaggedIdentity) != "" && target.Matches(candidate.TaggedIdentity) {
 			return candidate.ID, nil
 		}
-	}
-	if !p.machines.Contains(target.Machine) {
-		return "", nil
-	}
-	for _, candidate := range candidates {
-		if strings.TrimSpace(candidate.TaggedIdentity) != "" || !target.Matches(candidate.Label) {
-			continue
-		}
-		if err := store.AdoptProxy(ctx, candidate.ID, target); err != nil {
-			return "", err
-		}
-		return candidate.ID, nil
 	}
 	return "", nil
 }
