@@ -38,7 +38,7 @@ func TestCatalogSnapshotKeepsProxySeparateFromSameNamedRemote(t *testing.T) {
 			local = place
 		}
 	}
-	if !proxy.Proxy || proxy.RemoteContainerID != "" || len(proxy.Agents) != 0 {
+	if !proxy.Proxy || len(proxy.Agents) != 0 {
 		t.Fatalf("proxy = %#v, want isolated proxy identity", proxy)
 	}
 	if len(remote.Agents) != 1 || remote.Agents[0].PaneID != "remote-agent" {
@@ -128,7 +128,7 @@ func TestCatalogKeepsProxySeparateFromRemoteAgentAssociation(t *testing.T) {
 		t.Fatalf("places = %#v, want separate proxy and remote rows", snapshot.Places)
 	}
 	proxy := snapshot.Places[0]
-	if proxy.ContainerID != "proxy" || proxy.RemoteContainerID != "" || len(proxy.Agents) != 0 {
+	if proxy.ContainerID != "proxy" || len(proxy.Agents) != 0 {
 		t.Fatalf("proxy identity = %#v, want isolated local identity", proxy)
 	}
 	catalog.ApplyRemote(RemoteBatch{

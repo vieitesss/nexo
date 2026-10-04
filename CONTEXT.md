@@ -111,7 +111,7 @@ identifies a proxy.
 
 **Place catalog**:
 The backend-neutral module that combines project candidates, local and remote
-container snapshots, machine identity, proxy merging, and agent decoration
+container snapshots, machine identity, snapshot merging, and agent decoration
 into one coherent place snapshot. Callers consume its snapshot interface;
 source refreshes replace their machine-owned data rather than layering stale
 rows.
