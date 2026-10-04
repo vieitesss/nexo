@@ -17,9 +17,31 @@ func TestValidateProxyIdentityRejectsHerdrNormalization(t *testing.T) {
 			t.Fatalf("ValidateProxyIdentity(machine, %q) = nil, want rejection", container)
 		}
 	}
-	if err := ValidateProxyIdentity("machine", strings.Repeat("a", 78)); err == nil {
-		t.Fatal("identity over 80 runes was accepted")
+	if err := ValidateProxyIdentity(strings.Repeat("m", 81), ""); err == nil {
+		t.Fatal("machine over 80 runes was accepted")
 	}
+}
+
+// TestProxyAcceptsLongExplicitContainer pins that the 80-rune metadata limit
+// applies to the stored machine identity only. Containers are typed into the
+// pane command and never stored in Herdr metadata.
+func TestProxyAcceptsLongExplicitContainer(t *testing.T) {
+	container := strings.Repeat("a", 78)
+	runner := &fakeRunner{}
+	backend := New(runner)
+	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "")
+	if err := backend.Proxy(context.Background(), "machine", container); err != nil {
+		t.Fatalf("Proxy() error = %v", err)
+	}
+	for _, current := range runner.calls {
+		if len(current.args) >= 4 && current.args[0] == "pane" && current.args[1] == "send-text" {
+			if !strings.Contains(current.args[3], "--initial '"+container+"'") {
+				t.Fatalf("pane command = %q, want the long initial container", current.args[3])
+			}
+			return
+		}
+	}
+	t.Fatalf("calls = %#v, want a pane send-text with the initial attach", runner.calls)
 }
 
 func TestProxyUsesMetadataTokenIdentityAndFocusesExistingWorkspace(t *testing.T) {

@@ -49,11 +49,13 @@ func ValidateProxyIdentity(machine, container string) error {
 	if container != strings.TrimSpace(container) {
 		return errors.New("herdr remote proxy container cannot have leading or trailing whitespace")
 	}
-	identity := machine + "/" + container
-	if utf8.RuneCountInString(identity) > 80 {
-		return errors.New("herdr remote proxy identity cannot exceed 80 characters")
+	// Herdr stores only the machine identity in workspace metadata; the
+	// explicit container is typed into the pane command and never crosses the
+	// 80-rune metadata limit.
+	if utf8.RuneCountInString(machine) > 80 {
+		return errors.New("herdr remote proxy machine cannot exceed 80 characters")
 	}
-	if hasControlOrFormat(identity) {
+	if hasControlOrFormat(machine + "/" + container) {
 		return errors.New("herdr remote proxy names cannot contain control or format characters")
 	}
 	return nil
