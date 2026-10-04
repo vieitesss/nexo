@@ -136,6 +136,10 @@ Select a subset with
 `nexo setup --machine devbox --machine gpu1`; use `--local-only` to skip SSH.
 The full hand-operated reference, including Herdr remotes and proxy
 behaviour, is in [docs/setup.md](docs/setup.md) and [docs/remote.md](docs/remote.md).
+A remote proxy is one local container per machine (not one per remote
+container). Its client follows the machine's most recently attached tmux
+session; `remote open MACHINE/CONTAINER` targets it explicitly, while M-o only
+returns to the existing machine proxy.
 
 The wizard selects SSH aliases, installs or cross-builds nexo, repairs the
 non-interactive PATH and locale, configures the chosen remote backend, and
