@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -170,17 +171,52 @@ func scriptCommand(args []string) *exec.Cmd {
 	for i, arg := range args {
 		quoted[i] = proxy.ShellQuote(arg)
 	}
-	return exec.Command("script", "-q", "-c", strings.Join(quoted, " "), "/dev/null")
+	command := exec.Command("script", "-q", "-c", strings.Join(quoted, " "), "/dev/null")
+	command.Env = terminalEnv()
+	return command
+}
+
+// terminalEnv gives a scripted tmux client the terminal a real SSH login
+// carries. CI runs without TERM, and tmux 3.4 refuses to attach without one
+// ("open terminal failed: terminal does not support clear"); TMUX is dropped
+// so a run inside tmux does not count as nesting.
+func terminalEnv() []string {
+	env := []string{"TERM=xterm-256color"}
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "TERM=") && !strings.HasPrefix(entry, "TMUX=") {
+			env = append(env, entry)
+		}
+	}
+	return env
+}
+
+// startScripted runs command in the background and returns a function that
+// waits for it to exit, up to timeout, and returns its combined output.
+func startScripted(command *exec.Cmd) (<-chan error, func(time.Duration) string) {
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	result := make(chan error, 1)
+	go func() { result <- command.Run() }()
+	exited := func(timeout time.Duration) string {
+		select {
+		case err := <-result:
+			result <- err
+			return output.String()
+		case <-time.After(timeout):
+			return "(still running)"
+		}
+	}
+	return result, exited
 }
 
 func attachAndDetachRemote(t *testing.T, tmuxPath, socket, target string) {
 	t.Helper()
 	command := scriptCommand([]string{tmuxPath, "-L", socket, "-f", "/dev/null", "attach-session", "-d", "-t", "=" + target})
-	result := make(chan error, 1)
-	go func() { result <- command.Run() }()
+	result, output := startScripted(command)
 	clientPID := waitForRemoteClient(tmuxPath, socket)
 	if clientPID == "" {
-		t.Fatalf("remote attach did not create a client")
+		t.Fatalf("remote attach did not create a client; output: %q", output(time.Second))
 	}
 	if err := exec.Command("kill", clientPID).Run(); err != nil {
 		t.Fatalf("stop remote client %s: %v", clientPID, err)
@@ -207,11 +243,10 @@ func waitForRemoteClient(tmuxPath, socket string) string {
 func runTransportAndDetach(t *testing.T, args []string, tmuxPath, socket string) {
 	t.Helper()
 	command := scriptCommand(args)
-	result := make(chan error, 1)
-	go func() { result <- command.Run() }()
+	result, output := startScripted(command)
 	clientPID := waitForRemoteClient(tmuxPath, socket)
 	if clientPID == "" {
-		t.Fatalf("remote transport did not create a client")
+		t.Fatalf("remote transport did not create a client; output: %q", output(time.Second))
 	}
 	if err := exec.Command("kill", clientPID).Run(); err != nil {
 		t.Fatalf("stop remote client %s: %v", clientPID, err)
