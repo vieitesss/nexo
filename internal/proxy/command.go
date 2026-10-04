@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"os/exec"
@@ -58,30 +60,20 @@ func ProxyDisplayName(name, machine string) string {
 
 // ProxyRendezvousKey uniquely identifies one attachment backend and machine.
 // The backend is part of the key because tmux and Herdr proxies for the same
-// machine can coexist on the local machine.
+// machine can coexist on the local machine. The key digests the delimited
+// tuple so distinct machines whose names differ only in punctuation never
+// collapse onto one rendezvous file, and it stays filename-safe.
 func ProxyRendezvousKey(backend, machine string) string {
 	host, err := os.Hostname()
 	if err != nil {
 		host = "local"
 	}
 	parts := []string{host, backend, machine}
-	var out strings.Builder
 	for index, part := range parts {
-		if index > 0 {
-			out.WriteByte('-')
-		}
-		for _, r := range strings.ToLower(strings.TrimSpace(part)) {
-			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-				out.WriteRune(r)
-			} else {
-				out.WriteByte('_')
-			}
-		}
+		parts[index] = strings.ToLower(strings.TrimSpace(part))
 	}
-	if out.Len() == 0 {
-		return "proxy"
-	}
-	return out.String()
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:8])
 }
 
 // rendezvousFile is the sole builder for the remote attachment rendezvous

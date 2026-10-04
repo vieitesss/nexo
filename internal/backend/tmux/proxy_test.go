@@ -381,16 +381,16 @@ func TestTransportArgsHonorSSHConfigOnlyForSSH(t *testing.T) {
 	remote := config.RemoteConfig{SSHConfig: "/tmp/ssh config", Transport: "ssh"}
 	sshWant := append([]string{"ssh", "-t"}, keepalive...)
 	sshWant = append(sshWant, "-F", "/tmp/ssh config", "devbox")
-	got := transportArgs(remote, "devbox", "")
+	got := proxy.TransportArgs(remote, "tmux", "devbox", "")
 	if !reflect.DeepEqual(got[:len(sshWant)], sshWant) || !strings.Contains(got[len(got)-1], "session_last_attached") || !strings.Contains(got[len(got)-1], "attach-session") {
 		t.Fatalf("ssh transport args = %#v, want keepalive and last-attached resolver", got)
 	}
 	remote.Transport = "mosh"
-	if got := transportArgs(remote, "devbox", ""); len(got) != 6 || got[0] != "mosh" || got[2] != "--" || got[3] != "sh" || got[4] != "-c" || !strings.Contains(got[5], "session_last_attached") {
+	if got := proxy.TransportArgs(remote, "tmux", "devbox", ""); len(got) != 6 || got[0] != "mosh" || got[2] != "--" || got[3] != "sh" || got[4] != "-c" || !strings.Contains(got[5], "session_last_attached") {
 		t.Fatalf("mosh transport args = %#v, want shell resolver", got)
 	}
 	remote.Transport = "et"
-	if got := transportArgs(remote, "devbox", ""); len(got) != 4 || got[0] != "et" || !strings.HasPrefix(got[3], "sh -c '") || !strings.Contains(got[3], "session_last_attached") {
+	if got := proxy.TransportArgs(remote, "tmux", "devbox", ""); len(got) != 4 || got[0] != "et" || !strings.HasPrefix(got[3], "sh -c '") || !strings.Contains(got[3], "session_last_attached") {
 		t.Fatalf("et transport args = %#v, want quoted shell resolver", got)
 	}
 }

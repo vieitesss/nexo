@@ -3,6 +3,8 @@ package proxy
 import (
 	"strings"
 	"testing"
+
+	"github.com/vieitesss/nexo/internal/config"
 )
 
 func TestAttachCommandUsesUnpinnedMachineTarget(t *testing.T) {
@@ -59,6 +61,38 @@ func TestProxyRendezvousKeyIncludesBackend(t *testing.T) {
 	herdrKey := ProxyRendezvousKey("herdr", "host-machine")
 	if tmuxKey == herdrKey {
 		t.Fatalf("ProxyRendezvousKey() = %q for both backends", tmuxKey)
+	}
+}
+
+func TestProxyRendezvousKeyDoesNotCollapseDistinctMachines(t *testing.T) {
+	dot := ProxyRendezvousKey("tmux", "dev.box")
+	underscore := ProxyRendezvousKey("tmux", "dev_box")
+	if dot == underscore {
+		t.Fatalf("ProxyRendezvousKey collapsed dev.box and dev_box to %q", dot)
+	}
+	for _, key := range []string{dot, underscore} {
+		for _, r := range key {
+			allowed := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_'
+			if !allowed {
+				t.Fatalf("rendezvous key %q is not filename-safe", key)
+			}
+		}
+	}
+}
+
+// TestBackendRendezvousIsSharedByAttachAndSwitch pins that one backend's
+// attachment and explicit switch meet on the same remote rendezvous file.
+func TestBackendRendezvousIsSharedByAttachAndSwitch(t *testing.T) {
+	for _, backend := range []string{"tmux", "herdr"} {
+		key := ProxyRendezvousKey(backend, "reviewbox")
+		attach := strings.Join(TransportArgs(config.RemoteConfig{Transport: "ssh"}, backend, "reviewbox", ""), " ")
+		if !strings.Contains(attach, "nexo-proxy-"+key+".tty") {
+			t.Fatalf("%s attach = %q, want rendezvous %q", backend, attach, key)
+		}
+		switchArgs := RemoteSwitchSSHArgs(config.RemoteConfig{}, backend, "reviewbox", "second")
+		if command := switchArgs[len(switchArgs)-1]; !strings.Contains(command, "nexo-proxy-"+key+".tty") {
+			t.Fatalf("%s switch = %q, want rendezvous %q", backend, command, key)
+		}
 	}
 }
 

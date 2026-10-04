@@ -18,41 +18,6 @@ import (
 
 const proxySessionOption = "@nexo-proxy"
 
-type commandProxyTransport struct {
-	config config.RemoteConfig
-}
-
-func (t commandProxyTransport) Attach(ctx context.Context, machine, container string) error {
-	args := transportArgs(t.config, machine, container)
-	command := exec.CommandContext(ctx, args[0], args[1:]...)
-	command.Stdin = os.Stdin
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	return command.Run()
-}
-
-func transportArgs(remote config.RemoteConfig, machine, container string) []string {
-	transport := remote.EffectiveTransport()
-	container = proxy.CanonicalContainerName(strings.TrimSpace(container))
-	command := proxy.RemoteAttachShell(proxy.ProxyRendezvousKey("tmux", machine), machine, container)
-	switch transport {
-	case "mosh":
-		return []string{"mosh", machine, "--", "sh", "-c", command}
-	case "et":
-		return []string{"et", machine, "-c", "sh -c " + proxy.ShellQuote(command)}
-	default:
-		// ServerAliveInterval/CountMax let ssh notice a dropped link instead of
-		// blocking the pane indefinitely. They apply to the attachment only;
-		// listing and other remote commands use plain SSH.
-		args := []string{"ssh", "-t", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
-		if strings.TrimSpace(remote.SSHConfig) != "" {
-			args = append(args, "-F", remote.SSHConfig)
-		}
-		args = append(args, machine, "sh -c "+proxy.ShellQuote(command))
-		return args
-	}
-}
-
 // ConfigureRemoteConfig supplies proxy settings and the optional explicit
 // config path forwarded to the child process in a proxy pane.
 func (b *Backend) ConfigureRemoteConfig(remote config.RemoteConfig, configPath string) {
@@ -329,14 +294,7 @@ func proxyBinary() string {
 	return binary
 }
 
-// NewCommandTransport returns the process transport used by the hidden attach
-// command.
-func NewCommandTransport(remote config.RemoteConfig) proxy.Transport {
-	return commandProxyTransport{config: remote}
-}
-
 var _ capabilities.RemoteProxy = (*Backend)(nil)
 var _ capabilities.RemotePaste = (*Backend)(nil)
 var _ capabilities.RemoteConfigurator = (*Backend)(nil)
 var _ capabilities.ProxySessionResolver = (*Backend)(nil)
-var _ proxy.Transport = commandProxyTransport{}

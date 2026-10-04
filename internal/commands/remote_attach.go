@@ -9,7 +9,6 @@ import (
 
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/backend/herdr"
-	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/proxy"
 )
@@ -94,7 +93,7 @@ func runRemoteAttach(ctx context.Context, invocation Invocation) error {
 	if invocation.Selection.Kind == backend.Herdr && !invocation.Config.Remote.IsMachineConfigured(machine) {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
-	transport := tmux.NewCommandTransport(invocation.Config.Remote)
+	transport := proxy.NewCommandTransport(invocation.Config.Remote, string(invocation.Selection.Kind))
 	initial, maximum := invocation.Config.Remote.ReconnectDelays()
 	input := invocation.Stdin
 	if input == nil {

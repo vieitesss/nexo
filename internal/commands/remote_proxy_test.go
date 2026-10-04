@@ -2,6 +2,8 @@ package commands
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/proxy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
@@ -244,6 +247,80 @@ func TestRemoteNewQuotesRemoteContainerName(t *testing.T) {
 	}
 	if !strings.Contains(got[len(got)-1], "hash##(touch /tmp/nexo-proxy-review)") {
 		t.Fatalf("remote command = %q, want escaped tmux format marker", got[len(got)-1])
+	}
+}
+
+// attachProxyAdapter is the Herdr adapter seam for the hidden attachment: it
+// can open proxies and close the workspace that owns a finished one.
+type attachProxyAdapter struct {
+	closed []string
+}
+
+func (a *attachProxyAdapter) Proxy(context.Context, string, string) error { return nil }
+
+func (a *attachProxyAdapter) CloseProxyWorkspace(_ context.Context, paneID string) error {
+	a.closed = append(a.closed, paneID)
+	return nil
+}
+
+// TestRemoteAttachUsesTheSelectedBackendRendezvous pins that the process
+// transport shared by attachment and explicit switching names the same
+// rendezvous file for the backend that runs the attachment.
+func TestRemoteAttachUsesTheSelectedBackendRendezvous(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		selection backend.Selection
+		args      []string
+		env       map[string]string
+	}{
+		{name: "tmux", selection: backend.Selection{Kind: backend.Tmux}, args: []string{"attach", "--", "reviewbox"}},
+		{
+			name:      "herdr",
+			selection: backend.Selection{Kind: backend.Herdr},
+			args:      []string{"attach", "--from-env"},
+			env:       map[string]string{"NEXO_PROXY_MACHINE": "reviewbox", "HERDR_PANE_ID": "p1"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			capture := filepath.Join(dir, "ssh-args")
+			t.Setenv("NEXO_TEST_SSH_ARGS", capture)
+			for key, value := range test.env {
+				t.Setenv(key, value)
+			}
+			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$NEXO_TEST_SSH_ARGS\"\nexit 0\n"
+			if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			adapter := &attachProxyAdapter{}
+			test.selection.Adapter = adapter
+			err := (remoteCommand{}).Run(context.Background(), Invocation{
+				Selection: test.selection,
+				Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"reviewbox"}, Transport: "ssh"}},
+				Adapter:   adapter,
+				Args:      test.args,
+				Stdin:     strings.NewReader(""),
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			captured, err := os.ReadFile(capture)
+			if err != nil {
+				t.Fatalf("read captured ssh argv: %v", err)
+			}
+			key := proxy.ProxyRendezvousKey(test.name, "reviewbox")
+			if !strings.Contains(string(captured), "nexo-proxy-"+key+".tty") {
+				t.Fatalf("attachment argv = %q, want the %s rendezvous %q", captured, test.name, key)
+			}
+			other := "herdr"
+			if test.name == "herdr" {
+				other = "tmux"
+			}
+			if strings.Contains(string(captured), "nexo-proxy-"+proxy.ProxyRendezvousKey(other, "reviewbox")+".tty") {
+				t.Fatalf("attachment argv = %q, must not use the %s rendezvous", captured, other)
+			}
+		})
 	}
 }
 
