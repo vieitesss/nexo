@@ -19,10 +19,10 @@ opens. M-o/`remote previous` only switches to the existing machine proxy and
 never retargets it.
 
 Only the session-scoped `@nexo-proxy` tag identifies a proxy; the local name is
-a display label. If a local non-proxy session already uses `MACHINE`, nexo uses
-a suffix such as `MACHINE~remote` rather than adopting it. Legacy tagged
-`MACHINE/CONTAINER` sessions are left untouched and remain readable as their
-machine; they are not migrated or adopted.
+a display label. If a local non-proxy session already occupies `MACHINE` in
+tmux's canonical spelling, nexo uses a suffix such as `MACHINE~remote` rather
+than adopting it. Legacy tagged `MACHINE/CONTAINER` sessions are left untouched
+and remain readable as their machine; they are not migrated or adopted.
 
 ```toml
 [remote]
@@ -168,8 +168,9 @@ The attachment resolves the remote target with
 `session_last_attached`; it deliberately does not use `session_activity`,
 which a chatty pane can win. The command runs through `sh -c` for SSH, mosh,
 and ET and records its remote tmux client tty under the runtime directory.
-The rendezvous key includes the backend, so tmux and Herdr proxies for one
-machine cannot collide. An explicit open resolves that tty with
+The rendezvous key digests the local host, backend, and machine, so tmux and
+Herdr proxies for one machine, and distinct machine aliases, cannot collide.
+An explicit open resolves that tty with
 `tmux list-clients -F '#{client_tty} #{client_name}'` and switches the same
 remote client without restarting the local pane. If the target is missing it
 reports `no session CONTAINER on MACHINE` and leaves the healthy proxy alone.
