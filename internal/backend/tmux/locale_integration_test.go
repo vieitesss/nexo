@@ -61,7 +61,7 @@ func TestListingSurvivesLocaleLessTmux(t *testing.T) {
 		t.Skip("tmux is unavailable")
 	}
 	ctx := context.Background()
-	server := "nexo-test-locale-" + strings.ReplaceAll(t.Name(), "/", "-")
+	server := testSocket(t, "locale")
 	commandRunner := localeLessRunner{server: server}
 	t.Cleanup(func() {
 		_, _ = commandRunner.Run(ctx, "tmux", "kill-server")

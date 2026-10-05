@@ -1,6 +1,8 @@
 package tmux
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/signal"
 	"syscall"
@@ -48,3 +50,13 @@ func TestMain(m *testing.M) {
 func setClock(s *Source, now func() time.Time) { s.now = now }
 
 func setStateDir(s *Source, dir string) { s.stateDir = dir }
+
+// testSocket returns the private tmux server name for one test. tmux builds
+// the socket path from TMUX_TMPDIR (set in TestMain) plus this name, and a
+// sun_path holds only 104 bytes on macOS, so the name carries a short hash
+// instead of the test name. variant separates servers within one test.
+func testSocket(t *testing.T, variant string) string {
+	t.Helper()
+	sum := sha256.Sum256([]byte(t.Name() + "\x00" + variant))
+	return "nx-" + hex.EncodeToString(sum[:6])
+}

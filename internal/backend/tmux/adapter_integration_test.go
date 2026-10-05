@@ -2,11 +2,9 @@ package tmux
 
 import (
 	"context"
-	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 )
@@ -21,7 +19,7 @@ func TestTmuxAdapterInitIsIdempotentAndPreservesIndexedHooks(t *testing.T) {
 	for _, name := range []string{"TMUX", "TMUX_PANE", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"} {
 		t.Setenv(name, "")
 	}
-	server := fmt.Sprintf("nexo-test-%d", time.Now().UnixNano())
+	server := testSocket(t, "adapter")
 	args := func(command ...string) []string { return append([]string{"-L", server, "-f", "/dev/null"}, command...) }
 	run := func(command ...string) ([]byte, error) {
 		return exec.Command("tmux", args(command...)...).CombinedOutput()

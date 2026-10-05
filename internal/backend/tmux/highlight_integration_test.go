@@ -27,7 +27,7 @@ func TestTmuxUnseenWindowHighlight(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	ctx := context.Background()
-	server := "nexo-test-highlight-" + strings.ReplaceAll(t.Name(), "/", "-")
+	server := testSocket(t, "highlight")
 	runTmux := throwawayTmux(server)
 	t.Cleanup(func() { _, _ = runTmux("kill-server") })
 
@@ -113,7 +113,7 @@ func TestTmuxUnseenWindowHighlightFocusHook(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	ctx := context.Background()
-	server := "nexo-test-hl-focus-" + strings.ReplaceAll(t.Name(), "/", "-")
+	server := testSocket(t, "hl-focus")
 	stateRoot := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateRoot)
 	binary := buildNexoBinary(t)
@@ -227,7 +227,7 @@ func TestTmuxUnseenWindowHighlightWatchShutdownClears(t *testing.T) {
 	for _, name := range []string{"TMUX", "TMUX_PANE", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"} {
 		t.Setenv(name, "")
 	}
-	server := "nexo-test-hl-shutdown-" + strings.ReplaceAll(t.Name(), "/", "-")
+	server := testSocket(t, "hl-shutdown")
 	runTmux := throwawayTmux(server)
 	t.Cleanup(func() { _, _ = runTmux("kill-server") })
 
@@ -269,7 +269,7 @@ func TestTmuxUnseenWindowHighlightVanishedWindow(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	ctx := context.Background()
-	server := "nexo-test-hl-vanish-" + strings.ReplaceAll(t.Name(), "/", "-")
+	server := testSocket(t, "hl-vanish")
 	runTmux := throwawayTmux(server)
 	t.Cleanup(func() { _, _ = runTmux("kill-server") })
 

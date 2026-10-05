@@ -87,7 +87,7 @@ func TestMachineProxyDoesNotAdoptLegacyOrLocalNameOnThrowawayTmux(t *testing.T) 
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is unavailable")
 	}
-	socket := "nexo-test-adopt-" + strings.ReplaceAll(t.Name(), "/", "-")
+	socket := testSocket(t, "adopt")
 	r := isolatedTmuxRunner{socket: socket}
 	ctx := context.Background()
 	t.Cleanup(func() { _, _ = r.Run(ctx, "tmux", "kill-server") })
@@ -133,7 +133,7 @@ func TestMachineProxySuffixesCanonicalNameCollisionsOnThrowawayTmux(t *testing.T
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is unavailable")
 	}
-	socket := "nexo-test-canonical-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	socket := testSocket(t, "canonical")
 	r := isolatedTmuxRunner{socket: socket}
 	ctx := context.Background()
 	t.Cleanup(func() { _, _ = r.Run(ctx, "tmux", "kill-server") })
@@ -196,14 +196,29 @@ exec sh -c "$cmd"
 	return dir
 }
 
+// scriptCommand runs args on a pseudo-terminal through script(1). The
+// util-linux script takes one shell command string (-c), while the BSD script
+// shipped on macOS takes the command words directly after the typescript file.
 func scriptCommand(args []string) *exec.Cmd {
-	quoted := make([]string, len(args))
-	for i, arg := range args {
-		quoted[i] = proxy.ShellQuote(arg)
+	var scriptArgs []string
+	if gnuScript() {
+		quoted := make([]string, len(args))
+		for i, arg := range args {
+			quoted[i] = proxy.ShellQuote(arg)
+		}
+		scriptArgs = []string{"-q", "-c", strings.Join(quoted, " "), "/dev/null"}
+	} else {
+		scriptArgs = append([]string{"-q", "/dev/null"}, args...)
 	}
-	command := exec.Command("script", "-q", "-c", strings.Join(quoted, " "), "/dev/null")
+	command := exec.Command("script", scriptArgs...)
 	command.Env = terminalEnv()
 	return command
+}
+
+// gnuScript reports whether script(1) is util-linux's, the implementation that
+// takes -c. The BSD script used by macOS and the BSDs does not.
+func gnuScript() bool {
+	return runtime.GOOS == "linux"
 }
 
 // terminalEnv gives a scripted tmux client the terminal a real SSH login
@@ -244,43 +259,56 @@ func attachAndDetachRemote(t *testing.T, tmuxPath, socket, target string) {
 	t.Helper()
 	command := scriptCommand([]string{tmuxPath, "-L", socket, "-f", "/dev/null", "attach-session", "-d", "-t", "=" + target})
 	result, output := startScripted(command)
-	clientPID := waitForRemoteClient(tmuxPath, socket)
+	clientPID, clientTTY := waitForRemoteClient(t, tmuxPath, socket)
 	if clientPID == "" {
 		t.Fatalf("remote attach did not create a client; output: %q", output(time.Second))
 	}
-	if err := exec.Command("kill", clientPID).Run(); err != nil {
-		t.Fatalf("stop remote client %s: %v", clientPID, err)
-	}
+	detachRemoteClient(t, tmuxPath, socket, clientPID, clientTTY)
 	if err := <-result; err != nil {
 		t.Fatalf("attach remote session %s: %v", target, err)
 	}
 }
 
-func waitForRemoteClient(tmuxPath, socket string) string {
+// waitForRemoteClient returns the private server's first client as its pid and
+// tty name, or empty strings while it has none.
+func waitForRemoteClient(t *testing.T, tmuxPath, socket string) (string, string) {
+	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		output, err := exec.Command(tmuxPath, "-L", socket, "-f", "/dev/null", "list-clients", "-F", "#{client_pid}").CombinedOutput()
+		output, err := exec.Command(tmuxPath, "-L", socket, "-f", "/dev/null", "list-clients", "-F", "#{client_pid} #{client_tty}").CombinedOutput()
 		if err == nil {
-			if value := strings.TrimSpace(string(output)); value != "" {
-				return strings.Fields(value)[0]
+			if fields := strings.Fields(string(output)); len(fields) >= 2 {
+				return fields[0], fields[1]
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return ""
+	return "", ""
+}
+
+// detachRemoteClient detaches a scripted client by its tty name. Killing the
+// client process instead would leave the exit status of the scripted command
+// up to how script(1) reports a signal death: util-linux's script exits 0,
+// while the BSD script on macOS reports the signal.
+func detachRemoteClient(t *testing.T, tmuxPath, socket, clientPID, clientTTY string) {
+	t.Helper()
+	if clientTTY == "" {
+		t.Fatalf("client %s has no tty to detach", clientPID)
+	}
+	if output, err := exec.Command(tmuxPath, "-L", socket, "-f", "/dev/null", "detach-client", "-t", clientTTY).CombinedOutput(); err != nil {
+		t.Fatalf("detach remote client %s (%s): %v: %s", clientPID, clientTTY, err, output)
+	}
 }
 
 func runTransportAndDetach(t *testing.T, args []string, tmuxPath, socket string) {
 	t.Helper()
 	command := scriptCommand(args)
 	result, output := startScripted(command)
-	clientPID := waitForRemoteClient(tmuxPath, socket)
+	clientPID, clientTTY := waitForRemoteClient(t, tmuxPath, socket)
 	if clientPID == "" {
 		t.Fatalf("remote transport did not create a client; output: %q", output(time.Second))
 	}
-	if err := exec.Command("kill", clientPID).Run(); err != nil {
-		t.Fatalf("stop remote client %s: %v", clientPID, err)
-	}
+	detachRemoteClient(t, tmuxPath, socket, clientPID, clientTTY)
 	if err := <-result; err != nil {
 		t.Fatalf("remote transport attach: %v", err)
 	}
@@ -306,7 +334,7 @@ func sessionLastAttached(t *testing.T, tmuxPath, socket string) map[string]int64
 
 func TestUnpinnedTransportUsesMostRecentlyAttachedRemoteSession(t *testing.T) {
 	tmuxPath := realTmuxPath(t)
-	socket := "nexo-test-remote-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	socket := testSocket(t, "remote")
 	runPrivateTmux(t, tmuxPath, socket, "new-session", "-d", "-s", "first", "sleep", "600")
 	runPrivateTmux(t, tmuxPath, socket, "new-session", "-d", "-s", "second", "sleep", "600")
 	t.Cleanup(func() { _, _ = exec.Command(tmuxPath, "-L", socket, "kill-server").CombinedOutput() })
@@ -328,7 +356,7 @@ func TestUnpinnedTransportUsesMostRecentlyAttachedRemoteSession(t *testing.T) {
 
 func TestEmptyRemoteTransportWaitsForQuit(t *testing.T) {
 	tmuxPath := realTmuxPath(t)
-	socket := "nexo-test-empty-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	socket := testSocket(t, "empty")
 	t.Cleanup(func() { _, _ = exec.Command(tmuxPath, "-L", socket, "kill-server").CombinedOutput() })
 	wrapperDir := writeRealTransportWrappers(t, tmuxPath, socket)
 	t.Setenv("PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -410,8 +438,8 @@ func remoteClientSession(tmuxPath, socket string) string {
 
 func TestMachineProxyRealTransportSwitchesWithoutRespawnAndReconnects(t *testing.T) {
 	tmuxPath := realTmuxPath(t)
-	remoteSocket := "nexo-test-e2e-remote-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	localSocket := "nexo-test-e2e-local-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	remoteSocket := testSocket(t, "e2e-remote")
+	localSocket := testSocket(t, "e2e-local")
 	runPrivateTmux(t, tmuxPath, remoteSocket, "new-session", "-d", "-s", "first", "sleep", "600")
 	runPrivateTmux(t, tmuxPath, remoteSocket, "new-session", "-d", "-s", "second", "sleep", "600")
 	t.Cleanup(func() {
@@ -488,7 +516,7 @@ func TestConflictingProxyTagIsNeverAdoptedOnThrowawayTmux(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is unavailable")
 	}
-	socket := "nexo-test-conflict-" + strings.ReplaceAll(t.Name(), "/", "-")
+	socket := testSocket(t, "conflict")
 	r := isolatedTmuxRunner{socket: socket}
 	ctx := context.Background()
 	t.Cleanup(func() {
@@ -535,7 +563,7 @@ func TestProxyUsesOneMachineMetadataOnThrowawayTmux(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is unavailable")
 	}
-	socket := "nexo-test-proxy-" + strings.ReplaceAll(t.Name(), "/", "-")
+	socket := testSocket(t, "proxy")
 	r := isolatedTmuxRunner{socket: socket}
 	ctx := context.Background()
 	t.Cleanup(func() { _, _ = r.Run(ctx, "tmux", "kill-server") })
@@ -567,8 +595,8 @@ func TestProxyUsesOneMachineMetadataOnThrowawayTmux(t *testing.T) {
 
 func TestMachineProxyRemoteSessionRemovalKeepsPaneAndResolvesNextOrPrompt(t *testing.T) {
 	tmuxPath := realTmuxPath(t)
-	remoteSocket := "nexo-test-remove-remote-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	localSocket := "nexo-test-remove-local-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	remoteSocket := testSocket(t, "remove-remote")
+	localSocket := testSocket(t, "remove-local")
 	runPrivateTmux(t, tmuxPath, remoteSocket, "new-session", "-d", "-s", "first", "sleep", "600")
 	runPrivateTmux(t, tmuxPath, remoteSocket, "new-session", "-d", "-s", "second", "sleep", "600")
 	t.Cleanup(func() {
