@@ -144,5 +144,14 @@ a probe:
 MACHINE = "tmux"
 ```
 
+With `MACHINE = "auto"` and both servers running, `nexo setup` integrates both
+instead: the tmux block and watcher, plus the Herdr block and plugin. The plan
+and `--check` show `backend=auto (tmux+herdr)`, and a failed check names the
+missing side. If Herdr cannot be integrated (for example it is older than
+0.9.0), setup skips it with an action line and integrates tmux only. With one
+server running, an `auto` machine gets that one (`backend=auto (tmux)`). Setup
+never replaces an explicit `auto` in `[remote.backends]` with the kind it found.
+Without any entry, setup asks when both servers are running.
+
 A remote nexo config contains only `[agents]`; `[remote]` is local-machine
 configuration. `docs/remote.md` covers proxy transport and remote bindings.

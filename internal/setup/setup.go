@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -429,6 +430,7 @@ type remotePlan struct {
 	Machine      RemoteMachine
 	Changes      []Change
 	Backend      string
+	Kinds        []string
 	Install      bool
 	BinaryAt     string
 	BuildRef     string
@@ -464,26 +466,41 @@ func planRemoteWithFacts(ctx context.Context, in Input, options Options, machine
 	if strings.TrimSpace(configuredBackend) == "" && facts.TmuxRunning && facts.HerdrRunning {
 		plan.Error = errors.New("both tmux and Herdr are running; choose this machine's backend in [remote.backends] (or run setup in a TTY to choose it)")
 	}
-	if kind != "tmux" && kind != "herdr" && plan.Error == nil {
-		switch {
-		case facts.TmuxRunning && !facts.HerdrRunning:
-			kind = "tmux"
-		case facts.HerdrRunning && !facts.TmuxRunning:
-			kind = "herdr"
-		case facts.HasTmux && !facts.HasHerdr:
-			kind = "tmux"
-		case facts.HasHerdr && !facts.HasTmux:
-			kind = "herdr"
-		case facts.HasTmux && facts.HasHerdr:
-			// Neither server is running, so tmux is the deterministic default;
-			// ambiguity is reserved for two running servers.
-			kind = "tmux"
-		default:
-			plan.Error = errors.New("remote has no supported multiplexer")
+	// An explicit auto remote whose two servers are running may be entered from
+	// either multiplexer, so setup integrates both and leaves the per-session
+	// choice to runtime. Every other case resolves to the one kind setup has
+	// always used, but an explicit auto stays auto: it is the user's choice and
+	// the config keeps it.
+	if kind == "auto" && facts.TmuxRunning && facts.HerdrRunning {
+		plan.Kinds = []string{"tmux", "herdr"}
+		plan.Backend = "auto"
+	} else if plan.Error == nil {
+		resolved := kind
+		if resolved != "tmux" && resolved != "herdr" {
+			switch {
+			case facts.TmuxRunning && !facts.HerdrRunning:
+				resolved = "tmux"
+			case facts.HerdrRunning && !facts.TmuxRunning:
+				resolved = "herdr"
+			case facts.HasTmux && !facts.HasHerdr:
+				resolved = "tmux"
+			case facts.HasHerdr && !facts.HasTmux:
+				resolved = "herdr"
+			case facts.HasTmux && facts.HasHerdr:
+				// Neither server is running, so tmux is the deterministic default;
+				// ambiguity is reserved for two running servers.
+				resolved = "tmux"
+			default:
+				plan.Error = errors.New("remote has no supported multiplexer")
+			}
+		}
+		plan.Kinds = []string{resolved}
+		plan.Backend = resolved
+		if kind == "auto" {
+			plan.Backend = "auto"
 		}
 	}
-	plan.Backend = kind
-	plan.Machine.Backend = kind
+	plan.Machine.Backend = plan.Backend
 	if plan.Error != nil {
 		return plan
 	}
@@ -528,59 +545,68 @@ func planRemoteWithFacts(ctx context.Context, in Input, options Options, machine
 		}
 		plan.Actions = append(plan.Actions, "repair locale with "+facts.UTF8Locale)
 	}
-	if kind == "tmux" {
-		path := filepath.Join(defaultRemoteHome(facts), ".tmux.conf")
-		before, exists, readErr := readRemoteFile(machineCtx, in.Runner, machine, sshConfig, path)
-		if readErr != nil {
-			plan.Error = readErr
-			return plan
-		}
-		tuiKey, agentsKey := bindingsFromContents(string(before), "tmux")
-		if validationErr := validateBindings("tmux", tuiKey, agentsKey); validationErr != nil {
-			plan.Error = validationErr
-			return plan
-		}
-		after, _, replaceErr := ReplaceManagedBlock(string(before), TmuxBlock(false, tuiKey, agentsKey))
-		if replaceErr != nil {
-			plan.Error = fmt.Errorf("prepare %s: %w", path, replaceErr)
-			return plan
-		}
-		change := Change{Machine: machine, Path: path, Before: before, After: []byte(after), Mode: 0o600, Existed: exists, Remote: true}
-		if change.Changed() {
-			plan.Changes = append(plan.Changes, change)
-		}
-		if len(plan.Changes) > 0 || !facts.HasNexo || !facts.WatcherRunning {
-			plan.Actions = append(plan.Actions, "reload tmux and initialize watcher")
-		}
-		if !facts.WatcherRunning {
-			plan.Actions = append(plan.Actions, "start tmux watcher")
-		}
-	} else {
-		if err := requireHerdrVersion(machineCtx, in.Runner, machine, sshConfig); err != nil {
-			plan.Error = err
-			return plan
-		}
-		path := filepath.Join(defaultRemoteHome(facts), ".config", "herdr", "config.toml")
-		before, exists, readErr := readRemoteFile(machineCtx, in.Runner, machine, sshConfig, path)
-		if readErr != nil {
-			plan.Error = readErr
-			return plan
-		}
-		tuiKey, agentsKey := bindingsFromContents(string(before), "herdr")
-		after, _, replaceErr := ReplaceManagedBlock(string(before), HerdrBlock(tuiKey, agentsKey))
-		if replaceErr != nil {
-			plan.Error = fmt.Errorf("prepare %s: %w", path, replaceErr)
-			return plan
-		}
-		change := Change{Machine: machine, Path: path, Before: before, After: []byte(after), Mode: 0o600, Existed: exists, Remote: true}
-		if change.Changed() {
-			plan.Changes = append(plan.Changes, change)
-		}
-		if !facts.HasHerdrPlugin {
-			plan.Actions = append(plan.Actions, "install Herdr plugin")
-		}
-		if change.Changed() {
-			plan.Actions = append(plan.Actions, "reload Herdr config")
+	for _, kind := range plan.Kinds {
+		if kind == "tmux" {
+			path := filepath.Join(defaultRemoteHome(facts), ".tmux.conf")
+			before, exists, readErr := readRemoteFile(machineCtx, in.Runner, machine, sshConfig, path)
+			if readErr != nil {
+				plan.Error = readErr
+				return plan
+			}
+			tuiKey, agentsKey := bindingsFromContents(string(before), "tmux")
+			if validationErr := validateBindings("tmux", tuiKey, agentsKey); validationErr != nil {
+				plan.Error = validationErr
+				return plan
+			}
+			after, _, replaceErr := ReplaceManagedBlock(string(before), TmuxBlock(false, tuiKey, agentsKey))
+			if replaceErr != nil {
+				plan.Error = fmt.Errorf("prepare %s: %w", path, replaceErr)
+				return plan
+			}
+			change := Change{Machine: machine, Path: path, Before: before, After: []byte(after), Mode: 0o600, Existed: exists, Remote: true}
+			if change.Changed() {
+				plan.Changes = append(plan.Changes, change)
+			}
+			if len(plan.Changes) > 0 || !facts.HasNexo || !facts.WatcherRunning {
+				plan.Actions = append(plan.Actions, "reload tmux and initialize watcher")
+			}
+			if !facts.WatcherRunning {
+				plan.Actions = append(plan.Actions, "start tmux watcher")
+			}
+		} else {
+			if err := requireHerdrVersion(machineCtx, in.Runner, machine, sshConfig); err != nil {
+				// A Herdr that cannot be integrated must not cost an auto remote
+				// the tmux side it got before both were integrated.
+				if len(plan.Kinds) > 1 {
+					plan.Kinds = slices.DeleteFunc(slices.Clone(plan.Kinds), func(k string) bool { return k == "herdr" })
+					plan.Actions = append(plan.Actions, "skip Herdr ("+err.Error()+"); integrate tmux only")
+					continue
+				}
+				plan.Error = err
+				return plan
+			}
+			path := filepath.Join(defaultRemoteHome(facts), ".config", "herdr", "config.toml")
+			before, exists, readErr := readRemoteFile(machineCtx, in.Runner, machine, sshConfig, path)
+			if readErr != nil {
+				plan.Error = readErr
+				return plan
+			}
+			tuiKey, agentsKey := bindingsFromContents(string(before), "herdr")
+			after, _, replaceErr := ReplaceManagedBlock(string(before), HerdrBlock(tuiKey, agentsKey))
+			if replaceErr != nil {
+				plan.Error = fmt.Errorf("prepare %s: %w", path, replaceErr)
+				return plan
+			}
+			change := Change{Machine: machine, Path: path, Before: before, After: []byte(after), Mode: 0o600, Existed: exists, Remote: true}
+			if change.Changed() {
+				plan.Changes = append(plan.Changes, change)
+			}
+			if !facts.HasHerdrPlugin {
+				plan.Actions = append(plan.Actions, "install Herdr plugin")
+			}
+			if change.Changed() {
+				plan.Actions = append(plan.Actions, "reload Herdr config")
+			}
 		}
 	}
 	if options.RemoteConfig && len(localConfig) > 0 {
@@ -916,7 +942,7 @@ func Run(ctx context.Context, in Input, options Options) error {
 		if plan.Backend != "" {
 			remoteBackends[plan.Machine.Machine] = plan.Backend
 		}
-		writeLine(in.Stdout, "%s: planned (%s/%s, backend=%s)\n", plan.Machine.Machine, plan.Machine.OS, plan.Machine.Arch, plan.Backend)
+		writeLine(in.Stdout, "%s: planned (%s/%s, backend=%s)\n", plan.Machine.Machine, plan.Machine.OS, plan.Machine.Arch, backendPlanLabel(*plan))
 		for _, action := range plan.Actions {
 			writeLine(in.Stdout, "%s: action %s\n", plan.Machine.Machine, action)
 		}
@@ -1124,27 +1150,32 @@ func applyRemotePlan(ctx context.Context, in Input, options Options, sshConfig s
 			return err
 		}
 	}
-	if plan.Backend == "tmux" && (plan.Install || len(plan.Changes) > 0 || !plan.Machine.WatcherRunning) {
-		path := filepath.Join(defaultRemoteHome(plan.Machine), ".tmux.conf")
-		if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "tmux", "source-file", path); err != nil {
-			return err
-		}
-		if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "nexo", "tmux", "init", "--backend=tmux"); err != nil {
-			return err
-		}
-		if out, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "sh", "-c", "pgrep -f '[n]exo.*agents.*watch' >/dev/null"); err != nil || strings.TrimSpace(string(out)) != "" {
-			return errors.New("remote tmux watcher did not become ready")
-		}
-	}
-	if plan.Backend == "herdr" {
-		if !plan.Machine.HasHerdrPlugin {
-			if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "herdr", "plugin", "install", "vieitesss/nexo"); err != nil {
-				return err
+	changed := len(plan.Changes) > 0
+	for _, kind := range plan.Kinds {
+		switch kind {
+		case "tmux":
+			if plan.Install || changed || !plan.Machine.WatcherRunning {
+				path := filepath.Join(defaultRemoteHome(plan.Machine), ".tmux.conf")
+				if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "tmux", "source-file", path); err != nil {
+					return err
+				}
+				if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "nexo", "tmux", "init", "--backend=tmux"); err != nil {
+					return err
+				}
+				if out, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "sh", "-c", "pgrep -f '[n]exo.*agents.*watch' >/dev/null"); err != nil || strings.TrimSpace(string(out)) != "" {
+					return errors.New("remote tmux watcher did not become ready")
+				}
 			}
-		}
-		if !plan.Machine.HasHerdrPlugin || len(plan.Changes) > 0 {
-			if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "herdr", "server", "reload-config"); err != nil {
-				return err
+		case "herdr":
+			if !plan.Machine.HasHerdrPlugin {
+				if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "herdr", "plugin", "install", "vieitesss/nexo"); err != nil {
+					return err
+				}
+			}
+			if !plan.Machine.HasHerdrPlugin || changed {
+				if _, err := run(ctx, in.Runner, plan.Machine.Machine, sshConfig, "herdr", "server", "reload-config"); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1194,16 +1225,26 @@ func ambiguousFromFacts(machines []string, facts []RemoteMachine, configured map
 }
 
 func configuredBackend(configured map[string]string, machine string) string {
-	if value := strings.ToLower(strings.TrimSpace(configured[machine])); value == "tmux" || value == "herdr" {
+	if value := normalizeBackendChoice(configured[machine]); value != "" {
 		return value
 	}
 	for alias, value := range configured {
 		if strings.EqualFold(alias, machine) {
-			value = strings.ToLower(strings.TrimSpace(value))
-			if value == "tmux" || value == "herdr" {
+			if value := normalizeBackendChoice(value); value != "" {
 				return value
 			}
 		}
+	}
+	return ""
+}
+
+// normalizeBackendChoice keeps an explicit auto distinct from no configured
+// choice: auto is a decision setup must not override, while an absent value is
+// the case setup still asks about.
+func normalizeBackendChoice(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "tmux" || value == "herdr" || value == "auto" {
+		return value
 	}
 	return ""
 }
@@ -1530,19 +1571,9 @@ func runCheck(ctx context.Context, in Input, options Options, backendName string
 		for _, change := range result.Changes {
 			fileMissing[filepath.Base(change.Path)] = true
 		}
-		focusOK := result.Backend == "herdr" && result.Machine.HerdrRunning || result.Backend == "tmux" && result.Machine.TmuxFocusOK
-		initOK := result.Backend == "herdr" && result.Machine.HasHerdrPlugin || result.Backend == "tmux" && !fileMissing[".tmux.conf"] && result.Machine.TmuxHooksOK
-		watcherOK := result.Backend == "herdr" || result.Machine.WatcherRunning
-		if !focusOK {
-			missing = append(missing, "focus")
-		}
-		if !initOK {
-			missing = append(missing, "init/plugin")
-		}
-		if !watcherOK {
-			missing = append(missing, "watcher")
-		}
-		writeLine(in.Stdout, "%s: binary=%s version=%s locale=%s backend=%s focus=%s init/plugin=%s watcher=%s\n", result.Machine.Machine, boolString(result.Machine.HasNexo), result.Machine.NexoVersion, result.Machine.Locale, result.Backend, boolString(focusOK), boolString(initOK), boolString(watcherOK))
+		focusOK, initOK, watcherOK, kindMissing := checkKindReadiness(result, fileMissing)
+		missing = append(missing, kindMissing...)
+		writeLine(in.Stdout, "%s: binary=%s version=%s locale=%s backend=%s focus=%s init/plugin=%s watcher=%s\n", result.Machine.Machine, boolString(result.Machine.HasNexo), result.Machine.NexoVersion, result.Machine.Locale, backendPlanLabel(result), boolString(focusOK), boolString(initOK), boolString(watcherOK))
 		if len(missing) > 0 {
 			failures = append(failures, result.Machine.Machine+" (missing "+strings.Join(missing, ", ")+")")
 		}
@@ -1634,4 +1665,53 @@ func boolString(value bool) string {
 		return "ok"
 	}
 	return "missing"
+}
+
+// backendPlanLabel names the backend a plan resolved to. When an auto machine
+// resolves to concrete multiplexers, it also lists them so plan and check
+// output show which sides setup integrated.
+func backendPlanLabel(plan remotePlan) string {
+	if len(plan.Kinds) == 0 || len(plan.Kinds) == 1 && plan.Kinds[0] == plan.Backend {
+		return plan.Backend
+	}
+	return plan.Backend + " (" + strings.Join(plan.Kinds, "+") + ")"
+}
+
+// checkKindReadiness folds the readiness of every kind a plan integrates into
+// one focus/init/watcher verdict. A failure names its kind when the plan spans
+// more than one, so a both-backends machine reports which side is missing.
+func checkKindReadiness(plan remotePlan, fileMissing map[string]bool) (focus, init, watcher bool, missing []string) {
+	focus, init, watcher = true, true, true
+	for _, kind := range plan.Kinds {
+		var kindFocus, kindInit, kindWatcher bool
+		switch kind {
+		case "tmux":
+			kindFocus = plan.Machine.TmuxFocusOK
+			kindInit = !fileMissing[".tmux.conf"] && plan.Machine.TmuxHooksOK
+			kindWatcher = plan.Machine.WatcherRunning
+		case "herdr":
+			kindFocus = plan.Machine.HerdrRunning
+			kindInit = plan.Machine.HasHerdrPlugin
+			kindWatcher = true
+		default:
+			continue
+		}
+		focus = focus && kindFocus
+		init = init && kindInit
+		watcher = watcher && kindWatcher
+		part := ""
+		if len(plan.Kinds) > 1 {
+			part = " (" + kind + ")"
+		}
+		if !kindFocus {
+			missing = append(missing, "focus"+part)
+		}
+		if !kindInit {
+			missing = append(missing, "init/plugin"+part)
+		}
+		if !kindWatcher {
+			missing = append(missing, "watcher"+part)
+		}
+	}
+	return focus, init, watcher, missing
 }
