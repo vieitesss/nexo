@@ -17,7 +17,6 @@ import (
 // SetupValues are the explicit values setup may add to the shared config. A
 // nil Notify retains the existing value.
 type SetupValues struct {
-	Backend  string
 	Notify   *bool
 	Machines []string
 	Backends map[string]string
@@ -58,13 +57,6 @@ func PrepareSetup(contents []byte, path, home string, values SetupValues) ([]byt
 			if err != nil {
 				return nil, fmt.Errorf("update config %s: %w", path, err)
 			}
-		}
-	}
-	if strings.TrimSpace(values.Backend) != "" {
-		var err error
-		updated, err = upsertTOMLValue(updated, path, "", "backend", strconv.Quote(strings.TrimSpace(values.Backend)))
-		if err != nil {
-			return nil, err
 		}
 	}
 	if values.Notify != nil {
@@ -545,76 +537,35 @@ func arrayHasString(array []byte, value string) (bool, error) {
 
 func appendTOMLKey(contents []byte, table, key, value string) []byte {
 	line := formatTOMLKey(key) + " = " + value + "\n"
-	if table == "" {
-		if expressions, err := parseExpressions(contents); err == nil {
-			insert := -1
-			for _, expr := range expressions {
-				if expr.table == "" {
-					insert = int(expr.value.Offset + expr.value.Length)
-				}
+	if expressions, err := parseExpressions(contents); err == nil {
+		insert := -1
+		for _, expr := range expressions {
+			if expr.table != table {
+				continue
 			}
-			if insert < 0 {
-				parser := unstable.Parser{}
-				parser.Reset(contents)
-				for parser.NextExpression() {
-					expr := parser.Expression()
-					if expr.Kind != unstable.Table && expr.Kind != unstable.ArrayTable {
-						continue
-					}
-					_, raw := keyInfo(expr.Key())
-					insert = int(raw.Offset)
-					if lineStart := bytes.LastIndexByte(contents[:insert], '\n'); lineStart >= 0 {
-						insert = lineStart + 1
-					} else {
-						insert = 0
-					}
-					return appendAt(contents, insert, line)
-				}
+			insert = int(expr.value.Offset + expr.value.Length)
+		}
+		if insert >= 0 {
+			for insert < len(contents) && contents[insert] != '\n' {
+				insert++
 			}
-			if insert >= 0 {
-				for insert < len(contents) && contents[insert] != '\n' {
-					insert++
-				}
-				if insert < len(contents) {
-					insert++
-				}
-				return appendAt(contents, insert, line)
+			if insert < len(contents) {
+				insert++
 			}
+			return appendAt(contents, insert, line)
 		}
 	}
-	if table != "" {
-		if expressions, err := parseExpressions(contents); err == nil {
-			insert := -1
-			for _, expr := range expressions {
-				if expr.table != table {
-					continue
-				}
-				insert = int(expr.value.Offset + expr.value.Length)
-			}
-			if insert >= 0 {
-				for insert < len(contents) && contents[insert] != '\n' {
-					insert++
-				}
-				if insert < len(contents) {
-					insert++
-				}
-				return appendAt(contents, insert, line)
-			}
-		}
-		if start, ok := tableHeaderEnd(contents, table); ok {
-			return appendAt(contents, start, line)
-		}
+	if start, ok := tableHeaderEnd(contents, table); ok {
+		return appendAt(contents, start, line)
 	}
 	var b strings.Builder
 	b.Write(contents)
 	if len(contents) > 0 && contents[len(contents)-1] != '\n' {
 		b.WriteByte('\n')
 	}
-	if table != "" {
-		b.WriteByte('[')
-		b.WriteString(table)
-		b.WriteString("]\n")
-	}
+	b.WriteByte('[')
+	b.WriteString(table)
+	b.WriteString("]\n")
 	b.WriteString(line)
 	return []byte(b.String())
 }

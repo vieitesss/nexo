@@ -15,16 +15,31 @@ import (
 // SetupPromptDefaults seeds the guided setup form. Explicit scope selections
 // are marked before the form opens and are never replaced by discovery.
 type SetupPromptDefaults struct {
-	Backend        string
-	Notify         bool
-	TUIKey         string
-	AgentsKey      string
+	Backend string
+	// BackendDetected says how setup already knows Backend. When set, the
+	// backend stage is shown as answered instead of asked.
+	BackendDetected string
+	Notify          bool
+	// Bindings holds the keys already bound for each backend, so switching
+	// the backend in the form offers that backend's keys instead of the
+	// other one's.
+	Bindings       map[string]SetupBindings
 	Hosts          []string
 	SelectedHosts  []string
 	LocalOnly      bool
 	ScopeLocked    bool
 	Paths          []string
 	RemoteBackends map[string]string
+	// Theme is the [tui] theme: auto, light or dark. Setup's forms use the TUI
+	// palette, so auto probes the terminal background the same way the TUI
+	// does. Empty leaves lipgloss untouched.
+	Theme string
+}
+
+// SetupBindings is one backend's TUI and agents keys.
+type SetupBindings struct {
+	TUIKey    string
+	AgentsKey string
 }
 
 // SetupPromptValues is the answer returned by PromptSetup.
@@ -48,16 +63,29 @@ type setupPromptModel struct {
 	value          *SetupPromptValues
 	err            error
 	defaultBackend string
+	bindings       *shownBindings
+}
+
+// shownBindings remembers which backend's keys the binding fields hold. It is
+// a pointer because Bubble Tea copies the model on every update.
+type shownBindings struct {
+	backend   string
+	byBackend map[string]SetupBindings
 }
 
 // PromptSetup runs the shared Bubble Tea staged-form stack. It is never called
 // for a non-terminal stdin.
 func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, defaults SetupPromptDefaults) (SetupPromptValues, error) {
+	tuiPlaceholder, agentsPlaceholder := bindingPlaceholders(defaults.Backend)
+	initialBindings := defaults.Bindings[strings.ToLower(strings.TrimSpace(defaults.Backend))]
 	stages := []formStage{
-		{ID: "backend", Title: "backend", Fields: []formField{{ID: "backend", Label: "backend", Default: defaults.Backend, Kind: formChoice, Options: []string{"tmux", "herdr"}}}},
-		{ID: "paths", Title: "project roots", Fields: []formField{{ID: "paths", Label: "paths (comma-separated)", Default: abbreviatePathList(strings.Join(defaults.Paths, ", ")), Kind: formText, Placeholder: "~/src, ~/work", AbbreviateHome: true}}},
-		{ID: "notify", Title: "agents", Fields: []formField{{ID: "notify", Label: "desktop notifications", Default: boolLabel(defaults.Notify), Kind: formToggle}}},
-		{ID: "bindings", Title: bindingTitle(defaults.Backend), Fields: []formField{{ID: "tui-key", Label: "TUI key (blank keeps opt-in)", Default: defaults.TUIKey, Kind: formText, Placeholder: "C-s", Validate: setupBindingValidator(defaults.Backend)}, {ID: "agents-key", Label: "agents key (blank keeps opt-in)", Default: defaults.AgentsKey, Kind: formText, Placeholder: "a", Validate: setupBindingValidator(defaults.Backend)}}},
+		{ID: "backend", Title: "Backend", Prompt: "Both tmux and Herdr are installed. Which one should setup connect nexo to?", Detected: defaults.BackendDetected, Fields: []formField{{ID: "backend", Default: defaults.Backend, Kind: formChoice, Options: []string{"tmux", "herdr"}}}},
+		{ID: "paths", Title: "Project roots", Prompt: "Which folders hold your projects? Separate them with commas.", Examples: []formExample{
+			{Input: "~/src", Meaning: "every folder in it is a project: ~/src/nexo, ~/src/dotfiles"},
+			{Input: "~/work/*", Meaning: "one level deeper: ~/work/acme/api, ~/work/acme/web"},
+		}, Fields: []formField{{ID: "paths", Default: abbreviatePathList(strings.Join(defaults.Paths, ", ")), Kind: formText, Placeholder: "~/src, ~/work", AbbreviateHome: true}}},
+		{ID: "notify", Title: "Agents", Prompt: "Send a desktop notification when an agent stops?", Fields: []formField{{ID: "notify", Default: boolLabel(defaults.Notify), Kind: formToggle}}},
+		{ID: "bindings", Title: "Key bindings", Prompt: bindingPrompt(), Examples: bindingExamples(defaults.Backend), Fields: []formField{{ID: "tui-key", Label: "TUI key", Default: initialBindings.TUIKey, Kind: formText, Placeholder: tuiPlaceholder, Validate: setupBindingValidator(defaults.Backend)}, {ID: "agents-key", Label: "agents key", Default: initialBindings.AgentsKey, Kind: formText, Placeholder: agentsPlaceholder, Validate: setupBindingValidator(defaults.Backend)}}},
 	}
 	if !defaults.LocalOnly {
 		selected := make([]string, 0, len(defaults.SelectedHosts))
@@ -70,11 +98,11 @@ func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, default
 				selected = append(selected, host)
 			}
 		}
-		hostFields := []formField{{ID: "hosts", Label: "SSH aliases", Kind: formMultiSelect, Options: append([]string(nil), defaults.Hosts...), InitialSelected: selected}}
+		hostFields := []formField{{ID: "hosts", Kind: formMultiSelect, Options: append([]string(nil), defaults.Hosts...), InitialSelected: selected}}
 		if !defaults.ScopeLocked {
-			hostFields = append(hostFields, formField{ID: "extra-host", Label: "additional alias (optional)", Kind: formText, Default: "", Placeholder: "ssh alias"})
+			hostFields = append(hostFields, formField{ID: "extra-host", Label: "another alias", Kind: formText, Default: "", Placeholder: "ssh alias"})
 		}
-		stages = append(stages, formStage{ID: "hosts", Title: "remote machines", Fields: hostFields})
+		stages = append(stages, formStage{ID: "hosts", Title: "Remote machines", Prompt: "Which SSH machines should nexo list containers from? Space selects.", Fields: hostFields})
 	}
 	remoteMachines := make([]string, 0, len(defaults.RemoteBackends))
 	for machine := range defaults.RemoteBackends {
@@ -82,7 +110,7 @@ func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, default
 	}
 	sort.Strings(remoteMachines)
 	for _, machine := range remoteMachines {
-		stages = append(stages, formStage{ID: "remote-backend:" + machine, Title: "backend for " + machine, Fields: []formField{{ID: "remote-backend:" + machine, Label: "backend", Default: defaults.RemoteBackends[machine], Kind: formChoice, Options: []string{"tmux", "herdr"}}}})
+		stages = append(stages, remoteBackendStage(machine, defaults.RemoteBackends[machine]))
 	}
 	form := newStagedForm(ctx, stages, func(f *stagedForm) formValidation {
 		return validateSetupForm(f, defaults.Backend)
@@ -116,7 +144,13 @@ func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, default
 			return setupPromptDone{values: answer}
 		}
 	})
-	model := setupPromptModel{form: form, defaultBackend: defaults.Backend}
+	form.title = "nexo setup"
+	if defaults.Theme != "" {
+		// Probe before Bubble Tea owns the terminal. The remote backend form
+		// runs later in the same process and keeps this choice.
+		configureTheme(defaults.Theme)
+	}
+	model := setupPromptModel{form: form, defaultBackend: defaults.Backend, bindings: &shownBindings{backend: strings.ToLower(strings.TrimSpace(defaults.Backend)), byBackend: defaults.Bindings}}
 	model.refreshBindingPresentation()
 	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(input), tea.WithOutput(output))
 	result, err := program.Run()
@@ -144,7 +178,7 @@ func PromptRemoteBackends(ctx context.Context, input io.Reader, output io.Writer
 	sort.Strings(machines)
 	stages := make([]formStage, 0, len(machines))
 	for _, machine := range machines {
-		stages = append(stages, formStage{ID: "remote-backend:" + machine, Title: "backend for " + machine, Fields: []formField{{ID: "remote-backend:" + machine, Label: "backend", Default: backends[machine], Kind: formChoice, Options: []string{"tmux", "herdr"}}}})
+		stages = append(stages, remoteBackendStage(machine, backends[machine]))
 	}
 	form := newStagedForm(ctx, stages, func(f *stagedForm) formValidation {
 		return validateSetupForm(f, "")
@@ -157,6 +191,7 @@ func PromptRemoteBackends(ctx context.Context, input io.Reader, output io.Writer
 			return setupPromptDone{values: answer}
 		}
 	})
+	form.title = "Remote backends"
 	model := setupPromptModel{form: form}
 	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(input), tea.WithOutput(output))
 	result, err := program.Run()
@@ -171,6 +206,19 @@ func PromptRemoteBackends(ctx context.Context, input io.Reader, output io.Writer
 		return nil, fmt.Errorf("remote backend form returned no answer")
 	}
 	return final.value.RemoteBackends, nil
+}
+
+func remoteBackendStage(machine, backend string) formStage {
+	// A choice always starts on an option, so Enter alone answers it.
+	if backend = strings.ToLower(strings.TrimSpace(backend)); backend != "herdr" {
+		backend = "tmux"
+	}
+	return formStage{
+		ID:     "remote-backend:" + machine,
+		Title:  "Backend for " + machine,
+		Prompt: "Both tmux and Herdr run on " + machine + ". Which one should nexo list?",
+		Fields: []formField{{ID: "remote-backend:" + machine, Default: backend, Kind: formChoice, Options: []string{"tmux", "herdr"}}},
+	}
 }
 
 func setupBindingValidator(defaultBackend string) func(string, formValues) error {
@@ -197,14 +245,11 @@ func validateSetupForm(f *stagedForm, defaultBackend string) formValidation {
 		for index := range stage.Fields {
 			field := &stage.Fields[index]
 			switch {
+			// A choice has nothing to edit, so its problem is reported once as
+			// the stage error rather than under the control as well.
 			case field.ID == "backend":
-				if backend != "tmux" && backend != "herdr" {
-					field.setError("choose tmux or herdr")
-					if result.Error == "" {
-						result.Error = "backend must be tmux or herdr"
-					}
-				} else {
-					field.setError("")
+				if (backend != "tmux" && backend != "herdr") && result.Error == "" {
+					result.Error = "choose tmux or herdr"
 				}
 			case field.ID == "tui-key" || field.ID == "agents-key":
 				// A backend change does not edit the input, so revalidate here and
@@ -220,13 +265,8 @@ func validateSetupForm(f *stagedForm, defaultBackend string) formValidation {
 				}
 			case strings.HasPrefix(field.ID, "remote-backend:"):
 				remoteBackend := strings.ToLower(strings.TrimSpace(values.String(field.ID)))
-				if remoteBackend != "tmux" && remoteBackend != "herdr" {
-					field.setError("choose tmux or herdr")
-					if result.Error == "" {
-						result.Error = "each remote backend must be tmux or herdr"
-					}
-				} else {
-					field.setError("")
+				if (remoteBackend != "tmux" && remoteBackend != "herdr") && result.Error == "" {
+					result.Error = "choose tmux or herdr for " + strings.TrimPrefix(field.ID, "remote-backend:")
 				}
 			}
 		}
@@ -243,16 +283,28 @@ func appendUnique(values []string, value string) []string {
 	return append(values, value)
 }
 
-func bindingTitle(backend string) string {
+func bindingPrompt() string {
+	return "Optional. Either key can be pressed directly or after the prefix. Leave a key blank to bind it yourself."
+}
+
+// bindingExamples spell both kinds of binding the way the backend names keys.
+// prefix+ means the same thing for tmux and Herdr.
+func bindingExamples(backend string) []formExample {
 	if strings.EqualFold(strings.TrimSpace(backend), "tmux") {
-		return "optional bindings (suggested tmux keys: C-s, a)"
+		return []formExample{
+			{Input: "C-s", Meaning: "Ctrl-s, no prefix (bare keys need C- or M-)"},
+			{Input: "prefix+a", Meaning: "the tmux prefix, then a"},
+		}
 	}
-	return "optional bindings (suggested Herdr keys: ctrl+s, prefix+a)"
+	return []formExample{
+		{Input: "ctrl+s", Meaning: "Ctrl-s, no prefix"},
+		{Input: "prefix+a", Meaning: "the Herdr prefix, then a"},
+	}
 }
 
 func bindingPlaceholders(backend string) (tuiKey, agentsKey string) {
 	if strings.EqualFold(strings.TrimSpace(backend), "tmux") {
-		return "C-s", "a"
+		return "C-s", "prefix+a"
 	}
 	return "ctrl+s", "prefix+a"
 }
@@ -266,21 +318,36 @@ func (m setupPromptModel) refreshBindingPresentation() {
 		backend = strings.ToLower(strings.TrimSpace(m.defaultBackend))
 	}
 	tuiPlaceholder, agentsPlaceholder := bindingPlaceholders(backend)
+	var previous, next SetupBindings
+	switched := m.bindings != nil && m.bindings.backend != backend
+	if switched {
+		previous, next = m.bindings.byBackend[m.bindings.backend], m.bindings.byBackend[backend]
+		m.bindings.backend = backend
+	}
+	values := m.form.values()
 	for stageIndex := range m.form.stages {
 		stage := &m.form.stages[stageIndex]
 		if stage.ID != "bindings" {
 			continue
 		}
-		stage.Title = bindingTitle(backend)
+		stage.Examples = bindingExamples(backend)
 		for fieldIndex := range stage.Fields {
 			field := &stage.Fields[fieldIndex]
 			switch field.ID {
 			case "tui-key":
 				field.Placeholder = tuiPlaceholder
 				field.input.Placeholder = tuiPlaceholder
+				// A key the user typed stays; one that only came from the
+				// previous backend's config follows the backend.
+				if switched && values.String(field.ID) == previous.TUIKey {
+					field.setValue(next.TUIKey)
+				}
 			case "agents-key":
 				field.Placeholder = agentsPlaceholder
 				field.input.Placeholder = agentsPlaceholder
+				if switched && values.String(field.ID) == previous.AgentsKey {
+					field.setValue(next.AgentsKey)
+				}
 			}
 		}
 	}
@@ -325,8 +392,17 @@ func (m setupPromptModel) View() string {
 	if m.form == nil {
 		return ""
 	}
+	if m.err != nil {
+		// A canceled form leaves nothing behind; the caller reports it.
+		return ""
+	}
 	m.refreshBindingPresentation()
 	lines := m.form.renderLines()
+	if m.value != nil {
+		// The last frame stays in the scrollback, so leave the answers there
+		// instead of a busy line.
+		lines = append(m.form.summaryLines(), "")
+	}
 	if m.form.viewportWidth > 0 {
 		lines = formLinesForWidth(lines, m.form.viewportWidth)
 	}

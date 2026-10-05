@@ -7,15 +7,32 @@ import (
 )
 
 func TestBindingsRoundTripByActionAndPreserveAgentsOnly(t *testing.T) {
-	both := ManagedStart + "\n" + TmuxBlock(false, "C-s", "a") + "\n" + ManagedEnd + "\n"
+	both := ManagedStart + "\n" + TmuxBlock(false, "C-s", "prefix+a") + "\n" + ManagedEnd + "\n"
 	tuiKey, agentsKey := bindingsFromContents(both, "tmux")
-	if tuiKey != "C-s" || agentsKey != "a" {
+	if tuiKey != "C-s" || agentsKey != "prefix+a" {
 		t.Fatalf("tmux bindings = %q, %q", tuiKey, agentsKey)
 	}
-	agentsOnly := ManagedStart + "\n" + TmuxBlock(false, "", "a") + "\n" + ManagedEnd + "\n"
+	agentsOnly := ManagedStart + "\n" + TmuxBlock(false, "", "prefix+a") + "\n" + ManagedEnd + "\n"
 	tuiKey, agentsKey = bindingsFromContents(agentsOnly, "tmux")
-	if tuiKey != "" || agentsKey != "a" {
+	if tuiKey != "" || agentsKey != "prefix+a" {
 		t.Fatalf("agents-only bindings = %q, %q", tuiKey, agentsKey)
+	}
+	swapped := ManagedStart + "\n" + TmuxBlock(false, "prefix+t", "M-a") + "\n" + ManagedEnd + "\n"
+	for _, want := range []string{`bind t display-popup -E -B -w 100% -h 100% "nexo tui"`, `bind -n M-a display-popup -E -B -w 100% -h 100% "nexo tui agents"`} {
+		if !strings.Contains(swapped, want) {
+			t.Fatalf("tmux block lacks %q:\n%s", want, swapped)
+		}
+	}
+	tuiKey, agentsKey = bindingsFromContents(swapped, "tmux")
+	if tuiKey != "prefix+t" || agentsKey != "M-a" {
+		t.Fatalf("swapped bindings = %q, %q", tuiKey, agentsKey)
+	}
+	// Blocks written before prefix+ existed bound the agents key with a bare
+	// bind. They must read back as the same prefix-table key.
+	legacy := ManagedStart + "\nbind -n C-s display-popup -E \"nexo tui\"\nbind a display-popup -E \"nexo tui agents\"\n" + ManagedEnd + "\n"
+	tuiKey, agentsKey = bindingsFromContents(legacy, "tmux")
+	if tuiKey != "C-s" || agentsKey != "prefix+a" {
+		t.Fatalf("legacy bindings = %q, %q", tuiKey, agentsKey)
 	}
 	herdr := ManagedStart + "\n" + HerdrBlock("ctrl+s", "prefix+a") + "\n" + ManagedEnd + "\n"
 	tuiKey, agentsKey = bindingsFromContents(herdr, "herdr")
@@ -60,5 +77,28 @@ func TestRemoteShellChangePreservesLocaleRepair(t *testing.T) {
 	}
 	if !strings.Contains(string(change.After), "LC_ALL='C.UTF-8'") {
 		t.Fatalf("locale repair was removed: %s", change.After)
+	}
+}
+
+func TestTmuxBindingConflictsMatchTableAndKey(t *testing.T) {
+	listKeys := strings.Join([]string{
+		`bind-key    -T copy-mode-vi C-s                  send-keys -X search-forward`,
+		`bind-key    -T prefix       a                    send-prefix`,
+		`bind-key -r -T prefix       Up                   select-pane -U`,
+		`bind-key    -T root         M-g                  display-popup "lazygit"`,
+		`bind-key    -T root         C-s                  display-popup -E -B -w 100% -h 100% "nexo tui"`,
+	}, "\n")
+	for keys, want := range map[string]string{
+		"C-s":          "",
+		"^s,M-a":       "",
+		"prefix+a,M-g": "prefix+a,M-g",
+		"a,prefix+g":   "",
+		"prefix+up":    "prefix+up",
+		"m-g":          "m-g",
+	} {
+		got := strings.Join(tmuxBindingConflicts(listKeys, strings.Split(keys, ",")), ",")
+		if got != want {
+			t.Errorf("conflicts for %s = %q, want %q", keys, got, want)
+		}
 	}
 }

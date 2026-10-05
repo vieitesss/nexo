@@ -29,21 +29,6 @@ func TestPrepareSetupPreservesInlineCommentsAndMultilineArrays(t *testing.T) {
 	}
 }
 
-func TestPrepareSetupPersistsBackendBeforeTables(t *testing.T) {
-	after, err := PrepareSetup([]byte("[agents]\nnotify = true\n"), "config.toml", "/home/u", SetupValues{Backend: "tmux"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(after)
-	if !strings.HasPrefix(text, "backend = \"tmux\"\n") {
-		t.Fatalf("backend was inserted in a table: %q", text)
-	}
-	var cfg Config
-	if err := decode(after, "config.toml", &cfg); err != nil || cfg.Backend != "tmux" {
-		t.Fatalf("backend did not decode: %v %#v", err, cfg)
-	}
-}
-
 func TestPrepareSetupQuotesDottedBackendKeys(t *testing.T) {
 	after, err := PrepareSetup(nil, "config.toml", "/home/u", SetupValues{Backends: map[string]string{"dev.box": "tmux"}})
 	if err != nil {
@@ -166,5 +151,17 @@ func TestPrepareSetupArrayMembershipUsesDecodedValues(t *testing.T) {
 	}
 	if !strings.Contains(string(after), "'old'") || !strings.Contains(string(after), `"dev"`) {
 		t.Fatalf("machine was not added semantically: %s", after)
+	}
+}
+
+func TestPrepareSetupSkipsPathsTheConfigAlreadyCovers(t *testing.T) {
+	home := t.TempDir()
+	before := "paths = [\"~/src\", \"~/work/*\"]\n"
+	after, err := PrepareSetup([]byte(before), "config.toml", home, SetupValues{Paths: []string{"~/src", "~/work", home + "/src", "~/code"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "paths = [\"~/src\", \"~/work/*\", \"~/code\"]\n"; string(after) != want {
+		t.Fatalf("paths = %q, want only ~/code appended: %q", after, want)
 	}
 }

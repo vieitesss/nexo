@@ -1,7 +1,11 @@
 # Guided setup and manual reference
 
-`nexo setup` is the supported first-run path. It uses the multiplexer owning
-this pane, asks for project roots and agent notifications, and writes only
+`nexo setup` is the supported first-run path. It integrates with the
+multiplexer it finds: the one set by `--backend` or the `backend` key, the one
+owning this pane, or the only one installed. It asks only when tmux and Herdr
+are both installed and nothing chose between them. It does not write `backend`
+to the configuration, so nexo keeps detecting the multiplexer at run time.
+Setup then asks for project roots and agent notifications, and writes only
 nexo-managed blocks. It can configure SSH aliases without opening a remote
 shell.
 
@@ -84,9 +88,16 @@ herdr plugin install vieitesss/nexo
 herdr server reload-config
 ```
 
-Keep key bindings opt-in. tmux key names are tokens such as `C-s` (root
-key table) and `a` (the prefix table); never use the Ctrl-Space prefix itself.
-If you add bindings, check for an existing binding first.
+Keep key bindings opt-in. Either binding can be pressed directly or after
+the prefix: setup reads `prefix+a` as "the prefix, then `a`" for both tmux
+and Herdr, and any other key as pressed on its own. For tmux, `C-s` goes in
+the root key table and `prefix+a` in the prefix table. A tmux key pressed on
+its own needs `C-` or `M-` (F1–F12 excepted), so it never takes a plain `a`
+or `Enter` from every pane. Herdr keys use Herdr's own spelling (`ctrl+s`,
+`alt+g`, `f5`), and one pressed on its own that types a character needs
+`ctrl+` or `alt+`. Setup rejects a key Herdr could not parse, since Herdr
+would silently disable it. Never use the Ctrl-Space prefix itself. If you
+add bindings, check for an existing binding first.
 
 ## Manual remote provisioning
 

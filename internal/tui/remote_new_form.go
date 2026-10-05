@@ -15,7 +15,7 @@ import (
 func newRemoteNewForm(ctx context.Context, target RemoteTarget, initialName string) *stagedForm {
 	form := newStagedForm(ctx, []formStage{{
 		ID:     "name",
-		Title:  "new container on " + target.Machine,
+		Title:  "New container on " + target.Machine,
 		Fields: []formField{{ID: "name", Label: "name", Default: initialName, Kind: formText, Placeholder: "container name"}},
 	}}, remoteNewFormValidation(), remoteNewFormSubmit(target))
 	form.busyLabel = "creating…"

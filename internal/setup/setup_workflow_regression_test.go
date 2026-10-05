@@ -52,7 +52,7 @@ func TestSetupRerunPreservesBothTmuxBindings(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(confPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(confPath, []byte(ManagedStart+"\n"+TmuxBlock(false, "C-s", "a")+"\n"+ManagedEnd+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(confPath, []byte(ManagedStart+"\n"+TmuxBlock(false, "C-s", "prefix+a")+"\n"+ManagedEnd+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runner := &statefulLocalRunner{tmuxWatcher: true}
@@ -67,7 +67,7 @@ func TestSetupRerunPreservesBothTmuxBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	tuiKey, agentsKey := bindingsFromContents(string(got), "tmux")
-	if tuiKey != "C-s" || agentsKey != "a" {
+	if tuiKey != "C-s" || agentsKey != "prefix+a" {
 		t.Fatalf("rerun changed bindings: %q, %q\n%s", tuiKey, agentsKey, got)
 	}
 }
@@ -77,7 +77,7 @@ func TestSetupRejectsInvalidTmuxBindingBeforeWrites(t *testing.T) {
 		home := t.TempDir()
 		configPath := filepath.Join(home, ".config", "nexo", "config.toml")
 		confPath := filepath.Join(home, ".tmux.conf")
-		original := []byte(ManagedStart + "\n" + TmuxBlock(false, key, "a") + "\n" + ManagedEnd + "\n")
+		original := []byte(ManagedStart + "\n" + TmuxBlock(false, key, "prefix+a") + "\n" + ManagedEnd + "\n")
 		if err := os.WriteFile(confPath, original, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -148,5 +148,42 @@ func TestCheckModeIsReadOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(configPath + ".nexo.bak"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("check created backup: %v", err)
+	}
+}
+
+func TestSetupRerunKeepsConfiguredProjectRoots(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{"src", "work", "code"} {
+		if err := os.Mkdir(filepath.Join(home, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configPath := filepath.Join(home, ".config", "nexo", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := "paths = [\"~/src\", \"~/work/*\"]\n"
+	if err := os.WriteFile(configPath, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notify := true
+	if err := Run(context.Background(), Input{Runner: &statefulLocalRunner{tmuxWatcher: true}, Home: home, Stdout: &bytes.Buffer{}}, Options{Backend: "tmux", ConfigPath: configPath, LocalOnly: true, Yes: true, Notify: &notify}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(got), before) {
+		t.Fatalf("rerun changed configured project roots:\n%s", got)
+	}
+}
+
+func TestPathsOrDefaultsPrefersFlagsThenConfig(t *testing.T) {
+	if got := pathsOrDefaults([]string{"~/a"}, []string{"~/b"}, t.TempDir()); len(got) != 1 || got[0] != "~/a" {
+		t.Fatalf("flag paths = %q, want [~/a]", got)
+	}
+	if got := pathsOrDefaults(nil, []string{"~/src", "~/work/*"}, t.TempDir()); strings.Join(got, ",") != "~/src,~/work/*" {
+		t.Fatalf("configured paths = %q, want them unchanged", got)
 	}
 }

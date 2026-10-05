@@ -97,21 +97,25 @@ func ExpandHome(path, home string) string {
 // configured project paths. Physical aliases are treated as the same path so
 // callers do not make different add-parent decisions for symlinked locations.
 func Covered(paths []string, parent, home string) bool {
-	parent = realAbs(parent)
+	parent = coveredRoot(parent, home)
 	for _, value := range paths {
 		value = strings.TrimSpace(value)
 		if value == "" {
 			continue
 		}
-		value = ExpandHome(value, home)
-		if strings.HasSuffix(value, string(filepath.Separator)+"*") {
-			value = strings.TrimSuffix(value, string(filepath.Separator)+"*")
-		}
-		if realAbs(value) == parent {
+		if coveredRoot(value, home) == parent {
 			return true
 		}
 	}
 	return false
+}
+
+// coveredRoot puts a project path in the one spelling Covered compares, so
+// "~/work", "$HOME/work", and "~/work/*" all name the same root.
+func coveredRoot(path, home string) string {
+	path = ExpandHome(strings.TrimSpace(path), home)
+	path = strings.TrimSuffix(path, string(filepath.Separator)+"*")
+	return realAbs(path)
 }
 
 // DefaultPath derives Git's implicit destination from a complete source

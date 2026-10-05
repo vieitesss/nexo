@@ -41,11 +41,11 @@ func newDeleteForm(deps Deps, ctx context.Context, path string) *deleteForm {
 		identityValid: identityValid,
 	}
 	state.stagedForm = newStagedForm(ctx, []formStage{
-		{ID: "target", Title: "delete project", Fields: []formField{
+		{ID: "target", Title: "Delete project", Fields: []formField{
 			{ID: "path", Label: "path", Kind: formDisplay, Default: path, AbbreviateHome: true},
 		}},
-		{ID: "preflight", Title: "preflight", Fields: nil},
-		{ID: "confirmation", Title: "confirm deletion", Fields: []formField{
+		{ID: "preflight", Title: "Preflight", Fields: nil},
+		{ID: "confirmation", Title: "Confirm deletion", Fields: []formField{
 			{ID: "mode", Label: "mode", Default: "trash", Kind: formChoice, Options: []string{"trash", "permanent"}},
 			{ID: "force", Label: "accept warnings", Default: "no", Kind: formToggle},
 			{ID: "confirm", Label: "type yes to delete", Default: "no", Kind: formText, Placeholder: "yes"},

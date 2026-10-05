@@ -220,3 +220,12 @@ func containsAction(actions []string, needle string) bool {
 	}
 	return false
 }
+
+func TestAmbiguousRemoteBackendSuggestsLocalBackend(t *testing.T) {
+	machines := []string{"both", "pinned", "single"}
+	facts := []RemoteMachine{{TmuxRunning: true, HerdrRunning: true}, {TmuxRunning: true, HerdrRunning: true}, {TmuxRunning: true}}
+	got := ambiguousFromFacts(machines, facts, map[string]string{"pinned": "tmux"}, "herdr")
+	if len(got) != 1 || got["both"] != "herdr" {
+		t.Fatalf("ambiguousFromFacts = %v, want only both=herdr", got)
+	}
+}
