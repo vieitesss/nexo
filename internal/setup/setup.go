@@ -634,25 +634,77 @@ func remoteShellChange(ctx context.Context, commandRunner runner.CommandRunner, 
 	// already UTF-8. Removing LC_ALL from the managed block makes the next
 	// invocation undo the repair it just performed.
 	body = preserveManagedLocale(string(before), body)
-	after, changed, err := ReplaceManagedBlock(string(before), body)
+	after, _, err := ReplaceManagedBlock(string(before), body)
 	if err != nil {
 		return Change{}, fmt.Errorf("prepare %s: %w", path, err)
 	}
-	// bash exits early for non-interactive shells in many user .bashrc files.
-	// A new PATH block must precede that guard; an existing block stays in place.
-	if changed && strings.Contains(strings.ToLower(shell), "bash") && !strings.Contains(string(before), ManagedStart) {
-		insert := -1
-		for _, marker := range []string{"case $- in", "[[ $- != *i* ]]", "[ -z \"$PS1\" ]"} {
-			if index := strings.Index(after, marker); index >= 0 && (insert < 0 || index < insert) {
-				insert = index
-			}
-		}
-		if insert >= 0 {
-			block := ManagedStart + "\n" + body + "\n" + ManagedEnd + "\n"
-			after = string(before[:insert]) + block + string(before[insert:])
-		}
+	// bash exits early for non-interactive shells in many user .bashrc files:
+	// the guard returns before the rest of the file, so the managed block must
+	// precede it. A new block is inserted in front of the guard; an existing
+	// block found behind it is moved in front, which the plan shows.
+	if strings.Contains(strings.ToLower(shell), "bash") {
+		after = moveBeforeBashGuard(after)
 	}
 	return Change{Machine: machine, Path: path, Before: before, After: []byte(after), Mode: 0o600, Existed: exists, Remote: true}, nil
+}
+
+// bashGuardMarkers open the early-exit checks many distro .bashrc files use to
+// stop non-interactive shells before the rest of the file runs.
+var bashGuardMarkers = []string{"case $- in", "[[ $- != *i* ]]", "[ -z \"$PS1\" ]"}
+
+// earliestBashGuard returns the offset of the line that contains the earliest
+// guard marker, or -1. Line granularity keeps the managed block's markers at
+// column zero, so a moved block is recognized on the next run.
+func earliestBashGuard(contents string) int {
+	insert := -1
+	for _, marker := range bashGuardMarkers {
+		if index := strings.Index(contents, marker); index >= 0 && (insert < 0 || index < insert) {
+			insert = index
+		}
+	}
+	if insert < 0 {
+		return -1
+	}
+	return strings.LastIndex(contents[:insert], "\n") + 1
+}
+
+// moveBeforeBashGuard moves an existing managed block in front of the earliest
+// guard so non-interactive SSH shells see it. A block already in front, or a
+// file with no guard, is returned unchanged.
+func moveBeforeBashGuard(contents string) string {
+	start, end, ok := managedBlockSpan(contents)
+	if !ok {
+		return contents
+	}
+	guard := earliestBashGuard(contents)
+	if guard < 0 || guard > start {
+		return contents
+	}
+	block := contents[start:end]
+	rest := contents[:start] + contents[end:]
+	if guard = earliestBashGuard(rest); guard < 0 {
+		return contents
+	}
+	return rest[:guard] + block + rest[guard:]
+}
+
+// managedBlockSpan returns the byte range of the first managed block,
+// including the newline after its end marker. Marker lines match on their
+// trimmed text, as in ReplaceManagedBlock.
+func managedBlockSpan(contents string) (int, int, bool) {
+	start, end := -1, -1
+	offset := 0
+	for _, line := range strings.SplitAfter(contents, "\n") {
+		text := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"))
+		switch {
+		case text == ManagedStart && start < 0:
+			start = offset
+		case text == ManagedEnd && start >= 0 && end < 0:
+			end = offset + len(line)
+		}
+		offset += len(line)
+	}
+	return start, end, start >= 0 && end >= 0
 }
 
 func preserveManagedLocale(before, body string) string {
