@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -468,7 +469,8 @@ func planRemoteWithFacts(ctx context.Context, in Input, options Options, machine
 	// An explicit auto remote whose two servers are running may be entered from
 	// either multiplexer, so setup integrates both and leaves the per-session
 	// choice to runtime. Every other case resolves to the one kind setup has
-	// always used.
+	// always used, but an explicit auto stays auto: it is the user's choice and
+	// the config keeps it.
 	if kind == "auto" && facts.TmuxRunning && facts.HerdrRunning {
 		plan.Kinds = []string{"tmux", "herdr"}
 		plan.Backend = "auto"
@@ -494,6 +496,9 @@ func planRemoteWithFacts(ctx context.Context, in Input, options Options, machine
 		}
 		plan.Kinds = []string{resolved}
 		plan.Backend = resolved
+		if kind == "auto" {
+			plan.Backend = "auto"
+		}
 	}
 	plan.Machine.Backend = plan.Backend
 	if plan.Error != nil {
@@ -570,6 +575,13 @@ func planRemoteWithFacts(ctx context.Context, in Input, options Options, machine
 			}
 		} else {
 			if err := requireHerdrVersion(machineCtx, in.Runner, machine, sshConfig); err != nil {
+				// A Herdr that cannot be integrated must not cost an auto remote
+				// the tmux side it got before both were integrated.
+				if len(plan.Kinds) > 1 {
+					plan.Kinds = slices.DeleteFunc(slices.Clone(plan.Kinds), func(k string) bool { return k == "herdr" })
+					plan.Actions = append(plan.Actions, "skip Herdr ("+err.Error()+"); integrate tmux only")
+					continue
+				}
 				plan.Error = err
 				return plan
 			}
@@ -1604,10 +1616,10 @@ func boolString(value bool) string {
 }
 
 // backendPlanLabel names the backend a plan resolved to. When an auto machine
-// integrates both multiplexers, it also lists the kinds so plan and check
-// output show both sides.
+// resolves to concrete multiplexers, it also lists them so plan and check
+// output show which sides setup integrated.
 func backendPlanLabel(plan remotePlan) string {
-	if len(plan.Kinds) <= 1 {
+	if len(plan.Kinds) == 0 || len(plan.Kinds) == 1 && plan.Kinds[0] == plan.Backend {
 		return plan.Backend
 	}
 	return plan.Backend + " (" + strings.Join(plan.Kinds, "+") + ")"

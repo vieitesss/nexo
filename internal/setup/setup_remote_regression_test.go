@@ -13,8 +13,9 @@ import (
 )
 
 type sequencedRemoteRunner struct {
-	probe []byte
-	calls int
+	probe   []byte
+	version []byte
+	calls   int
 }
 
 func (r *sequencedRemoteRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -27,6 +28,9 @@ func (r *sequencedRemoteRunner) Run(_ context.Context, name string, args ...stri
 		return r.probe, nil
 	}
 	if strings.Contains(command, "--version") {
+		if r.version != nil {
+			return r.version, nil
+		}
 		return []byte("v1.0.0"), nil
 	}
 	if strings.Contains(command, "__NEXO_FILE_PRESENT__") {
@@ -96,9 +100,32 @@ func TestPlanRemoteAutoWithOneRunningKeepsSingleBackend(t *testing.T) {
 		if plan.Error != nil {
 			t.Fatalf("%s: %v", test.name, plan.Error)
 		}
-		if plan.Backend != test.want || strings.Join(plan.Kinds, ",") != test.want {
-			t.Fatalf("%s: backend=%q kinds=%v, want the single %q setup has always used", test.name, plan.Backend, plan.Kinds, test.want)
+		// The config keeps the user's explicit auto; only the integrated kind
+		// is concrete.
+		if plan.Backend != "auto" || strings.Join(plan.Kinds, ",") != test.want {
+			t.Fatalf("%s: backend=%q kinds=%v, want auto integrating only %q", test.name, plan.Backend, plan.Kinds, test.want)
 		}
+		if label := backendPlanLabel(plan); label != "auto ("+test.want+")" {
+			t.Fatalf("%s: label = %q", test.name, label)
+		}
+	}
+}
+
+func TestPlanRemoteAutoWithBothRunningFallsBackToTmuxWhenHerdrTooOld(t *testing.T) {
+	probe := []byte("home=/home/u\nshell=/bin/zsh\nplatform=Linux x86_64\nnexo=/home/u/.local/bin/nexo\ntmux=/usr/bin/tmux\nherdr=/usr/bin/herdr\nplugin=no\nlocale=UTF-8\nutf8locale=C.UTF-8\nwatcher=no\ntmux_running=yes\nherdr_running=yes\n")
+	runner := &sequencedRemoteRunner{probe: probe, version: []byte("herdr 0.8.2")}
+	plan := planRemote(context.Background(), Input{Runner: runner}, Options{}, "dev", "", "auto", nil)
+	if plan.Error != nil {
+		t.Fatalf("a too-old Herdr failed the plan instead of keeping tmux: %v", plan.Error)
+	}
+	if plan.Backend != "auto" || strings.Join(plan.Kinds, ",") != "tmux" {
+		t.Fatalf("backend=%q kinds=%v, want auto integrating tmux only", plan.Backend, plan.Kinds)
+	}
+	if !containsAction(plan.Actions, "skip Herdr") || !containsAction(plan.Actions, "too old") {
+		t.Fatalf("skipped Herdr is not reported: %#v", plan.Actions)
+	}
+	if !hasChangePath(plan.Changes, ".tmux.conf") || hasChangePath(plan.Changes, "config.toml") {
+		t.Fatalf("want only the tmux config planned: %#v", plan.Changes)
 	}
 }
 
