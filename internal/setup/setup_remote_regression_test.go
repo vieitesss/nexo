@@ -46,6 +46,62 @@ func TestPlanRemoteIncludesRepairForStoppedWatcher(t *testing.T) {
 	}
 }
 
+func TestPlanRemoteAutoWithBothRunningIntegratesBoth(t *testing.T) {
+	probe := []byte("home=/home/u\nshell=/bin/zsh\nplatform=Linux x86_64\nnexo=/home/u/.local/bin/nexo\ntmux=/usr/bin/tmux\nherdr=/usr/bin/herdr\nplugin=no\nlocale=UTF-8\nutf8locale=C.UTF-8\nwatcher=no\ntmux_running=yes\nherdr_running=yes\n")
+	plan := planRemote(context.Background(), Input{Runner: &sequencedRemoteRunner{probe: probe}}, Options{}, "dev", "", "auto", nil)
+	if plan.Error != nil {
+		t.Fatal(plan.Error)
+	}
+	if plan.Backend != "auto" {
+		t.Fatalf("backend = %q, want auto", plan.Backend)
+	}
+	if strings.Join(plan.Kinds, ",") != "tmux,herdr" {
+		t.Fatalf("kinds = %v, want both tmux and herdr", plan.Kinds)
+	}
+	if !containsAction(plan.Actions, "initialize watcher") || !containsAction(plan.Actions, "install Herdr plugin") {
+		t.Fatalf("actions do not cover both backends: %#v", plan.Actions)
+	}
+	if !hasChangePath(plan.Changes, ".tmux.conf") {
+		t.Fatalf("tmux config missing from plan: %#v", plan.Changes)
+	}
+}
+
+func hasChangePath(changes []Change, suffix string) bool {
+	for _, change := range changes {
+		if strings.HasSuffix(change.Path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestPlanRemoteAutoWithOneRunningKeepsSingleBackend(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		tmux         string
+		needHerdr    bool
+		tmuxRunning  string
+		herdrRunning string
+		want         string
+	}{
+		{"only tmux running", "/usr/bin/tmux", false, "yes", "no", "tmux"},
+		{"only Herdr running", "/usr/bin/tmux", true, "no", "yes", "herdr"},
+	} {
+		herdr := ""
+		if test.needHerdr {
+			herdr = "/usr/bin/herdr"
+		}
+		probe := fmt.Sprintf("home=/home/u\nshell=/bin/zsh\nplatform=Linux x86_64\nnexo=/home/u/.local/bin/nexo\ntmux=%s\nherdr=%s\nplugin=no\nlocale=UTF-8\nutf8locale=C.UTF-8\nwatcher=no\ntmux_running=%s\nherdr_running=%s\n", test.tmux, herdr, test.tmuxRunning, test.herdrRunning)
+		plan := planRemote(context.Background(), Input{Runner: &sequencedRemoteRunner{probe: []byte(probe)}}, Options{}, "dev", "", "auto", nil)
+		if plan.Error != nil {
+			t.Fatalf("%s: %v", test.name, plan.Error)
+		}
+		if plan.Backend != test.want || strings.Join(plan.Kinds, ",") != test.want {
+			t.Fatalf("%s: backend=%q kinds=%v, want the single %q setup has always used", test.name, plan.Backend, plan.Kinds, test.want)
+		}
+	}
+}
+
 func TestDryRunPlanningFailureReturnsError(t *testing.T) {
 	// An unreachable machine must not be hidden by the dry-run success path.
 	// The local plan is still displayed and no config is written.
@@ -67,9 +123,12 @@ func TestDryRunPlanningFailureReturnsError(t *testing.T) {
 }
 
 type workflowMachine struct {
-	home   string
-	files  map[string][]byte
-	binary bool
+	home         string
+	files        map[string][]byte
+	binary       bool
+	herdr        bool
+	herdrRunning bool
+	herdrPlugin  bool
 }
 
 type workflowSSHRunner struct {
@@ -144,7 +203,24 @@ func (r *workflowSSHRunner) remote(machine, command string) ([]byte, error) {
 		if state.binary {
 			binary = state.home + "/.local/bin/nexo"
 		}
-		return []byte(fmt.Sprintf("home=%s\nshell=/bin/zsh\nplatform=%s %s\nnexo=%s\ntmux=/usr/bin/tmux\nherdr=\nplugin=no\nlocale=UTF-8\nutf8locale=C.UTF-8\nwatcher=yes\ntmux_running=yes\ntmux_focus=on\ntmux_hooks=yes\nherdr_running=no\n", state.home, runtime.GOOS, runtime.GOARCH, binary)), nil
+		herdr := ""
+		if state.herdr {
+			herdr = "/usr/bin/herdr"
+		}
+		plugin := "no"
+		if state.herdrPlugin {
+			plugin = "yes"
+		}
+		herdrRunning := "no"
+		if state.herdrRunning {
+			herdrRunning = "yes"
+		}
+		return []byte(fmt.Sprintf("home=%s\nshell=/bin/zsh\nplatform=%s %s\nnexo=%s\ntmux=/usr/bin/tmux\nherdr=%s\nplugin=%s\nlocale=UTF-8\nutf8locale=C.UTF-8\nwatcher=yes\ntmux_running=yes\ntmux_focus=on\ntmux_hooks=yes\nherdr_running=%s\n", state.home, runtime.GOOS, runtime.GOARCH, binary, herdr, plugin, herdrRunning)), nil
+	case strings.Contains(command, "plugin") && strings.Contains(command, "install"):
+		state.herdrPlugin = true
+		return nil, nil
+	case strings.Contains(command, "reload-config"):
+		return nil, nil
 	case strings.Contains(command, "--version"):
 		return []byte("nexo v1.0.0\n"), nil
 	case strings.Contains(command, "__NEXO_FILE_PRESENT__"):
@@ -219,6 +295,62 @@ func containsAction(actions []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func TestSetupAutoBothBackendsIntegratedAndRerunClean(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".config", "nexo", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := "[remote]\nmachines = [\"auto-both\"]\n\n[remote.backends]\nauto-both = \"auto\"\n"
+	if err := os.WriteFile(configPath, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := newWorkflowSSHRunner(home)
+	runner.machines["auto-both"] = &workflowMachine{home: "/home/both", files: map[string][]byte{}, binary: true, herdr: true, herdrRunning: true}
+	notify := true
+	options := Options{Backend: "tmux", ConfigPath: configPath, Machines: []string{"auto-both"}, Yes: true, Notify: &notify}
+	first := &bytes.Buffer{}
+	if err := Run(context.Background(), Input{Runner: runner, Home: home, Stdout: first, TTY: false}, options); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"backend=auto (tmux+herdr)", "reload tmux and initialize watcher", "install Herdr plugin"} {
+		if !strings.Contains(first.String(), want) {
+			t.Fatalf("plan missing %q:\n%s", want, first)
+		}
+	}
+	if _, ok := runner.machines["auto-both"].files["/home/both/.tmux.conf"]; !ok {
+		t.Fatalf("tmux config was not written: %#v", runner.machines["auto-both"].files)
+	}
+	if !runner.machines["auto-both"].herdrPlugin {
+		t.Fatal("Herdr plugin was not installed")
+	}
+	writes := runner.writes
+	second := &bytes.Buffer{}
+	if err := Run(context.Background(), Input{Runner: runner, Home: home, Stdout: second, TTY: false}, options); err != nil {
+		t.Fatal(err)
+	}
+	if runner.writes != writes {
+		t.Fatalf("rerun wrote remote files: before=%d after=%d", writes, runner.writes)
+	}
+	if !strings.Contains(second.String(), "ok (no changes)") {
+		t.Fatalf("rerun was not a no-op:\n%s", second)
+	}
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "auto-both = \"auto\"") {
+		t.Fatalf("setup rewrote the auto choice:\n%s", got)
+	}
+	check := &bytes.Buffer{}
+	if err := Run(context.Background(), Input{Runner: runner, Home: home, Stdout: check, TTY: false}, Options{Backend: "tmux", ConfigPath: configPath, Machines: []string{"auto-both"}, Check: true, Notify: &notify}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(check.String(), "backend=auto (tmux+herdr)") {
+		t.Fatalf("check did not list both backends:\n%s", check)
+	}
 }
 
 func TestAmbiguousRemoteBackendSuggestsLocalBackend(t *testing.T) {
