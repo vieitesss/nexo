@@ -176,6 +176,10 @@ func TestWatchSucceedsWhenStoppedBySignal(t *testing.T) {
 	source := NewAgentSource(runner)
 	setStateDir(source, t.TempDir())
 	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}, PollInterval: 1})
+	// Pin the server before Watch runs. Watch resolves an empty server under
+	// its mutex while this test polls the owner record from another goroutine,
+	// so leaving it empty makes the polling read race with that write.
+	source.server = "/tmp/tmux-test"
 	done := make(chan error, 1)
 	go func() { done <- source.Watch(context.Background()) }()
 

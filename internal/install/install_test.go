@@ -53,6 +53,18 @@ func platformRunner(extra func(name string, args ...string) ([]byte, error)) fun
 	}
 }
 
+// realTempDir returns t.TempDir() with symlinks resolved. macOS puts temp dirs
+// under /var, which is a symlink to /private/var, and installation compares
+// resolved paths against the ones it detects.
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestProbeReportsPlatformWithoutNexo(t *testing.T) {
 	fake := &fakeRunner{run: platformRunner(nil)}
 	platform, err := probe(context.Background(), NewLocalTarget(fake))
@@ -65,7 +77,7 @@ func TestProbeReportsPlatformWithoutNexo(t *testing.T) {
 }
 
 func TestDetectsHomebrewWhenKegOwnsExecutable(t *testing.T) {
-	root := t.TempDir()
+	root := realTempDir(t)
 	keg := filepath.Join(root, "Cellar", "nexo", "1.2.3")
 	bin := filepath.Join(keg, "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
@@ -192,7 +204,7 @@ func TestDetectsExplicitLocalInvocation(t *testing.T) {
 }
 
 func TestDetectsGoInstallThroughSymlink(t *testing.T) {
-	root := t.TempDir()
+	root := realTempDir(t)
 	gobin := filepath.Join(root, "go", "bin")
 	if err := os.MkdirAll(gobin, 0o755); err != nil {
 		t.Fatal(err)
@@ -463,7 +475,7 @@ func TestInstallRejectsHomebrewBeforeMutation(t *testing.T) {
 }
 
 func TestInstallPublishesReferentAndPreservesSymlink(t *testing.T) {
-	root := t.TempDir()
+	root := realTempDir(t)
 	gobin := filepath.Join(root, "go", "bin")
 	if err := os.MkdirAll(gobin, 0o755); err != nil {
 		t.Fatal(err)

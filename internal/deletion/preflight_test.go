@@ -59,7 +59,7 @@ func TestPreflightPrimaryDependentWorktreeIsHardBlocker(t *testing.T) {
 }
 
 func TestExecuteUsesTrashWithoutPermanentFallback(t *testing.T) {
-	root := t.TempDir()
+	root := realTempDir(t)
 	path := filepath.Join(root, "repo")
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestExecuteUsesTrashWithoutPermanentFallback(t *testing.T) {
 }
 
 func TestExecutePermanentRemovesSymlinkOnly(t *testing.T) {
-	root := t.TempDir()
+	root := realTempDir(t)
 	target := filepath.Join(root, "target")
 	link := filepath.Join(root, "link")
 	if err := os.Mkdir(target, 0o755); err != nil {

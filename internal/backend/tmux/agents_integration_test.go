@@ -38,7 +38,7 @@ func TestTmuxAgentPathWithTab(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	ctx := context.Background()
-	server := "nexo-test-tab-path-" + strings.ReplaceAll(t.Name(), "/", "-")
+	server := testSocket(t, "tab-path")
 	runTmux := func(args ...string) ([]byte, error) {
 		commandArgs := append([]string{"-L", server, "-f", "/dev/null"}, args...)
 		return exec.CommandContext(ctx, "tmux", commandArgs...).CombinedOutput()
@@ -76,7 +76,7 @@ func TestTmuxAgentIntegration(t *testing.T) {
 		t.Skip("tmux is not installed")
 	}
 	ctx := context.Background()
-	server := "nexo-test-" + strings.ReplaceAll(time.Now().Format("150405.000000000"), ".", "")
+	server := testSocket(t, "integration")
 	stateDir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateDir)
 	configHome := t.TempDir()
@@ -193,7 +193,7 @@ func TestTmuxAgentFindsHarnessInDescendantProcess(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	ctx := context.Background()
-	server := "nexo-test-descendant-" + strings.ReplaceAll(t.Name(), "/", "-")
+	server := testSocket(t, "descendant")
 	runTmux := func(args ...string) ([]byte, error) {
 		commandArgs := append([]string{"-L", server, "-f", "/dev/null"}, args...)
 		return exec.CommandContext(ctx, "tmux", commandArgs...).CombinedOutput()

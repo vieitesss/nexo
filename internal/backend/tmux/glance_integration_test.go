@@ -23,7 +23,7 @@ func TestTmuxGlanceRow(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	ctx := context.Background()
-	server := "nexo-test-glance-" + strings.ReplaceAll(t.Name(), "/", "-")
+	server := testSocket(t, "glance")
 	runTmux := throwawayTmux(server)
 	t.Cleanup(func() { _, _ = runTmux("kill-server") })
 
@@ -101,7 +101,7 @@ func TestTmuxGlanceOnBeforeAnySession(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	ctx := context.Background()
-	server := "nexo-test-glance-" + strings.ReplaceAll(t.Name(), "/", "-")
+	server := testSocket(t, "glance-empty")
 	runTmux := throwawayTmux(server)
 	t.Cleanup(func() { _, _ = runTmux("kill-server") })
 
@@ -142,7 +142,7 @@ func TestTmuxGlancePreservesACustomSecondRow(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	ctx := context.Background()
-	server := "nexo-test-glance-custom-" + strings.ReplaceAll(t.Name(), "/", "-")
+	server := testSocket(t, "glance-custom")
 	runTmux := throwawayTmux(server)
 	t.Cleanup(func() { _, _ = runTmux("kill-server") })
 
@@ -200,7 +200,7 @@ func TestTmuxGlanceSkipsAHiddenCustomRow(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	ctx := context.Background()
-	server := "nexo-test-glance-hidden-" + strings.ReplaceAll(t.Name(), "/", "-")
+	server := testSocket(t, "glance-hidden")
 	runTmux := throwawayTmux(server)
 	t.Cleanup(func() { _, _ = runTmux("kill-server") })
 
@@ -255,7 +255,7 @@ func TestTmuxGlanceSessionLocalOverride(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	ctx := context.Background()
-	server := "nexo-test-glance-local-" + strings.ReplaceAll(t.Name(), "/", "-")
+	server := testSocket(t, "glance-local")
 	runTmux := throwawayTmux(server)
 	t.Cleanup(func() { _, _ = runTmux("kill-server") })
 
@@ -322,7 +322,7 @@ func TestTmuxGlanceRoundTripsExactRowValues(t *testing.T) {
 	for name, value := range map[string]string{"padded": "  PAD  ", "empty": ""} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
-			server := "nexo-test-glance-exact-" + strings.ReplaceAll(t.Name(), "/", "-")
+			server := testSocket(t, "glance-exact")
 			runTmux := throwawayTmux(server)
 			t.Cleanup(func() { _, _ = runTmux("kill-server") })
 
