@@ -386,6 +386,64 @@ func TestSourceTransitionsAfterIdleThreshold(t *testing.T) {
 	}
 }
 
+func TestListAgentsDropsOnlyThePaneWhoseCaptureFails(t *testing.T) {
+	panes := []string{
+		"%1\t99\tpi\t$1\twork\ta\t1\t0\t@1\t0\t/tmp/a",
+		"%2\t98\tpi\t$1\twork\tb\t2\t0\t@2\t0\t/tmp/b",
+		"%3\t97\tpi\t$1\twork\tc\t3\t0\t@3\t0\t/tmp/c",
+	}
+	// Each capture waits until every pane's capture has started, so a serial
+	// listing times out instead of passing.
+	var started sync.WaitGroup
+	started.Add(len(panes))
+	allStarted := make(chan struct{})
+	go func() { started.Wait(); close(allStarted) }()
+	r := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "tmux":
+			joined := commandKey(args)
+			switch {
+			case strings.HasPrefix(joined, "list-panes"):
+				return []byte(strings.Join(panes, "\n") + "\n"), nil
+			case strings.HasPrefix(joined, "display-message"):
+				return []byte("/tmp/tmux-test\n"), nil
+			case strings.HasPrefix(joined, "capture-pane"):
+				started.Done()
+				select {
+				case <-allStarted:
+				case <-time.After(5 * time.Second):
+					return nil, errors.New("captures did not run concurrently")
+				}
+				if args[len(args)-1] == "%2" {
+					return nil, errors.New("can't find pane: %2")
+				}
+				return []byte("prompt> "), nil
+			}
+		case "git":
+			return []byte("main\n"), nil
+		}
+		return nil, nil
+	})
+	source := NewAgentSource(r)
+	setStateDir(source, t.TempDir())
+	source.ConfigureAgents(config.AgentsConfig{Processes: []string{"pi"}})
+
+	agents, err := source.ListAgents(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		ids = append(ids, agent.PaneID)
+		if agent.Branch != "main" {
+			t.Fatalf("agent %s branch = %q, want main", agent.PaneID, agent.Branch)
+		}
+	}
+	if !reflect.DeepEqual(ids, []string{"%1", "%3"}) {
+		t.Fatalf("agents = %#v, want %%1 and %%3 in listing order", ids)
+	}
+}
+
 func TestSourceAgentStoppingInFocusedPaneIsSeen(t *testing.T) {
 	clock := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	screen := "⠋ working"
