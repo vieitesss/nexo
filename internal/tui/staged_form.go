@@ -83,6 +83,14 @@ func (field *formField) setValue(value string) {
 	case formText:
 		field.invalidDefault = ""
 		field.input.SetValue(value)
+		// A live validator also judges values the form fills in, such as a
+		// suggested destination, so its error shows before the user edits.
+		if field.Validate != nil {
+			field.Error = ""
+			if field.input.Err != nil {
+				field.Error = field.input.Err.Error()
+			}
+		}
 	case formChoice:
 		field.choiceIndex = optionIndex(field.Options, value)
 	case formToggle:

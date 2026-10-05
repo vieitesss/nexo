@@ -119,6 +119,48 @@ func TestCloneFormKeepsTypedDestinationWhenSourceChanges(t *testing.T) {
 	}
 }
 
+func TestCloneFormWarnsAboutExistingDestinationBeforeEnter(t *testing.T) {
+	root := t.TempDir()
+	if err := mkdirForTUITest(filepath.Join(root, "repo")); err != nil {
+		t.Fatal(err)
+	}
+	cloned := false
+	deps := Deps{
+		Projects:     []picker.Place{{Kind: picker.ProjectKind, Path: filepath.Join(root, "existing"), Group: root}},
+		CloneProject: func(context.Context, cloneflow.Request) error { cloned = true; return nil },
+		Home:         root,
+	}
+	model := NewModel(context.Background(), deps, ProjectsTab)
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("owner/repo")})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if got := destinationError(model); !strings.Contains(got, "already exists") {
+		t.Fatalf("destination error = %q, want the suggestion flagged as existing", got)
+	}
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil || cloned || model.input.form == nil {
+		t.Fatal("Enter cloned into an existing destination")
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-2")})
+	if got := destinationError(model); got != "" {
+		t.Fatalf("destination error = %q, want it cleared for a new path", got)
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyBackspace})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyBackspace})
+	if got := destinationError(model); !strings.Contains(got, "already exists") {
+		t.Fatalf("destination error = %q, want a warning while typing an existing path", got)
+	}
+}
+
+func destinationError(model Model) string {
+	if field := model.input.form.currentField(); field != nil && field.ID == "destination" {
+		return field.Error
+	}
+	return ""
+}
+
 func TestCloneFormKeepsInlineDestinationError(t *testing.T) {
 	root := t.TempDir()
 	deps := Deps{

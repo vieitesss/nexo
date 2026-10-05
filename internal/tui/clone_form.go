@@ -17,7 +17,7 @@ import (
 // was started from; the destination defaults to folder/<repository name>.
 func newCloneForm(deps Deps, ctx context.Context, folder string) *stagedForm {
 	clone := deps.CloneConfig.WithDefaults()
-	destinationFields := []formField{{ID: "destination", Label: "path", Default: "", Kind: formText, Placeholder: "project directory", AbbreviateHome: true}}
+	destinationFields := []formField{{ID: "destination", Label: "path", Default: "", Kind: formText, Placeholder: "project directory", AbbreviateHome: true, Validate: cloneDestinationValidator(deps)}}
 	if deps.AddProjectPath != nil {
 		destinationFields = append(destinationFields, formField{ID: "add-parent", Label: "add parent", Default: "no", Kind: formToggle})
 	}
@@ -84,6 +84,18 @@ func cloneFormValidation(deps Deps, folder string) func(*stagedForm) formValidat
 			result.Notice = fmt.Sprintf("parent %q is not in project paths; choose whether to add it", resolved.Parent)
 		}
 		return result
+	}
+}
+
+// cloneDestinationValidator checks the destination while it is typed or
+// suggested, so an existing path is reported before Enter starts the clone.
+func cloneDestinationValidator(deps Deps) func(string, formValues) error {
+	return func(value string, _ formValues) error {
+		if strings.TrimSpace(value) == "" {
+			return nil
+		}
+		_, err := destination.ResolvePath(value, deps.ProjectPaths, deps.Home)
+		return err
 	}
 }
 
