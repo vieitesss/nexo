@@ -56,7 +56,9 @@ a copy of nexo that the main machine calls over SSH.
 - `[remote.backends] MACHINE = "tmux"` or `"herdr"` when the remote runs both
   a Herdr server and tmux. The auto probe picks Herdr whenever a Herdr server
   is running, so agents living in tmux sessions would be missed. Set it
-  explicitly to list the multiplexer you actually use there.
+  explicitly to list the multiplexer you actually use there. Keep `"auto"`
+  when you enter that machine from both; `nexo setup` then integrates tmux and
+  Herdr there (see [setup.md](setup.md#manual-remote-provisioning)).
 - The proxy attachment transport, `remote.transport` (SSH by default).
 
 ```toml
