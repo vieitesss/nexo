@@ -62,8 +62,8 @@ func TestRemoteProxyMergesWithRemoteContainerAndRemainsVisibleWhenStale(t *testi
 			count++
 		}
 	}
-	if count != 1 {
-		t.Fatalf("rows = %v, want one merged remote row", rows)
+	if count != 2 {
+		t.Fatalf("rows = %v, want separate proxy and remote rows", rows)
 	}
 	model.SetSize(100, 12)
 	plain := shell.Plain(model.View())

@@ -13,6 +13,7 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/pathpolicy"
+	"github.com/vieitesss/nexo/internal/proxy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
@@ -54,16 +55,14 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 		if len(fields) < 2 || fields[0] == "" || fields[1] == "" {
 			continue
 		}
-		proxyMachine, proxyContainer, proxy := "", "", false
+		proxyMachine, proxyContainer, isProxy := "", "", false
 		if len(fields) >= 4 && strings.TrimSpace(fields[3]) != "" {
-			proxyMachine, proxyContainer, proxy = b.proxyTarget(fields[3])
+			proxyMachine, proxyContainer, isProxy = b.proxyTarget(fields[3])
 			// A session carrying nexo metadata is a proxy even if its identity
 			// is stale or malformed; do not leak it into the local list.
-			if !proxy {
+			if !isProxy {
 				continue
 			}
-		} else if identity, ok := proxyidentity.ParseValue(fields[1]); ok && b.isRemoteMachine(identity.Machine) {
-			proxyMachine, proxyContainer, proxy = proxyidentity.NormalizeMachineName(identity.Machine), CanonicalContainerName(identity.Container), true
 		}
 		var activity *time.Time
 		if len(fields) >= 3 {
@@ -77,8 +76,9 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 			paneID = strings.TrimSpace(fields[4])
 		}
 		name, containerMachine := fields[1], machine
-		if proxy {
+		if isProxy {
 			name, containerMachine = proxyContainer, proxyMachine
+			name = proxy.ProxyDisplayName(name, proxyMachine)
 		}
 		containers = append(containers, capabilities.Container{
 			ID:           fields[0],
@@ -86,7 +86,7 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 			Machine:      containerMachine,
 			ActivePaneID: paneID,
 			Activity:     activity,
-			Proxy:        proxy,
+			Proxy:        isProxy,
 		})
 	}
 	return containers, nil
@@ -97,7 +97,7 @@ func (b *Backend) proxyTarget(value string) (string, string, bool) {
 	if !ok || !b.isRemoteMachine(identity.Machine) {
 		return "", "", false
 	}
-	return proxyidentity.NormalizeMachineName(identity.Machine), CanonicalContainerName(identity.Container), true
+	return proxyidentity.NormalizeMachineName(identity.Machine), proxy.CanonicalContainerName(identity.Container), true
 }
 
 // RenameContainer renames a tmux session by its stable session ID.

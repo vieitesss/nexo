@@ -16,10 +16,10 @@ import (
 const maxEntries = 32
 
 // Entry is the stable identity of a recently focused or opened container.
-// Proxy entries retain the remote machine/container pair separately from the
-// local proxy's native ID, so reconnects cannot change their target. Names are
-// mutable display data for local entries and authoritative identity for
-// proxies.
+// Proxy entries retain the remote machine separately from the local proxy's
+// native ID, so reconnects and remote session switches cannot change their
+// machine history. Names are mutable display data for local entries and empty
+// for newly recorded machine proxies; legacy proxy names remain readable.
 type Entry struct {
 	ID      string `json:"id,omitempty"`
 	Name    string `json:"name,omitempty"`
@@ -128,7 +128,7 @@ func sameContainer(a, b Entry) bool {
 		return false
 	}
 	if a.Proxy {
-		return a.Machine == b.Machine && a.Name == b.Name
+		return strings.EqualFold(strings.TrimSpace(a.Machine), strings.TrimSpace(b.Machine)) && a.Name == b.Name
 	}
 	return a.ID == b.ID
 }

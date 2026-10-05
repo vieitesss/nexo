@@ -2,6 +2,8 @@ package commands
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/proxy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
@@ -133,7 +136,7 @@ func (p *policyBackedProxy) Proxy(ctx context.Context, machine, container string
 }
 
 func (p *policyBackedProxy) ProxySessionID(ctx context.Context, machine, container string) (string, error) {
-	return proxyidentity.NewPolicy(p.machines).Resolve(ctx, proxyidentity.NewIdentity(machine, container), p.store)
+	return proxyidentity.Resolve(ctx, proxyidentity.NewIdentity(machine, container), p.store)
 }
 
 func (p *policyBackedProxy) KillContainer(_ context.Context, id string) error {
@@ -247,6 +250,104 @@ func TestRemoteNewQuotesRemoteContainerName(t *testing.T) {
 	}
 }
 
+// attachProxyAdapter is the Herdr adapter seam for the hidden attachment: it
+// can open proxies and close the workspace that owns a finished one.
+type attachProxyAdapter struct {
+	closed []string
+}
+
+func (a *attachProxyAdapter) Proxy(context.Context, string, string) error { return nil }
+
+func (a *attachProxyAdapter) CloseProxyWorkspace(_ context.Context, paneID string) error {
+	a.closed = append(a.closed, paneID)
+	return nil
+}
+
+// TestRemoteAttachUsesTheSelectedBackendRendezvous pins that the process
+// transport shared by attachment and explicit switching names the same
+// rendezvous file for the backend that runs the attachment.
+func TestRemoteAttachUsesTheSelectedBackendRendezvous(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		selection backend.Selection
+		args      []string
+		env       map[string]string
+	}{
+		{name: "tmux", selection: backend.Selection{Kind: backend.Tmux}, args: []string{"attach", "--", "reviewbox"}},
+		{
+			name:      "herdr",
+			selection: backend.Selection{Kind: backend.Herdr},
+			args:      []string{"attach", "--from-env"},
+			env:       map[string]string{"NEXO_PROXY_MACHINE": "reviewbox", "HERDR_PANE_ID": "p1"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			capture := filepath.Join(dir, "ssh-args")
+			t.Setenv("NEXO_TEST_SSH_ARGS", capture)
+			for key, value := range test.env {
+				t.Setenv(key, value)
+			}
+			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$NEXO_TEST_SSH_ARGS\"\nexit 0\n"
+			if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			adapter := &attachProxyAdapter{}
+			test.selection.Adapter = adapter
+			err := (remoteCommand{}).Run(context.Background(), Invocation{
+				Selection: test.selection,
+				Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"reviewbox"}, Transport: "ssh"}},
+				Adapter:   adapter,
+				Args:      test.args,
+				Stdin:     strings.NewReader(""),
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			captured, err := os.ReadFile(capture)
+			if err != nil {
+				t.Fatalf("read captured ssh argv: %v", err)
+			}
+			key := proxy.ProxyRendezvousKey(test.name, "reviewbox")
+			if !strings.Contains(string(captured), "nexo-proxy-"+key+".tty") {
+				t.Fatalf("attachment argv = %q, want the %s rendezvous %q", captured, test.name, key)
+			}
+			other := "herdr"
+			if test.name == "herdr" {
+				other = "tmux"
+			}
+			if strings.Contains(string(captured), "nexo-proxy-"+proxy.ProxyRendezvousKey(other, "reviewbox")+".tty") {
+				t.Fatalf("attachment argv = %q, must not use the %s rendezvous", captured, other)
+			}
+		})
+	}
+}
+
+func TestRemoteAttachAcceptsOnlyMachineAndInitialForms(t *testing.T) {
+	for _, args := range [][]string{
+		{"attach", "--", "machine"},
+		{"attach", "machine"}, // the CLI flag parser removes the delimiter
+		{"attach", "--initial", "container", "--", "machine"},
+		{"attach", "--initial", "container", "machine"},
+		{"attach", "--from-env"},
+		{"attach", "--initial", "container", "--from-env"},
+	} {
+		if _, err := parseRemoteAttachOptions(args); err != nil {
+			t.Errorf("parseRemoteAttachOptions(%#v) = %v, want success", args, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"attach", "machine", "container"},
+		{"attach", "--initial", "container", "machine", "extra"},
+		{"attach", "--from-env", "machine"},
+	} {
+		if _, err := parseRemoteAttachOptions(args); err == nil {
+			t.Errorf("parseRemoteAttachOptions(%#v) succeeded, want rejection", args)
+		}
+	}
+}
+
 func TestRemoteAttachValidatesBackendAndMachine(t *testing.T) {
 	proxy := &recordingRemoteProxy{}
 	for _, test := range []struct {
@@ -262,7 +363,7 @@ func TestRemoteAttachValidatesBackendAndMachine(t *testing.T) {
 				Selection: test.selection,
 				Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
 				Adapter:   proxy,
-				Args:      []string{"attach", "other", "--help"},
+				Args:      []string{"attach", "--", "other"},
 			})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Run() error = %v, want %q", err, test.want)

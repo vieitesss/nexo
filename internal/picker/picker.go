@@ -49,25 +49,20 @@ type RemoteBatch struct {
 // DisplayRemainder keep ranking and rendering independent of filesystem paths;
 // Path and Group remain populated for project places.
 type Place struct {
-	Kind             PlaceKind `json:"kind"`
-	Path             string    `json:"path,omitempty"`
-	Group            string    `json:"group,omitempty"`
-	Machine          string    `json:"machine,omitempty"`
-	SearchText       string    `json:"search_text,omitempty"`
-	DisplayRemainder string    `json:"display_remainder,omitempty"`
-	ContainerID      string    `json:"container_id,omitempty"`
-	ContainerName    string    `json:"container_name,omitempty"`
-	// RemoteContainerID is the stable ID of the container a proxy row
-	// attaches to. Merging fills it from the remote row so agent association
-	// can match the remote identity without falling back to a label for every
-	// ID-bearing agent.
-	RemoteContainerID string     `json:"-"`
-	Preview           string     `json:"preview,omitempty"`
-	Activity          *time.Time `json:"activity,omitempty"`
-	Proxy             bool       `json:"proxy,omitempty"`
-	OpenAction        OpenAction `json:"-"`
-	Git               bool       `json:"git,omitempty"`
-	LinkedWorktree    bool       `json:"linked_worktree,omitempty"`
+	Kind             PlaceKind  `json:"kind"`
+	Path             string     `json:"path,omitempty"`
+	Group            string     `json:"group,omitempty"`
+	Machine          string     `json:"machine,omitempty"`
+	SearchText       string     `json:"search_text,omitempty"`
+	DisplayRemainder string     `json:"display_remainder,omitempty"`
+	ContainerID      string     `json:"container_id,omitempty"`
+	ContainerName    string     `json:"container_name,omitempty"`
+	Preview          string     `json:"preview,omitempty"`
+	Activity         *time.Time `json:"activity,omitempty"`
+	Proxy            bool       `json:"proxy,omitempty"`
+	OpenAction       OpenAction `json:"-"`
+	Git              bool       `json:"git,omitempty"`
+	LinkedWorktree   bool       `json:"linked_worktree,omitempty"`
 	// GitContext is populated asynchronously for Git project candidates.
 	GitContext *GitContext `json:"-"`
 	// PullRequest is populated asynchronously from the checkout's upstream;
@@ -123,9 +118,9 @@ func ContainerPlaces(containers []capabilities.Container) []Place {
 	return places
 }
 
-// MergeContainerPlaces combines local proxy rows with their remote container.
-// A proxy's local ID is retained so local close actions still target the proxy;
-// the remote row supplies the open action and remote metadata when available.
+// MergeContainerPlaces folds a later container snapshot into base rows with
+// the same key. Proxy rows and remote container rows have distinct keys, so a
+// proxy never absorbs remote metadata; only the first open action fills in.
 func MergeContainerPlaces(base, extra []Place) []Place {
 	merged := append([]Place(nil), base...)
 	indexes := make(map[string]int)
@@ -134,10 +129,7 @@ func MergeContainerPlaces(base, extra []Place) []Place {
 			continue
 		}
 		key := containerPlaceKey(place)
-		// Distinct rows may share a machine and label. Prefer the proxy row
-		// for a key so the remote snapshot still merges into it; the other
-		// rows stay in the snapshot untouched.
-		if existing, ok := indexes[key]; !ok || (!merged[existing].Proxy && place.Proxy) {
+		if _, ok := indexes[key]; !ok {
 			indexes[key] = index
 		}
 	}
@@ -153,36 +145,22 @@ func MergeContainerPlaces(base, extra []Place) []Place {
 			merged = append(merged, place)
 			continue
 		}
-		merged[index] = mergeContainerPlace(merged[index], place)
+		if merged[index].OpenAction == nil {
+			merged[index].OpenAction = place.OpenAction
+		}
 	}
 	return merged
 }
 
 func containerPlaceKey(place Place) string {
+	if place.Proxy {
+		// A machine proxy is named for its machine, while the remote session it
+		// currently shows may legitimately have the same name. Keep proxy rows
+		// keyed by their local identity so closing one can never target the
+		// remote row that happens to share its display label.
+		return "proxy\x00" + strings.ToLower(strings.TrimSpace(place.Machine)) + "\x00" + place.ContainerID
+	}
 	return strings.ToLower(strings.TrimSpace(place.Machine)) + "\x00" + place.ContainerName
-}
-
-func mergeContainerPlace(left, right Place) Place {
-	if left.Proxy == right.Proxy {
-		if left.OpenAction == nil {
-			left.OpenAction = right.OpenAction
-		}
-		return left
-	}
-	proxy, remote := left, right
-	if !proxy.Proxy {
-		proxy, remote = right, left
-	}
-	proxy.SearchText = remote.SearchText
-	proxy.DisplayRemainder = remote.DisplayRemainder
-	proxy.Preview = remote.Preview
-	proxy.Activity = remote.Activity
-	proxy.Agents = remote.Agents
-	proxy.RemoteContainerID = strings.TrimSpace(remote.ContainerID)
-	if remote.OpenAction != nil {
-		proxy.OpenAction = remote.OpenAction
-	}
-	return proxy
 }
 
 // Match is the result of matching a query against text.

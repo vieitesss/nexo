@@ -44,9 +44,6 @@ func associateAgents(places []Place, agents []capabilities.Agent, machine string
 			continue
 		}
 		matches := byID[strings.TrimSpace(place.ContainerID)]
-		if len(matches) == 0 && strings.TrimSpace(place.RemoteContainerID) != "" {
-			matches = byID[strings.TrimSpace(place.RemoteContainerID)]
-		}
 		if len(matches) == 0 && labelCounts[strings.TrimSpace(place.ContainerName)] == 1 {
 			matches = byLabel[strings.TrimSpace(place.ContainerName)]
 		}

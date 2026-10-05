@@ -10,6 +10,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/containerstate"
+	"github.com/vieitesss/nexo/internal/proxy"
 )
 
 var (
@@ -51,6 +52,7 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 			return nil, paneErr
 		}
 		if isProxy {
+			proxyContainer = proxy.ProxyDisplayName(proxyContainer, proxyMachine)
 			containers = append(containers, capabilities.Container{
 				ID:           workspace.ID,
 				Name:         proxyContainer,

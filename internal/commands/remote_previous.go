@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
-	"github.com/vieitesss/nexo/internal/remote"
 )
 
 func runRemotePrevious(ctx context.Context, invocation Invocation) error {
@@ -32,7 +30,6 @@ func runRemotePrevious(ctx context.Context, invocation Invocation) error {
 		return fmt.Errorf("identify current proxy: %w", err)
 	}
 	var live map[string]struct{}
-	remotes := remoteContainerNames{orchestrator: newRemoteOrchestrator(invocation, nil)}
 	for _, entry := range entries {
 		if !entry.Proxy {
 			// Local entries live in this machine's history, so they are only
@@ -54,7 +51,7 @@ func runRemotePrevious(ctx context.Context, invocation Invocation) error {
 			}
 			return opener.OpenContainer(ctx, entry.ID)
 		}
-		if entry.Machine == "" || entry.Name == "" {
+		if entry.Machine == "" {
 			continue
 		}
 		// Skip the machine we are attached to and any machine that is no longer
@@ -62,45 +59,9 @@ func runRemotePrevious(ctx context.Context, invocation Invocation) error {
 		if proxyidentity.NormalizeMachineName(entry.Machine) == current || !configured.IsMachineConfigured(entry.Machine) {
 			continue
 		}
-		// A proxy to a missing container ends at once, and tmux then detaches
-		// the client from the local server.
-		if remotes.gone(ctx, entry.Machine, entry.Name) {
-			continue
-		}
-		return proxy.Proxy(ctx, entry.Machine, entry.Name)
+		return proxy.Proxy(ctx, entry.Machine, "")
 	}
 	return reportNothingEligible(ctx, invocation, "no previous container on another machine")
-}
-
-// remoteContainerNames lists each machine at most once per invocation.
-type remoteContainerNames struct {
-	orchestrator remote.Orchestrator
-	byMachine    map[string]map[string]struct{}
-}
-
-// gone reports whether a reachable machine no longer has the container. An
-// unreachable machine keeps its entries: the proxy's reconnect loop rides out
-// the outage.
-func (r *remoteContainerNames) gone(ctx context.Context, machine, container string) bool {
-	if r.byMachine == nil {
-		r.byMachine = make(map[string]map[string]struct{})
-	}
-	names, listed := r.byMachine[machine]
-	if !listed {
-		result := r.orchestrator.List(ctx, []string{machine})[0]
-		if result.Error == "" {
-			names = make(map[string]struct{}, len(result.Containers))
-			for _, listedContainer := range result.Containers {
-				names[tmux.CanonicalContainerName(listedContainer.Name)] = struct{}{}
-			}
-		}
-		r.byMachine[machine] = names
-	}
-	if names == nil {
-		return false
-	}
-	_, ok := names[tmux.CanonicalContainerName(container)]
-	return !ok
 }
 
 // reportNothingEligible tells the user why a key-bound command did nothing.

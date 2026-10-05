@@ -7,7 +7,7 @@ import (
 	"github.com/vieitesss/nexo/internal/containerstate"
 )
 
-func TestCatalogSnapshotMergesSourcesAndAssociatesAgents(t *testing.T) {
+func TestCatalogSnapshotKeepsProxySeparateFromSameNamedRemote(t *testing.T) {
 	catalog := NewCatalog(nil, []capabilities.Container{
 		{ID: "proxy", Name: "api", Machine: "DEV", Proxy: true},
 		{ID: "other", Name: "local-api"},
@@ -23,23 +23,26 @@ func TestCatalogSnapshotMergesSourcesAndAssociatesAgents(t *testing.T) {
 	})
 
 	snapshot := catalog.Snapshot()
-	if len(snapshot.Places) != 2 {
-		t.Fatalf("places = %#v, want merged api and local rows", snapshot.Places)
+	if len(snapshot.Places) != 3 {
+		t.Fatalf("places = %#v, want separate proxy, remote, and local rows", snapshot.Places)
 	}
-	var merged, local Place
+	var proxy, remote, local Place
 	for _, place := range snapshot.Places {
-		if place.Machine == "dev" {
-			merged = place
+		if place.ContainerID == "proxy" {
+			proxy = place
+		}
+		if place.ContainerID == "remote" {
+			remote = place
 		}
 		if place.ContainerID == "other" {
 			local = place
 		}
 	}
-	if merged.ContainerID != "proxy" || !merged.Proxy || merged.OpenAction != nil {
-		t.Fatalf("merged proxy = %#v, want local identity and proxy", merged)
+	if !proxy.Proxy || len(proxy.Agents) != 0 {
+		t.Fatalf("proxy = %#v, want isolated proxy identity", proxy)
 	}
-	if len(merged.Agents) != 1 || merged.Agents[0].PaneID != "remote-agent" {
-		t.Fatalf("remote agents = %#v, want one associated agent", merged.Agents)
+	if len(remote.Agents) != 1 || remote.Agents[0].PaneID != "remote-agent" {
+		t.Fatalf("remote agents = %#v, want one associated agent", remote.Agents)
 	}
 	if len(local.Agents) != 1 || local.Agents[0].PaneID != "local" {
 		t.Fatalf("local agents = %#v, want one associated agent", local.Agents)
@@ -113,7 +116,7 @@ func TestCatalogNeverReassignsIDBearingAgentByLabel(t *testing.T) {
 	}
 }
 
-func TestCatalogProxyUsesRemoteIdentityForAgentAssociation(t *testing.T) {
+func TestCatalogKeepsProxySeparateFromRemoteAgentAssociation(t *testing.T) {
 	catalog := NewCatalog(nil, []capabilities.Container{{ID: "proxy", Name: "api", Machine: "dev", Proxy: true}}, nil)
 	catalog.ApplyRemote(RemoteBatch{
 		Machine: "dev",
@@ -121,15 +124,12 @@ func TestCatalogProxyUsesRemoteIdentityForAgentAssociation(t *testing.T) {
 		Agents:  []capabilities.Agent{{PaneID: "stale", ContainerID: "old", Container: "api", State: "working"}},
 	})
 	snapshot := catalog.Snapshot()
-	if len(snapshot.Places) != 1 {
-		t.Fatalf("places = %#v, want one merged proxy", snapshot.Places)
+	if len(snapshot.Places) != 2 {
+		t.Fatalf("places = %#v, want separate proxy and remote rows", snapshot.Places)
 	}
 	proxy := snapshot.Places[0]
-	if proxy.ContainerID != "proxy" || proxy.RemoteContainerID != "new" {
-		t.Fatalf("proxy identity = %#v, want local ID and remote identity", proxy)
-	}
-	if len(proxy.Agents) != 0 {
-		t.Fatalf("stale remote agent attached to proxy: %#v", proxy.Agents)
+	if proxy.ContainerID != "proxy" || len(proxy.Agents) != 0 {
+		t.Fatalf("proxy identity = %#v, want isolated local identity", proxy)
 	}
 	catalog.ApplyRemote(RemoteBatch{
 		Machine: "dev",
@@ -137,8 +137,11 @@ func TestCatalogProxyUsesRemoteIdentityForAgentAssociation(t *testing.T) {
 		Agents:  []capabilities.Agent{{PaneID: "remote-agent", ContainerID: "new", Container: "api", State: "working"}},
 	})
 	snapshot = catalog.Snapshot()
-	if len(snapshot.Places) != 1 || len(snapshot.Places[0].Agents) != 1 || snapshot.Places[0].Agents[0].PaneID != "remote-agent" {
-		t.Fatalf("remote agent did not associate through proxy identity: %#v", snapshot.Places)
+	if len(snapshot.Places) != 2 {
+		t.Fatalf("places = %#v, want separate proxy and remote rows", snapshot.Places)
+	}
+	if len(snapshot.Places[0].Agents) != 0 || len(snapshot.Places[1].Agents) != 1 || snapshot.Places[1].Agents[0].PaneID != "remote-agent" {
+		t.Fatalf("remote agent association = %#v, want remote row only", snapshot.Places)
 	}
 }
 

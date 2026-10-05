@@ -13,7 +13,7 @@ import (
 
 func runRemoteClose(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) > 2 {
-		return UsageError{Err: errors.New("remote close accepts at most MACHINE/CONTAINER")}
+		return UsageError{Err: errors.New("remote close accepts at most MACHINE or MACHINE/CONTAINER")}
 	}
 	if invocation.Runner == nil {
 		return errors.New("remote close requires a command runner")
@@ -24,11 +24,11 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 	} else {
 		paster, ok := invocation.Adapter.(capabilities.RemotePaste)
 		if !ok {
-			return errors.New("remote close requires MACHINE/CONTAINER outside a proxy session")
+			return errors.New("remote close requires MACHINE or MACHINE/CONTAINER outside a proxy session")
 		}
 		pane := currentPaneID(invocation.Selection.Kind)
 		if pane == "" {
-			return errors.New("remote close requires MACHINE/CONTAINER outside a proxy session")
+			return errors.New("remote close requires MACHINE or MACHINE/CONTAINER outside a proxy session")
 		}
 		var err error
 		target, err = paster.ProxyTarget(ctx, pane)
@@ -44,7 +44,7 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 	}
 	identity, err := proxyidentity.ParseTarget(target)
 	if err != nil {
-		return UsageError{Err: fmt.Errorf("remote close requires MACHINE/CONTAINER: %w", err)}
+		return UsageError{Err: fmt.Errorf("remote close requires MACHINE or MACHINE/CONTAINER: %w", err)}
 	}
 	// Closing is local-only. Do not probe the remote machine: links are often
 	// down precisely when a stale local proxy needs to be removed.
@@ -66,7 +66,7 @@ func runRemoteClose(ctx context.Context, invocation Invocation) error {
 		return err
 	}
 	if sessionID == "" {
-		return fmt.Errorf("proxy %q/%q was not found", identity.Machine, identity.Container)
+		return fmt.Errorf("proxy %s was not found", identity.String())
 	}
 	return killer.KillContainer(ctx, sessionID)
 }

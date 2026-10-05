@@ -8,19 +8,21 @@ its container listing. An entry in `[remote.backends]` selects `tmux` or
 result and reused when a place is opened; no second probe is needed.
 
 A machine whose server is not running Herdr is treated as a tmux machine. On a
-tmux backend, opening one of its containers creates a local proxy container
-named `MACHINE/CONTAINER`. Its only pane runs the configured attachment
-transport; the local prefix and status bar are disabled for that container, so
-input and the status bar belong to the remote multiplexer.
+tmux backend, opening one of its containers creates one local machine proxy,
+labeled from `MACHINE` (possibly `MACHINE~remote`). Its only pane resolves the
+most recently attached remote
+tmux session at attach time. The local prefix and status bar are disabled for
+that proxy, so input and the status bar belong to the remote multiplexer.
+Explicit `remote open MACHINE/CONTAINER` creates the proxy with one initial
+pinned attach, then switches the proxy's existing remote client for later
+opens. M-o/`remote previous` only switches to the existing machine proxy and
+never retargets it.
 
-A local tmux session whose name exactly matches `MACHINE/CONTAINER` for a
-configured remote machine is also treated as a proxy, even when nexo did not
-create it. It is hidden from the local machine and shown under `MACHINE`;
-opening it adopts the existing session and stamps the session-scoped
-`@nexo-proxy` option. Remote and local proxy rows are merged so the container
-appears only once. Machine names are matched case-insensitively after trimming
-whitespace, and names supplied only in `[remote.backends]` are configured
-machines too.
+Only the session-scoped `@nexo-proxy` tag identifies a proxy; the local name is
+a display label. If a local non-proxy session already occupies `MACHINE` in
+tmux's canonical spelling, nexo uses a suffix such as `MACHINE~remote` rather
+than adopting it. Legacy tagged `MACHINE/CONTAINER` sessions are left untouched
+and remain readable as their machine; they are not migrated or adopted.
 
 ```toml
 [remote]
@@ -149,29 +151,40 @@ unsupported-backend message directing the user to open it from Herdr instead.
 ## tmux remotes from Herdr
 
 When the local backend is Herdr and the remote kind is tmux, nexo fills the
-missing capability with a Herdr workspace proxy. The workspace label is
-`MACHINE/CONTAINER`. Nexo stores the exact identity in Herdr workspace display
-metadata as the `nexo-proxy` token and normally finds proxies by that token.
-Its root pane runs the same hidden `nexo remote attach` command and reconnect
-loop used by tmux proxies.
+missing capability with one Herdr workspace proxy per machine. The workspace
+label and `nexo-proxy` token are the machine name only, and its root pane runs
+the same unpinned hidden `nexo remote attach` command and reconnect loop used
+by tmux proxies. Herdr's `NEXO_PROXY_MACHINE` environment is machine-only;
+there is no fixed `NEXO_PROXY_CONTAINER`.
 
-A local workspace whose label exactly matches `MACHINE/CONTAINER` for a
-configured machine is also treated as a proxy, even without a token. Opening
-it reuses the workspace and stamps the token on it. Such a proxy is hidden from
-the local machine and merged with the matching remote row. If the remote is
-unreachable or the container is gone, the proxy remains visible under its
-machine so it can be closed. Labels such as `0` without a configured machine
-prefix remain local.
+Only the metadata token identifies a proxy. A local workspace label matching a
+machine is never adopted as a machine proxy. Legacy machine/container tokens
+remain readable as their machine and are left untouched.
 
 ## Attachment and commands
 
-The SSH transport retries dropped attachments with exponential backoff up to
-`reconnect-max`. Only an SSH connection error (exit status 255) is retried;
-any other exit status ends the attachment. The SSH attachment enables
-`ServerAliveInterval=15` and `ServerAliveCountMax=3` so a dropped link is
-detected promptly; listing and other remote commands use plain SSH. Press `q`
-during a retry wait to leave the local proxy; other keys typed during the wait
-are discarded. Mosh and ET provide their own reconnection behavior. Closing a
+The attachment resolves the remote target with
+`tmux list-sessions -F '#{session_last_attached} #{session_id}'`, sorted by
+`session_last_attached`; it deliberately does not use `session_activity`,
+which a chatty pane can win. The command runs through `sh -c` for SSH, mosh,
+and ET and records its remote tmux client tty under the runtime directory.
+The rendezvous key digests the local host, backend, and machine, so tmux and
+Herdr proxies for one machine, and distinct machine aliases, cannot collide.
+An explicit open resolves that tty with
+`tmux list-clients -F '#{client_tty} #{client_name}'` and switches the same
+remote client without restarting the local pane. If the target is missing it
+reports `no session CONTAINER on MACHINE` and leaves the healthy proxy alone.
+If the client is stale or the link is unavailable, tmux respawns the pane;
+Herdr closes and recreates its workspace with the requested initial target.
+
+Dropped attachments retry with exponential backoff up to `reconnect-max` and
+all reconnects are unpinned. SSH enables `ServerAliveInterval=15` and
+`ServerAliveCountMax=3`. mosh and et still provide their own transport-level
+reconnection; `RunReconnect` additionally reruns the attachment resolver after
+any transport process exits, so a removed remote session moves to the next
+most-recent session instead of ending the local proxy. When there are no
+remote sessions, the pane remains alive and prints `no sessions on MACHINE —
+press r to retry, q to close`; it never creates a remote session. Closing a
 proxy only removes the local container; it never closes the remote container.
 
 Commands:
@@ -180,25 +193,22 @@ Commands:
   appropriate local proxy.
 - `nexo remote new MACHINE [NAME]` creates a remote Herdr workspace or tmux
   session and opens it using the same rules as `remote open`.
-- `nexo remote close [MACHINE/CONTAINER]` closes only the local proxy. With no
-  target, the current proxy is used where the active backend exposes one.
+- `nexo remote close [MACHINE|MACHINE/CONTAINER]` closes only the local proxy. With no
+  target inside a machine proxy, it closes by machine; outside a proxy a target
+  is required.
 - `nexo remote list` lists remote containers and includes each machine's
   detected kind in `--json` output. Listing always uses SSH.
 - `nexo previous` opens the last non-proxy container on this machine that is
   not the current one. It skips proxies, containers that no longer exist, and
   the container that currently owns the pane, and does nothing when nothing
   else is live.
-- `nexo remote previous` toggles between machines: it opens the most recently
-  used container on a machine other than the current one. The current machine
-  is the proxy's machine inside a proxy and the local machine otherwise, so
-  from a local container it opens the last remote proxy, and from that proxy it
-  returns to the last local container. With several remotes, the most recently
-  used other machine wins, local or remote. Proxies on machines that are no
-  longer configured and local containers that no longer exist are skipped.
-  When nothing is eligible it says so on the tmux status line (or on stderr
-  where the backend has no status line) instead of exiting silently. The
-  proxy identity is recorded as a machine/container pair, so reconnects do not
-  replace it with the local proxy label.
+- `nexo remote previous`/M-o toggles by machine: it opens the most recently
+  used configured machine other than the current one. The current machine is
+  the proxy's machine inside a proxy and the local machine otherwise. It
+  switches to an existing machine proxy as-is or creates one unpinned; it
+  never lists remote sessions or retargets an existing proxy. Legacy
+  `MACHINE/CONTAINER` history entries count as their machine. Local entries are
+  considered only from a proxy and only while live.
 
 Both commands read the same durable history that focus hooks and events write:
 tmux records `pane-focus-in` and `client-session-changed` through `nexo tmux

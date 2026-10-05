@@ -94,22 +94,24 @@ listing detects and carries this value so an open operation can choose a native
 Herdr path or a tmux proxy without probing the machine again.
 
 **Proxy**:
-A local container named `MACHINE/CONTAINER` whose only pane attaches to a
-container on another machine. Closing or detaching a proxy never closes the
-remote container.
+A local container whose label is derived from a machine (it may be
+`machine~remote`) and whose only pane attaches to the currently selected
+container on another machine. There is at most one proxy per machine; remote
+previous switches to that proxy without changing its remote client.
+Closing or detaching a proxy never closes the remote container.
 _Avoid_: mirror, remote session (that is what a proxy attaches to)
 
 **Proxy identity**:
-The machine/container pair that identifies a proxy independently of its local
-container label or native metadata. Machine matching is case-insensitive. The
-container spelling follows the resolved remote multiplexer rather than the
-local proxy adapter: a remote tmux container uses tmux's canonical
-session-name spelling (`_` for `.` and `:`), while a native Herdr remote
-container keeps its spelling.
+The machine-only identity that identifies a proxy independently of its local
+container label or native metadata. Machine matching is case-insensitive.
+Legacy `MACHINE/CONTAINER` metadata remains readable as a machine for history
+and close, but newly created proxies store only the machine. A machine name is
+a display label, not identity: only `@nexo-proxy` (or Herdr's equivalent token)
+identifies a proxy.
 
 **Place catalog**:
 The backend-neutral module that combines project candidates, local and remote
-container snapshots, machine identity, proxy merging, and agent decoration
+container snapshots, machine identity, snapshot merging, and agent decoration
 into one coherent place snapshot. Callers consume its snapshot interface;
 source refreshes replace their machine-owned data rather than layering stale
 rows.
