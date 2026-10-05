@@ -92,8 +92,9 @@ row background and on the TUI's selection background.
 
 ## Project actions
 
-Press `Ctrl-O` on a selected project row to open the clone form without leaving the
-Projects tab. The tabbed view remains visible behind the border-only modal. Its
+Press `Ctrl-O` on a selected folder header or project row to open the clone form
+without leaving the Projects tab. The footer lists `Ctrl-O` and `Ctrl-D` on those
+rows. The tabbed view remains visible behind the border-only modal. Its
 source stage has editable protocol and repository fields; the destination stage
 validates a new path before Git runs. Enter advances from any field and submits
 from the destination stage, while Escape cancels. Completed stages collapse to a
@@ -137,7 +138,7 @@ refreshes the Projects catalog and keeps selection near the removed row.
 | `Enter` | Open the selected item, focus the selected agent, or name a new remote container |
 | `←` / `→` | Fold the selected folder or checkout, step Left to its parent, or unfold with Right |
 | `Ctrl-T` | Mark the selected container |
-| `Ctrl-O` | Open the clone form for the selected Projects row |
+| `Ctrl-O` | Open the clone form on a Projects folder header or project row |
 | `Ctrl-D` | Open the new-directory form in the Projects tab |
 | `Ctrl-E` | Open the branch-extraction form for the selected Git checkout or worktree |
 | `Ctrl-Y` | Open the delete preflight and confirmation form for the selected Projects row |

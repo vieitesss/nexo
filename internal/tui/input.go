@@ -453,14 +453,14 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 		s.toggleMark(frame.rows)
 		return inputEffect{rebuild: true}
 	case tea.KeyCtrlO:
-		if s.tab == ProjectsTab {
-			if current, ok := s.currentItem(frame.rows); ok && current.place.Kind == picker.ProjectKind {
-				s.form = newCloneForm(s.deps, s.ctx)
-				return inputEffect{rebuild: true, cmd: s.form.initialFocusCmd()}
-			}
+		if current, ok := s.currentRow(frame.rows); ok && s.tab == ProjectsTab && projectActionRow(current) {
+			s.form = newCloneForm(s.deps, s.ctx)
+			return inputEffect{rebuild: true, cmd: s.form.initialFocusCmd()}
 		}
 		return inputEffect{}
 	case tea.KeyCtrlD:
+		// Unlike clone, a new directory needs no row: it is how an empty
+		// Projects tab gets its first entry.
 		if s.tab == ProjectsTab {
 			s.form = newDirectoryForm(s.deps, s.ctx)
 			return inputEffect{rebuild: true, cmd: s.form.initialFocusCmd()}
@@ -699,6 +699,12 @@ func (s *inputState) foldLeft(rows []row) bool {
 	s.folded[parent] = true
 	s.cursor = parent
 	return true
+}
+
+// projectActionRow reports whether a Projects row offers clone and new
+// directory: a folder header or a project under it.
+func projectActionRow(current row) bool {
+	return current.kind == groupRow || current.kind == itemRow && current.place.Kind == picker.ProjectKind
 }
 
 func foldParent(current row) string {

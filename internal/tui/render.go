@@ -769,11 +769,11 @@ func (m renderFrame) footer() string {
 		if current, ok := m.currentRow(); ok && (current.foldable || foldParent(current) != "") {
 			left = append(left, hint("←→", "fold"))
 		}
-		if current, ok := m.currentItem(); ok && current.place.Kind == picker.ProjectKind {
-			left = append(left, hint("Ctrl-O", "clone"))
-			if current.place.Git {
-				left = append(left, hint("Ctrl-E", "extract"))
-			}
+		if current, ok := m.currentRow(); ok && projectActionRow(current) {
+			left = append(left, hint("Ctrl-O", "clone"), hint("Ctrl-D", "new dir"))
+		}
+		if current, ok := m.currentItem(); ok && current.place.Kind == picker.ProjectKind && current.place.Git {
+			left = append(left, hint("Ctrl-E", "extract"))
 		}
 	}
 	if m.currentContainer() || len(m.markedTargets()) > 0 {

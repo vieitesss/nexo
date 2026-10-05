@@ -344,11 +344,21 @@ func TestFooterOnlyAdvertisesCurrentActions(t *testing.T) {
 	if strings.Contains(groupFooter, "Enter") || strings.Contains(groupFooter, "Ctrl-R") {
 		t.Fatalf("group footer advertises unavailable action: %q", groupFooter)
 	}
+	for _, action := range []string{"Ctrl-O clone", "Ctrl-D new dir"} {
+		if !strings.Contains(groupFooter, action) {
+			t.Fatalf("group footer missing %q: %q", action, groupFooter)
+		}
+	}
 	model = updateModel(t, model, keyMsg(tea.KeyRight))
 	model = updateModel(t, model, keyMsg(tea.KeyDown))
 	projectFooter := shell.Plain(model.frame().footer())
 	if !strings.Contains(projectFooter, "Enter") || !strings.Contains(projectFooter, "fold") {
 		t.Fatalf("project footer has wrong actions: %q", projectFooter)
+	}
+	for _, action := range []string{"Ctrl-O clone", "Ctrl-D new dir"} {
+		if !strings.Contains(projectFooter, action) {
+			t.Fatalf("project footer missing %q: %q", action, projectFooter)
+		}
 	}
 	model = NewModel(context.Background(), richDeps(), ContainersTab)
 	model.SetSize(100, 10)
@@ -356,6 +366,24 @@ func TestFooterOnlyAdvertisesCurrentActions(t *testing.T) {
 	for _, action := range []string{"Enter", "Ctrl-X", "Ctrl-R", "Ctrl-T"} {
 		if !strings.Contains(containerFooter, action) {
 			t.Fatalf("container footer missing %q: %q", action, containerFooter)
+		}
+	}
+	if strings.Contains(containerFooter, "Ctrl-O") || strings.Contains(containerFooter, "Ctrl-D") {
+		t.Fatalf("container footer advertises project actions: %q", containerFooter)
+	}
+}
+
+func TestProjectActionsOpenFromFolderHeader(t *testing.T) {
+	for _, key := range []tea.KeyType{tea.KeyCtrlO, tea.KeyCtrlD} {
+		model := NewModel(context.Background(), richDeps(), ProjectsTab)
+		model.SetSize(100, 10)
+		model = updateModel(t, model, keyMsg(tea.KeyUp))
+		if current, ok := model.frame().currentRow(); !ok || current.kind != groupRow {
+			t.Fatalf("cursor is not on a folder header: %#v", current)
+		}
+		model = updateModel(t, model, keyMsg(key))
+		if model.input.form == nil {
+			t.Fatalf("%v on a folder header did not open its form", key)
 		}
 	}
 }
