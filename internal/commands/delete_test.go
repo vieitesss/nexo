@@ -18,7 +18,7 @@ import (
 
 func TestDeleteCommandDryRunPrintsPreflightAndDoesNothing(t *testing.T) {
 	setDeleteTestEnv(t)
-	root := t.TempDir()
+	root := realTempDir(t)
 	candidate := filepath.Join(root, "repo")
 	if err := os.Mkdir(candidate, 0o755); err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestDeleteCommandDryRunPrintsPreflightAndDoesNothing(t *testing.T) {
 
 func TestDeleteDryRunReportsEffectiveAction(t *testing.T) {
 	setDeleteTestEnv(t)
-	root := t.TempDir()
+	root := realTempDir(t)
 	candidate := filepath.Join(root, "repo")
 	if err := os.Mkdir(candidate, 0o755); err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestDeleteDryRunReportsEffectiveAction(t *testing.T) {
 
 func TestDeleteJSONReportsEffectiveAction(t *testing.T) {
 	setDeleteTestEnv(t)
-	root := t.TempDir()
+	root := realTempDir(t)
 	candidate := filepath.Join(root, "repo")
 	if err := os.Mkdir(candidate, 0o755); err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestDeleteJSONReportsEffectiveAction(t *testing.T) {
 
 func TestDeleteCommandPermanentRequiresForceForWarnings(t *testing.T) {
 	setDeleteTestEnv(t)
-	root := t.TempDir()
+	root := realTempDir(t)
 	candidate := filepath.Join(root, "repo")
 	if err := os.Mkdir(candidate, 0o755); err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func (c *togglingDeleteUseChecker) ProjectActive(context.Context, string) (bool,
 
 func setDeleteTestEnv(t *testing.T) {
 	t.Helper()
-	home := t.TempDir()
+	home := realTempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
@@ -143,9 +143,21 @@ func setDeleteTestEnv(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
 }
 
+// realTempDir returns t.TempDir() with symlinks resolved. macOS puts temp dirs
+// under /var, which is a symlink to /private/var, and deletion refuses paths
+// below a symlinked ancestor.
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestDeletePreservesExactTrailingSpaceAndNewlineNames(t *testing.T) {
 	setDeleteTestEnv(t)
-	root := t.TempDir()
+	root := realTempDir(t)
 	spaced := filepath.Join(root, "item ")
 	newline := filepath.Join(root, "item\n")
 	plain := filepath.Join(root, "item")

@@ -14,7 +14,7 @@ import (
 
 func TestGitInspectorUsesRegisteredPrimaryForSeparateMetadataWorktree(t *testing.T) {
 	setGitTestEnv(t)
-	root := t.TempDir()
+	root := realTempDir(t)
 	metadata := filepath.Join(root, "metadata.git")
 	primary := filepath.Join(root, "primary")
 	if err := os.MkdirAll(primary, 0o755); err != nil {

@@ -28,7 +28,7 @@ func (r *worktreeRecorder) RemoveWorktree(_ context.Context, repo, path string) 
 }
 
 func TestExecuteTrashUsesOriginalLexicalPath(t *testing.T) {
-	root := t.TempDir()
+	root := realTempDir(t)
 	path := filepath.Join(root, "project ")
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestExecuteTrashUsesOriginalLexicalPath(t *testing.T) {
 }
 
 func TestExecuteLinkedWorktreeUsesRegisteredPathWithoutStaging(t *testing.T) {
-	root := t.TempDir()
+	root := realTempDir(t)
 	repo := filepath.Join(root, "primary")
 	linked := filepath.Join(root, "linked")
 	if err := os.MkdirAll(repo, 0o755); err != nil {

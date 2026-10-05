@@ -128,7 +128,7 @@ func (r scriptedGitRunner) Run(_ context.Context, _ string, args ...string) ([]b
 
 func TestExecuteRealLinkedWorktreeUsesNonForceGitRemoval(t *testing.T) {
 	setGitTestEnv(t)
-	root := t.TempDir()
+	root := realTempDir(t)
 	repo := filepath.Join(root, "repo")
 	if err := os.Mkdir(repo, 0o755); err != nil {
 		t.Fatal(err)
