@@ -96,7 +96,9 @@ Press `Ctrl-O` on a selected folder header or project row to open the clone form
 without leaving the Projects tab. The footer lists `Ctrl-O` and `Ctrl-D` on those
 rows. The tabbed view remains visible behind the border-only modal. Its
 source stage has editable protocol and repository fields; the destination stage
-validates a new path before Git runs. Enter advances from any field and submits
+starts with `<folder>/<repository name>`, where the folder is the header the clone
+was started from (or the selected project's folder), and validates a new path
+before Git runs. A path you type is kept if you go back and change the source. Enter advances from any field and submits
 from the destination stage, while Escape cancels. Completed stages collapse to a
 summary and can be reopened with Shift-Tab; a failed source or destination remains
 inline. Cloning refreshes the project catalog and selects the new project without

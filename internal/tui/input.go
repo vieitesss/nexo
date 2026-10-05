@@ -454,7 +454,7 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 		return inputEffect{rebuild: true}
 	case tea.KeyCtrlO:
 		if current, ok := s.currentRow(frame.rows); ok && s.tab == ProjectsTab && projectActionRow(current) {
-			s.form = newCloneForm(s.deps, s.ctx)
+			s.form = newCloneForm(s.deps, s.ctx, projectRowFolder(current))
 			return inputEffect{rebuild: true, cmd: s.form.initialFocusCmd()}
 		}
 		return inputEffect{}
@@ -699,6 +699,15 @@ func (s *inputState) foldLeft(rows []row) bool {
 	s.folded[parent] = true
 	s.cursor = parent
 	return true
+}
+
+// projectRowFolder returns the folder a Projects header or project row
+// belongs to.
+func projectRowFolder(current row) string {
+	if current.kind == groupRow {
+		return current.group
+	}
+	return current.place.Group
 }
 
 // projectActionRow reports whether a Projects row offers clone and new

@@ -10,9 +10,12 @@ import (
 
 	cloneflow "github.com/vieitesss/nexo/internal/clone"
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/destination"
 )
 
-func newCloneForm(deps Deps, ctx context.Context) *stagedForm {
+// newCloneForm opens the clone form. folder is the Projects folder the clone
+// was started from; the destination defaults to folder/<repository name>.
+func newCloneForm(deps Deps, ctx context.Context, folder string) *stagedForm {
 	clone := deps.CloneConfig.WithDefaults()
 	destinationFields := []formField{{ID: "destination", Label: "path", Default: "", Kind: formText, Placeholder: "project directory", AbbreviateHome: true}}
 	if deps.AddProjectPath != nil {
@@ -27,12 +30,15 @@ func newCloneForm(deps Deps, ctx context.Context) *stagedForm {
 			},
 		},
 		{ID: "destination", Title: "Destination", Fields: destinationFields},
-	}, cloneFormValidation(deps), cloneFormSubmit(deps))
+	}, cloneFormValidation(deps, folder), cloneFormSubmit(deps))
 	form.busyLabel = "cloning…"
 	return form
 }
 
-func cloneFormValidation(deps Deps) func(*stagedForm) formValidation {
+func cloneFormValidation(deps Deps, folder string) func(*stagedForm) formValidation {
+	// suggested is the last destination the form filled in. It is replaced
+	// when the source changes, but a path the user typed is kept.
+	suggested := ""
 	return func(form *stagedForm) formValidation {
 		protocol := strings.ToLower(strings.TrimSpace(formValue(form, "protocol")))
 		source := formValue(form, "source")
@@ -54,6 +60,13 @@ func cloneFormValidation(deps Deps) func(*stagedForm) formValidation {
 		}
 		result.Values["prefix"] = prefix
 		if form.stage == 0 {
+			current := formValue(form, "destination")
+			if folder != "" && (strings.TrimSpace(current) == "" || current == suggested) {
+				if suggestion, err := destination.DefaultPath(source, folder, deps.Home); err == nil {
+					suggested = suggestion
+					result.Values["destination"] = suggestion
+				}
+			}
 			return result
 		}
 		destinationValue := formValue(form, "destination")
