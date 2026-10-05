@@ -132,17 +132,22 @@ func (s *Source) listAgents(ctx context.Context, highlight bool) ([]capabilities
 	if s.server == "" {
 		s.server = s.serverName(ctx)
 	}
+	screens := make([][]byte, len(panes))
+	captured := make([]bool, len(panes))
+	forEachPane(len(panes), func(index int) {
+		screen, err := s.runTmux(ctx, "capture-pane", "-p", "-J", "-t", panes[index].id)
+		screens[index], captured[index] = screen, err == nil
+	})
 	observed := make([]observedPane, 0, len(panes))
-	for _, p := range panes {
-		screen, err := s.runTmux(ctx, "capture-pane", "-p", "-J", "-t", p.id)
-		if err != nil {
+	for index, p := range panes {
+		if !captured[index] {
 			// A pane can disappear between list-panes and capture-pane. It is
 			// not an error for the navigator to omit that pane.
 			continue
 		}
 		observed = append(observed, observedPane{
 			pane:    p,
-			working: MatchesWorkingIndicator(p.harness, string(screen), cfg.WorkingPattern),
+			working: MatchesWorkingIndicator(p.harness, string(screens[index]), cfg.WorkingPattern),
 		})
 	}
 
@@ -268,10 +273,33 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 			harness:     harness,
 			focused:     strings.TrimSpace(fields[focusedField]) == "1",
 		}
-		p.branch = git.Branch(ctx, s.runner, p.path)
 		result = append(result, p)
 	}
+	forEachPane(len(result), func(index int) {
+		result[index].branch = git.Branch(ctx, s.runner, result[index].path)
+	})
 	return result, nil
+}
+
+// paneConcurrency bounds the per-pane subprocesses (git branch, capture-pane)
+// one listing runs at once.
+const paneConcurrency = 8
+
+// forEachPane calls fn for every index in [0, count) with at most
+// paneConcurrency calls in flight, and returns once all of them have.
+func forEachPane(count int, fn func(index int)) {
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, paneConcurrency)
+	for index := range count {
+		slots <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+			fn(index)
+		}()
+	}
+	wg.Wait()
 }
 
 // interpreters are runtimes whose own name never identifies an agent; the
