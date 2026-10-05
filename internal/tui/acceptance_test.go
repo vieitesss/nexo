@@ -360,6 +360,61 @@ func TestFooterOnlyAdvertisesCurrentActions(t *testing.T) {
 	}
 }
 
+// TestActivePromptOutranksToast covers an armed confirmation or rename prompt
+// winning the footer over a container-action toast. The toast is set after the
+// prompt is armed so the render precedence is what is under test, not the
+// toast-clearing transition.
+func TestActivePromptOutranksToast(t *testing.T) {
+	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
+	model.SetSize(100, 10)
+
+	model = updateModel(t, model, keyMsg(tea.KeyCtrlX))
+	if !model.input.confirmKill {
+		t.Fatal("Ctrl-X did not arm the kill confirmation")
+	}
+	model.SetToast("container renamed")
+	footer := shell.Plain(model.frame().footer())
+	if !strings.Contains(footer, "kill selected containers?") {
+		t.Fatalf("kill prompt hidden behind toast: %q", footer)
+	}
+	if strings.Contains(footer, "container renamed") {
+		t.Fatalf("footer shows the stale toast instead of the kill prompt: %q", footer)
+	}
+
+	model = updateModel(t, model, keyMsg(tea.KeyRunes, 'n'))
+	model = updateModel(t, model, keyMsg(tea.KeyCtrlR))
+	if !model.input.renameMode {
+		t.Fatal("Ctrl-R did not arm the rename prompt")
+	}
+	model.SetToast("containers killed")
+	footer = shell.Plain(model.frame().footer())
+	if !strings.Contains(footer, "rename:") {
+		t.Fatalf("rename prompt hidden behind toast: %q", footer)
+	}
+	if strings.Contains(footer, "containers killed") {
+		t.Fatalf("footer shows the stale toast instead of the rename prompt: %q", footer)
+	}
+}
+
+// TestUserInputClearsStaleToast covers the toast lifetime: once the user acts
+// again any toast from an earlier action is gone, so it cannot mask the footer
+// hints or a later prompt.
+func TestUserInputClearsStaleToast(t *testing.T) {
+	model := NewModel(context.Background(), testContainerDeps(), ContainersTab)
+	model.SetSize(100, 10)
+	model.SetToast("container renamed")
+	if !strings.Contains(shell.Plain(model.frame().footer()), "container renamed") {
+		t.Fatal("toast not shown before input")
+	}
+	model = updateModel(t, model, keyMsg(tea.KeyDown))
+	if model.toast != "" {
+		t.Fatalf("stale toast survived user input: %q", model.toast)
+	}
+	if footer := shell.Plain(model.frame().footer()); strings.Contains(footer, "container renamed") {
+		t.Fatalf("footer still shows the stale toast: %q", footer)
+	}
+}
+
 var ansiParameters = regexp.MustCompile(`\x1b\[([0-9;:]*)m`)
 
 // backgroundCoverage walks a styled line and reports how many visible cells

@@ -738,9 +738,6 @@ func (m renderFrame) projectSummaryStyled(place picker.Place) string {
 }
 
 func (m renderFrame) footer() string {
-	if m.toast != "" {
-		return fit(accent().Render(sanitize(m.toast)), m.width)
-	}
 	if m.confirmKill {
 		return fit(accent().Render("kill selected containers? ")+accent().Render("y")+muted().Render(" confirm  ")+accent().Render("n")+muted().Render(" cancel"), m.width)
 	}
@@ -752,6 +749,9 @@ func (m renderFrame) footer() string {
 		}
 		prompt := promptLineAtCursor(promptWidth, accent().Render("rename: "), m.renameInput)
 		return fit(prompt+suffix, m.width)
+	}
+	if m.toast != "" {
+		return fit(accent().Render(sanitize(m.toast)), m.width)
 	}
 	if m.refreshErr != nil {
 		return fit(muted().Render("agent refresh: "+sanitize(m.refreshErr.Error())), m.width)
