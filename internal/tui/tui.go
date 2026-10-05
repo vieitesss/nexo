@@ -645,6 +645,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		m.autoTab = false
 		m.userInteracted = true
+		m.toast = ""
 		m.input.deps = m.deps
 		effect := m.input.key(msg, m.keyFrame())
 		if effect.rebuild {
@@ -658,6 +659,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		m.autoTab = false
 		m.userInteracted = true
+		m.toast = ""
 		m.input.deps = m.deps
 		effect := m.input.mouse(msg, m.mouseFrame())
 		if effect.rebuild {
