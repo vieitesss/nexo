@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nexo — Arch monogram</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+  :root {
+    --ground: #0F1115;
+    --tile: #171A21;
+    --tile-border: #2A2F3A;
+    --fg: #E8EAED;
+    --muted: #8A919E;
+    --accent: #B8F15A;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--ground);
+    color: var(--fg);
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .board {
+    width: 520px;
+    max-width: 100%;
+    padding: 48px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 40px;
+  }
+  .tile {
+    background: var(--tile);
+    border: 1px solid var(--tile-border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .tile--hero { width: 300px; height: 300px; border-radius: 68px; }
+  .tile--96 { width: 96px; height: 96px; border-radius: 22px; }
+  .tile--48 { width: 48px; height: 48px; border-radius: 11px; }
+  .tile--24 { width: 24px; height: 24px; border-radius: 6px; }
+  .tile--lockup { width: 44px; height: 44px; border-radius: 10px; }
+  .sizes { display: flex; align-items: flex-end; gap: 28px; }
+  .size { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .size span { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted); }
+  .lockup { display: flex; align-items: center; gap: 14px; }
+  .lockup span { font-size: 34px; font-weight: 600; letter-spacing: -0.5px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="nexo-arch" viewBox="0 0 100 100">
+      <path d="M28 78 L28 50 A22 22 0 0 1 72 50 L72 78" fill="none" stroke="#E8EAED" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="50" cy="28" r="9" fill="var(--accent)"/>
+    </symbol>
+  </defs>
+</svg>
+
+<main class="board">
+  <div class="tile tile--hero">
+    <svg width="220" height="220" role="img" aria-label="nexo icon"><use href="#nexo-arch"/></svg>
+  </div>
+
+  <div class="sizes">
+    <div class="size">
+      <div class="tile tile--96"><svg width="70" height="70" aria-hidden="true"><use href="#nexo-arch"/></svg></div>
+      <span>96</span>
+    </div>
+    <div class="size">
+      <div class="tile tile--48"><svg width="35" height="35" aria-hidden="true"><use href="#nexo-arch"/></svg></div>
+      <span>48</span>
+    </div>
+    <div class="size">
+      <div class="tile tile--24"><svg width="18" height="18" aria-hidden="true"><use href="#nexo-arch"/></svg></div>
+      <span>24</span>
+    </div>
+  </div>
+
+  <div class="lockup">
+    <div class="tile tile--lockup"><svg width="32" height="32" aria-hidden="true"><use href="#nexo-arch"/></svg></div>
+    <span>nexo</span>
+  </div>
+</main>
+</body>
+</html>
