@@ -1,0 +1,366 @@
+#!/usr/bin/env bash
+# nexo-verify: drive a freshly built nexo against a private tmux server and a
+# sandboxed HOME/XDG tree. Never touches the user's tmux server, config, or
+# agent state. Run `nexo-verify help` for the command list.
+set -euo pipefail
+
+ROOT="${NEXO_VERIFY_ROOT:-${TMPDIR:-/tmp}/nexo-verify}"
+COLS="${NEXO_VERIFY_COLS:-160}"
+ROWS="${NEXO_VERIFY_ROWS:-45}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+die() { echo "nexo-verify: $*" >&2; exit 1; }
+
+repo_root() {
+  if [[ -n "${NEXO_VERIFY_REPO:-}" ]]; then echo "$NEXO_VERIFY_REPO"; return; fi
+  git rev-parse --show-toplevel 2>/dev/null && return
+  git -C "$SCRIPT_DIR" rev-parse --show-toplevel
+}
+
+resolve_run() {
+  RUN="${NEXO_VERIFY_RUN:-}"
+  if [[ -z "$RUN" && -f "$ROOT/current" ]]; then RUN="$(cat "$ROOT/current")"; fi
+  [[ -n "$RUN" ]] || die "no run selected; run 'nexo-verify up' or set NEXO_VERIFY_RUN"
+  RUN_DIR="$ROOT/$RUN"
+  SB="$RUN_DIR/sandbox"
+  EV="$RUN_DIR/evidence"
+  SOCK="nexo-verify-$RUN"
+  BIN="$SB/bin/nexo"
+  CFG="$SB/home/.config/nexo/config.toml"
+}
+
+t() { tmux -L "$SOCK" "$@"; }
+
+server_up() { t has-session 2>/dev/null; }
+
+# Environment every nexo invocation and every pane in the private server sees.
+sandbox_env() {
+  printf '%s\n' \
+    "HOME=$SB/home" \
+    "XDG_CONFIG_HOME=$SB/home/.config" \
+    "XDG_STATE_HOME=$SB/home/.local/state" \
+    "XDG_CACHE_HOME=$SB/home/.cache" \
+    "PATH=$SB/bin:$PATH" \
+    "SHELL=/bin/bash" \
+    "TERM=xterm-256color" \
+    "LANG=${LANG:-C.UTF-8}"
+}
+
+# Run a command as if from the attached client's active pane.
+in_server_env() {
+  local tmux_var pane sid
+  sid="$(t display-message -p '#{session_id}')"
+  tmux_var="$(t display-message -p '#{socket_path},#{pid}'),${sid#\$}"
+  pane="$(t display-message -p '#{pane_id}')"
+  local -a envs
+  mapfile -t envs < <(sandbox_env)
+  env -u TMUX -u TMUX_PANE -u HERDR_ENV "${envs[@]}" "TMUX=$tmux_var" "TMUX_PANE=$pane" "$@"
+}
+
+next_ev() { # next_ev NAME EXT -> evidence path with an ordering prefix
+  mkdir -p "$EV"
+  local n; n=$(find "$EV" -maxdepth 1 -type f -name '[0-9][0-9][0-9]-*' -printf '%f\n' | cut -c1-3 | sort -u | wc -l)
+  printf '%s/%03d-%s.%s' "$EV" "$((n + 1))" "$1" "$2"
+}
+
+build_fingerprint() {
+  local repo; repo="$(repo_root)"
+  printf '%s %s' "$(git -C "$repo" rev-parse HEAD)" \
+    "$( (git -C "$repo" diff HEAD; git -C "$repo" ls-files --others --exclude-standard -- '*.go') | sha256sum | cut -c1-12)"
+}
+
+build() {
+  local repo; repo="$(repo_root)"
+  echo "building nexo from $repo"
+  (cd "$repo" && go build -o "$BIN" ./cmd/nexo)
+  build_fingerprint > "$RUN_DIR/build"
+}
+
+seed_sandbox() {
+  local h="$SB/home"
+  mkdir -p "$h/.config/nexo" "$h/.local/state" "$h/.cache" "$h/src" "$SB/bin" "$SB/agents" "$EV"
+  cat > "$h/.gitconfig" <<'EOF'
+[user]
+	name = nexo verify
+	email = verify@example.invalid
+[init]
+	defaultBranch = main
+EOF
+  # Fixture projects: clean repo, dirty repo on a feature branch, plain dir.
+  local g=(env "HOME=$h" git)
+  "${g[@]}" init -q "$h/src/alpha"
+  echo alpha > "$h/src/alpha/README"
+  "${g[@]}" -C "$h/src/alpha" add -A && "${g[@]}" -C "$h/src/alpha" commit -qm "alpha: init"
+  "${g[@]}" init -q "$h/src/beta"
+  echo beta > "$h/src/beta/README"
+  "${g[@]}" -C "$h/src/beta" add -A && "${g[@]}" -C "$h/src/beta" commit -qm "beta: init"
+  "${g[@]}" -C "$h/src/beta" switch -qc feature/login
+  printf 'beta\nchanged\n' > "$h/src/beta/README"
+  mkdir -p "$h/src/gamma"
+  # Clean checkout on a feature branch with main behind it: extract-ready.
+  "${g[@]}" init -q "$h/src/delta"
+  echo delta > "$h/src/delta/README"
+  "${g[@]}" -C "$h/src/delta" add -A && "${g[@]}" -C "$h/src/delta" commit -qm "delta: init"
+  "${g[@]}" -C "$h/src/delta" switch -qc feature/api
+  echo api >> "$h/src/delta/README"
+  "${g[@]}" -C "$h/src/delta" commit -qam "delta: api"
+
+  cat > "$CFG" <<EOF
+# nexo-verify sandbox config (generated)
+backend = "tmux"
+paths = ["~/src"]
+
+[agents]
+processes = ["fakeagent"]
+idle-seconds = 1
+poll-interval = 1
+notify = false
+working-pattern = { fakeagent = "⠋ WORKING" }
+
+[tui]
+theme = "dark"
+EOF
+
+  # A fake agent: a copy of bash, so tmux reports pane_current_command
+  # "fakeagent". It paints the working indicator while a flag file exists.
+  cp "$(command -v bash)" "$SB/bin/fakeagent"
+  cat > "$SB/bin/fakeagent-loop.sh" <<'EOF'
+flag="$1"
+last=""
+while :; do
+  if [ -e "$flag" ]; then now="work"; else now="idle"; fi
+  if [ "$now" != "$last" ]; then
+    printf '\033[H\033[2J'
+    if [ "$now" = work ]; then echo "⠋ WORKING on task"; else echo "> idle, waiting for input"; fi
+    last="$now"
+  fi
+  sleep 0.3
+done
+EOF
+  cat > "$SB/tmux.conf" <<EOF
+set -g default-shell /bin/bash
+set -g default-command "/bin/bash --noprofile --norc"
+set -g focus-events on
+set -g default-size ${COLS}x${ROWS}
+set -g history-limit 5000
+set -g exit-empty off
+EOF
+}
+
+attach_client() {
+  # A real attached client (in a private pty) so switch-client, focus hooks
+  # and session_attached behave as they do for a user.
+  local -a envs; mapfile -t envs < <(sandbox_env)
+  env -u TMUX -u TMUX_PANE "${envs[@]}" python3 - "$SOCK" "$ROWS" "$COLS" > /dev/null 2>&1 <<'PY' &
+import fcntl, os, pty, struct, sys, termios
+sock, rows, cols = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    os.execvp("tmux", ["tmux", "-L", sock, "attach-session", "-t", "home"])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+while True:
+    try:
+        if not os.read(fd, 65536):
+            break
+    except OSError:
+        break
+os.waitpid(pid, 0)
+PY
+  echo $! > "$RUN_DIR/client.pid"
+  local i
+  for i in $(seq 50); do
+    [[ -n "$(t list-clients -F '#{client_name}' 2>/dev/null)" ]] && return 0
+    sleep 0.1
+  done
+  die "client did not attach"
+}
+
+cmd_up() {
+  local name="${1:-$(date +%H%M%S)-$$}"
+  RUN="$name"; NEXO_VERIFY_RUN="$name"; resolve_run
+  if server_up; then die "run '$RUN' already has a live server; use it or 'nexo-verify down' first"; fi
+  [[ -e "$SB" ]] && die "sandbox $SB exists from an earlier run; 'NEXO_VERIFY_RUN=$RUN nexo-verify down' first"
+  command -v tmux >/dev/null || die "tmux not on PATH"
+  command -v go >/dev/null || die "go not on PATH"
+  mkdir -p "$RUN_DIR"
+  echo "$RUN" > "$ROOT/current"
+  seed_sandbox
+  build
+  local -a envs; mapfile -t envs < <(sandbox_env)
+  env -u TMUX -u TMUX_PANE -u HERDR_ENV "${envs[@]}" \
+    tmux -L "$SOCK" -f "$SB/tmux.conf" new-session -d -s home -n shell -c "$SB/home" -x "$COLS" -y "$ROWS"
+  attach_client
+  # Install the tmux adapter exactly as the README's init line does.
+  in_server_env "$BIN" --backend=tmux tmux init
+  echo "run:      $RUN"
+  echo "socket:   tmux -L $SOCK"
+  echo "sandbox:  $SB"
+  echo "evidence: $EV"
+}
+
+cmd_rebuild() { resolve_run; build; echo "rebuilt; restart the watcher with: nexo-verify down && nexo-verify up"; }
+
+cmd_doctor() {
+  resolve_run
+  local ok=1 line
+  check() { if eval "$2" >/dev/null 2>&1; then echo "ok    $1"; else echo "FAIL  $1"; ok=0; fi; }
+  echo "run $RUN  root $RUN_DIR"
+  check "sandbox exists ($SB)" "[[ -x '$BIN' && -f '$CFG' ]]"
+  check "private tmux server up (tmux -L $SOCK)" "t has-session"
+  if server_up; then
+    check "a client is attached" "[[ -n \$(t list-clients -F '#{client_name}') ]]"
+    check "server HOME is the sandbox" "[[ \$(t show-environment -g HOME) == 'HOME=$SB/home' ]]"
+    check "nexo selects the tmux backend" "in_server_env '$BIN' --json backend | grep -q '\"backend\": *\"tmux\"'"
+    check "agent watcher running from this sandbox" "pgrep -f -- '$SB/bin/nexo.*agents watch'"
+  fi
+  if [[ -f "$RUN_DIR/build" ]]; then
+    line="$(build_fingerprint)"
+    if [[ "$line" == "$(cat "$RUN_DIR/build")" ]]; then echo "ok    binary matches the checkout"
+    else echo "WARN  checkout changed since build; run 'nexo-verify rebuild' then restart (down/up)"; fi
+  fi
+  [[ -x "$BIN" ]] && echo "info  $("$BIN" --version)"
+  [[ $ok == 1 ]] || exit 1
+}
+
+cmd_nx() { resolve_run; server_up || die "server down"; in_server_env "$BIN" "$@"; }
+
+cmd_cli() { # cli NAME ARGS... : run nexo, record command/stdout/stderr/exit
+  resolve_run; server_up || die "server down"
+  local name="$1"; shift
+  local out err code f
+  out="$(mktemp)"; err="$(mktemp)"
+  set +e; in_server_env "$BIN" "$@" > "$out" 2> "$err"; code=$?; set -e
+  f="$(next_ev "$name" cli.txt)"
+  { echo "\$ nexo $*"; echo "exit: $code"; echo "--- stdout"; cat "$out"; echo "--- stderr"; cat "$err"; } > "$f"
+  cat "$f"; echo "(saved $f)"
+  rm -f "$out" "$err"
+  return "$code"
+}
+
+tui_pane() { [[ -f "$RUN_DIR/tui.pane" ]] || die "no TUI started; run 'nexo-verify tui'"; cat "$RUN_DIR/tui.pane"; }
+
+cmd_tui() { # tui [TAB] : open `nexo tui [TAB]` in a new window of the client's session
+  resolve_run; server_up || die "server down"
+  local pane old
+  # One TUI at a time: drop the previous TUI window (snap it first if needed).
+  if [[ -f "$RUN_DIR/tui.pane" ]]; then
+    old="$(cat "$RUN_DIR/tui.pane")"
+    t kill-pane -t "$old" 2>/dev/null || true
+  fi
+  local session; session="$(t list-clients -F '#{client_session}' | head -n1)"
+  pane="$(t new-window -P -F '#{pane_id}' -t "$session:" -n nexo-tui -c "$SB/home" \
+    "$BIN tui $*; echo \"[nexo tui exited \$?]\"; sleep 86400")"
+  echo "$pane" > "$RUN_DIR/tui.pane"
+  echo "tui pane $pane"
+  cmd_wait "Agents" 10 >/dev/null || die "TUI did not render; see: nexo-verify snap tui-failed"
+}
+
+cmd_keys() { resolve_run; t send-keys -t "$(tui_pane)" "$@"; }
+cmd_type() { resolve_run; t send-keys -t "$(tui_pane)" -l "$*"; }
+
+cmd_tmux() { resolve_run; t "$@"; }
+
+cmd_screen() { resolve_run; t capture-pane -p -t "${1:-$(tui_pane)}"; }
+
+cmd_wait() { # wait TEXT [SECONDS] [PANE]
+  resolve_run
+  local text="$1" secs="${2:-10}" pane="${3:-}" end
+  [[ -n "$pane" ]] || pane="$(tui_pane)"
+  end=$((SECONDS + secs))
+  while ((SECONDS < end)); do
+    if t capture-pane -p -t "$pane" | grep -qF -- "$text"; then echo "found: $text"; return 0; fi
+    sleep 0.2
+  done
+  echo "timeout after ${secs}s waiting for: $text" >&2
+  t capture-pane -p -t "$pane" >&2
+  return 1
+}
+
+cmd_snap() { # snap NAME [PANE] : save plain + ANSI capture of the TUI (or PANE)
+  resolve_run
+  local name="$1" pane="${2:-}" f
+  [[ -n "$pane" ]] || pane="$(tui_pane)"
+  f="$(next_ev "$name" screen.txt)"
+  t capture-pane -p -t "$pane" > "$f"
+  t capture-pane -p -e -t "$pane" > "${f%.txt}.ansi"
+  cat "$f"; echo "(saved $f and ${f%.txt}.ansi)"
+}
+
+cmd_state() { # state NAME : save tmux server state (sessions, client focus, panes)
+  resolve_run
+  local f; f="$(next_ev "$1" state.txt)"
+  {
+    echo "## client (session:window.pane focused by the attached client)"
+    t list-clients -F '#{client_name} -> #{session_name}:#{window_index}.#{pane_index} (#{pane_id})'
+    echo "## sessions"
+    t list-sessions -F '#{session_name} id=#{session_id} attached=#{session_attached} path=#{session_path}'
+    echo "## panes"
+    t list-panes -a -F '#{pane_id} #{session_name}:#{window_index}.#{pane_index} cmd=#{pane_current_command} dead=#{pane_dead} path=#{pane_current_path}'
+    echo "## windows with nexo options"
+    t list-windows -a -F '#{session_name}:#{window_index} @nexo-unseen=#{@nexo-unseen} style=#{window-status-style}'
+  } > "$f"
+  cat "$f"; echo "(saved $f)"
+}
+
+cmd_agent() { # agent add NAME | work NAME | stop NAME
+  resolve_run; server_up || die "server down"
+  local action="$1" name="$2"
+  case "$action" in
+    add)
+      # Outside ~/src so agents do not add project candidates.
+      mkdir -p "$SB/home/work/$name"
+      t new-session -d -s "$name" -c "$SB/home/work/$name" \
+        "$SB/bin/fakeagent $SB/bin/fakeagent-loop.sh $SB/agents/$name.working"
+      echo "agent session '$name' started (stopped until 'agent work $name')" ;;
+    work) touch "$SB/agents/$name.working"; echo "agent $name -> working" ;;
+    stop) rm -f "$SB/agents/$name.working"; echo "agent $name -> stopped" ;;
+    *) die "agent add|work|stop NAME" ;;
+  esac
+}
+
+cmd_down() {
+  resolve_run
+  local pids
+  if [[ -f "$RUN_DIR/client.pid" ]]; then kill "$(cat "$RUN_DIR/client.pid")" 2>/dev/null || true; fi
+  # Everything this run spawned carries the sandbox path on its command line.
+  pids="$(pgrep -f -- "$SB/" || true)"
+  t kill-server 2>/dev/null || true
+  if [[ -n "$pids" ]]; then
+    kill $pids 2>/dev/null || true
+    sleep 0.5
+    pids="$(pgrep -f -- "$SB/" || true)"
+    [[ -n "$pids" ]] && kill -9 $pids 2>/dev/null || true
+  fi
+  rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$SOCK"
+  rm -rf "$SB" "$RUN_DIR/client.pid" "$RUN_DIR/tui.pane" "$RUN_DIR/build"
+  [[ -f "$ROOT/current" && "$(cat "$ROOT/current")" == "$RUN" ]] && rm -f "$ROOT/current"
+  echo "torn down run $RUN; evidence kept in $EV"
+  ls -1 "$EV" 2>/dev/null || true
+}
+
+cmd_help() {
+  sed -n 's/^  \(#.*\)/\1/p' <<'EOF'
+  # nexo-verify up [RUN]          build nexo, seed sandbox, start private tmux server + client, tmux init
+  # nexo-verify doctor            is this run worth driving? (exit 1 if not)
+  # nexo-verify rebuild           rebuild the binary from the checkout
+  # nexo-verify nx ARGS...        run nexo against the private server (raw output)
+  # nexo-verify cli NAME ARGS...  run nexo and save command/stdout/stderr/exit as evidence
+  # nexo-verify tui [TAB]         open `nexo tui [TAB]` in a new window of the client's session
+  # nexo-verify keys KEY...       tmux send-keys to the TUI (Enter, Down, Tab, F3, C-o, Escape)
+  # nexo-verify type TEXT         type literal text into the TUI
+  # nexo-verify wait TEXT [S] [PANE]  poll the TUI (or PANE) screen for TEXT
+  # nexo-verify screen [PANE]     print the TUI (or PANE) screen
+  # nexo-verify snap NAME [PANE]  save the TUI (or PANE) screen as evidence
+  # nexo-verify state NAME        save sessions/client focus/panes as evidence
+  # nexo-verify agent add|work|stop NAME  manage a fake agent container
+  # nexo-verify tmux ARGS...      run tmux against the private server (inspect options, status rows)
+  # nexo-verify down              tear down server, processes, sandbox; keep evidence
+EOF
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  up|doctor|rebuild|nx|cli|tui|keys|type|wait|screen|snap|state|agent|tmux|down|help) "cmd_$cmd" "$@" ;;
+  *) die "unknown command '$cmd' (try help)" ;;
+esac
