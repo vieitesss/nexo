@@ -19,7 +19,7 @@ func TestPromptLineKeepsCursorAtInputEnd(t *testing.T) {
 }
 
 func TestTruncateLeftKeepsTheTailAndHead(t *testing.T) {
-	if got, want := TruncateLeft("~/work/prefapp/gitops", 10, "…"), "…pp/gitops"; got != want {
+	if got, want := TruncateLeft("~/work/example/deploy", 10, "…"), "…le/deploy"; got != want {
 		t.Fatalf("TruncateLeft = %q, want %q", got, want)
 	}
 	if got, want := TruncateLeft("~/work", 20, "…"), "~/work"; got != want {

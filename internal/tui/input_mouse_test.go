@@ -284,7 +284,7 @@ func TestMouseUsesRenderedBodyLayout(t *testing.T) {
 
 func TestMouseSelectsFlatSearchRow(t *testing.T) {
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
-	model.SetQuery("gitops")
+	model.SetQuery("deploy")
 	model.SetSize(120, 12)
 	lines, start := model.frame().bodyLayout(model.height - 3)
 	visibleIndex := -1

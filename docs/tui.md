@@ -57,7 +57,7 @@ name.
 The Projects tab uses natural column widths whenever the full row fits. When a
 terminal is too narrow, the name column is capped proportionally before lower
 priority columns are reduced or removed. In search results the containing folder
-is shown to the left of the name as a path (`~/work/prefapp/gitops-k8s`),
+is shown to the left of the name as a path (`~/work/example/deploy-k8s`),
 right-aligned and ending in `/` so names stay aligned. The branch and its Git
 summary (`⎇ main  #12  +12 −3 * ↑1 ↓2`) share the column after the name; the
 branch truncates before the summary and the pull request badge. The folder
