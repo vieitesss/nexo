@@ -31,7 +31,8 @@ nexo is a terminal UI on top of your multiplexer (tmux or
 Homebrew:
 
 ```sh
-brew install vieitesss/tap/nexo
+brew tap vieitesss/tap
+brew install nexo
 ```
 
 Go:

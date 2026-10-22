@@ -9,7 +9,8 @@ go install github.com/vieitesss/nexo/cmd/nexo@latest
 ## Install with Homebrew
 
 ```sh
-brew install vieitesss/tap/nexo
+brew tap vieitesss/tap
+brew install nexo
 ```
 
 Check the installed build with `nexo --version`.
