@@ -36,9 +36,8 @@ subcommand table, but `nexo remote attach --help` still documents it.
 
 `nexo upgrade` resolves the source with the local Git credentials, builds the
 requested revision with the local Go toolchain, and copies the binary to every
-target, including remotes that have no Go or Git credentials of their own. A
-private repository therefore needs `GOPRIVATE` and authenticated Git access on
-this machine. A nexo owned by Homebrew is refused; run
+target, including remotes that have no Go or Git of their own. A nexo owned by
+Homebrew is refused; run
 `brew upgrade vieitesss/tap/nexo` there.
 
 ## Examples
