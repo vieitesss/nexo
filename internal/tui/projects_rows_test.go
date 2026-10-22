@@ -19,12 +19,12 @@ import (
 
 func projectFixture() []picker.Place {
 	return []picker.Place{
-		{Kind: picker.ProjectKind, Path: "/home/tester/work/prefapp/gitops-k8s", Group: "/home/tester/work/prefapp", DisplayRemainder: "gitops-k8s", Git: true, GitContext: &picker.GitContext{Identity: "main", Dirty: true}},
-		{Kind: picker.ProjectKind, Path: "/home/tester/work/prefapp/gitops-fsforge-improvements", Group: "/home/tester/work/prefapp", DisplayRemainder: "gitops-fsforge-improvements", ParentPath: "/home/tester/work/prefapp/gitops-k8s", Git: true, GitContext: &picker.GitContext{Identity: "gitops-fsforge-improvements"}},
-		{Kind: picker.ProjectKind, Path: "/home/tester/work/prefapp/gitops-publication-si-01-03-jh69pd38vg", Group: "/home/tester/work/prefapp", DisplayRemainder: "gitops-publication-si-01-03-jh69pd38vg", ParentPath: "/home/tester/work/prefapp/gitops-k8s", Git: true, GitContext: &picker.GitContext{Identity: "fix/publication-si-01-03-jh69pd38vg", Adds: 277, Deletes: 376}},
-		{Kind: picker.ProjectKind, Path: "/home/tester/work/prefapp/gitops-readme-diagram", Group: "/home/tester/work/prefapp", DisplayRemainder: "gitops-readme-diagram", ParentPath: "/home/tester/work/prefapp/gitops-k8s", Git: true, GitContext: &picker.GitContext{Identity: "gitops-readme-diagram"}},
+		{Kind: picker.ProjectKind, Path: "/home/tester/work/example/deploy-k8s", Group: "/home/tester/work/example", DisplayRemainder: "deploy-k8s", Git: true, GitContext: &picker.GitContext{Identity: "main", Dirty: true}},
+		{Kind: picker.ProjectKind, Path: "/home/tester/work/example/deploy-metrics-improvements", Group: "/home/tester/work/example", DisplayRemainder: "deploy-metrics-improvements", ParentPath: "/home/tester/work/example/deploy-k8s", Git: true, GitContext: &picker.GitContext{Identity: "deploy-metrics-improvements"}},
+		{Kind: picker.ProjectKind, Path: "/home/tester/work/example/deploy-rolloutplan-qa-01-03-jh69pd38vg", Group: "/home/tester/work/example", DisplayRemainder: "deploy-rolloutplan-qa-01-03-jh69pd38vg", ParentPath: "/home/tester/work/example/deploy-k8s", Git: true, GitContext: &picker.GitContext{Identity: "fix/rolloutplan-qa-01-03-jh69pd38vg", Adds: 277, Deletes: 376}},
+		{Kind: picker.ProjectKind, Path: "/home/tester/work/example/deploy-readme-diagram", Group: "/home/tester/work/example", DisplayRemainder: "deploy-readme-diagram", ParentPath: "/home/tester/work/example/deploy-k8s", Git: true, GitContext: &picker.GitContext{Identity: "deploy-readme-diagram"}},
 		{Kind: picker.ProjectKind, Path: "/home/tester/work/firestartr-pro/srv-github-app-generator", Group: "/home/tester/work/firestartr-pro", DisplayRemainder: "srv-github-app-generator", Git: true, GitContext: &picker.GitContext{Identity: "main", Dirty: true}},
-		{Kind: picker.ProjectKind, Path: "/home/tester/work/other/unrelated", Group: "/home/tester/work/other", DisplayRemainder: "unrelated", SearchText: "/home/tester/work/gitops-scattered-path", Git: true, GitContext: &picker.GitContext{Identity: "gitops-branch-only"}},
+		{Kind: picker.ProjectKind, Path: "/home/tester/work/other/unrelated", Group: "/home/tester/work/other", DisplayRemainder: "unrelated", SearchText: "/home/tester/work/deploy-scattered-path", Git: true, GitContext: &picker.GitContext{Identity: "deploy-branch-only"}},
 	}
 }
 
@@ -37,18 +37,18 @@ func TestProjectsGroupedRowsUseHomeAndWorktreeGutter(t *testing.T) {
 	model = updateModel(t, model, keyMsg(tea.KeyDown))
 	model = updateModel(t, model, keyMsg(tea.KeyRight))
 	plain := shell.Plain(model.View())
-	if !strings.Contains(plain, "~/work/prefapp") {
+	if !strings.Contains(plain, "~/work/example") {
 		t.Fatalf("group path was not abbreviated: %q", plain)
 	}
-	if strings.Contains(plain, "/home/tester/work/prefapp") {
+	if strings.Contains(plain, "/home/tester/work/example") {
 		t.Fatalf("group path retained home prefix: %q", plain)
 	}
-	if !strings.Contains(plain, "├ gitops-fsforge-improvements") || !strings.Contains(plain, "└ gitops-readme-diagram") {
+	if !strings.Contains(plain, "├ deploy-metrics-improvements") || !strings.Contains(plain, "└ deploy-readme-diagram") {
 		t.Fatalf("worktree gutters missing: %q", plain)
 	}
 	for _, styledLine := range strings.Split(model.View(), "\n") {
 		line := shell.Plain(styledLine)
-		if strings.Contains(line, "gitops-") && strings.TrimSpace(line) != "" && shell.StringWidth(line) != 120 {
+		if strings.Contains(line, "deploy-") && strings.TrimSpace(line) != "" && shell.StringWidth(line) != 120 {
 			t.Fatalf("project line width = %d: %q", shell.StringWidth(line), line)
 		}
 	}
@@ -72,7 +72,7 @@ func TestProjectsColumnsRespectTerminalWidths(t *testing.T) {
 	model = updateModel(t, model, keyMsg(tea.KeyDown))
 	model = updateModel(t, model, keyMsg(tea.KeyRight))
 	plain := shell.Plain(model.View())
-	if !strings.Contains(plain, "gitops-publication-si-01-03-jh69pd38vg") || !strings.Contains(plain, "fix/publication-si-01-03-jh69pd38vg") {
+	if !strings.Contains(plain, "deploy-rolloutplan-qa-01-03-jh69pd38vg") || !strings.Contains(plain, "fix/rolloutplan-qa-01-03-jh69pd38vg") {
 		t.Fatalf("wide columns truncated needlessly: %q", plain)
 	}
 }
@@ -80,14 +80,14 @@ func TestProjectsColumnsRespectTerminalWidths(t *testing.T) {
 func TestProjectsQueryIsFlatRankedAndStartsAtBestName(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
-	model.SetQuery("gitops")
-	// Prefix matches tie on score. The shorter name wins, so gitops-k8s
-	// leads gitops-fsforge-improvements; the branch-only match stays last.
+	model.SetQuery("deploy")
+	// Prefix matches tie on score. The shorter name wins, so deploy-k8s
+	// leads deploy-metrics-improvements; the branch-only match stays last.
 	want := []string{
-		"project:/home/tester/work/prefapp/gitops-k8s",
-		"project:/home/tester/work/prefapp/gitops-readme-diagram",
-		"project:/home/tester/work/prefapp/gitops-fsforge-improvements",
-		"project:/home/tester/work/prefapp/gitops-publication-si-01-03-jh69pd38vg",
+		"project:/home/tester/work/example/deploy-k8s",
+		"project:/home/tester/work/example/deploy-readme-diagram",
+		"project:/home/tester/work/example/deploy-metrics-improvements",
+		"project:/home/tester/work/example/deploy-rolloutplan-qa-01-03-jh69pd38vg",
 		"project:/home/tester/work/other/unrelated",
 	}
 	rows := model.Rows()
@@ -105,7 +105,7 @@ func TestProjectsQueryIsFlatRankedAndStartsAtBestName(t *testing.T) {
 	// The folder column is flat mode only and reads as a path before the name.
 	model.SetSize(120, 16)
 	plain := shell.Plain(model.View())
-	if !strings.Contains(plain, "~/work/prefapp/") || strings.Contains(plain, "▾  ") {
+	if !strings.Contains(plain, "~/work/example/") || strings.Contains(plain, "▾  ") {
 		t.Fatalf("flat query did not put the folder before the name: %q", plain)
 	}
 }
@@ -246,17 +246,17 @@ func TestProjectBranchAndFolderMatchesAreHighlighted(t *testing.T) {
 func TestProjectsFlatRowFitsWithoutTruncation(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
-	model.SetQuery("gitops")
+	model.SetQuery("deploy")
 	// 120 columns is wide enough for the whole row, folder included.
 	model.SetSize(120, 24)
 	plain := shell.Plain(model.View())
-	if !strings.Contains(plain, "gitops-publication-si-01-03-jh69pd38vg") {
+	if !strings.Contains(plain, "deploy-rolloutplan-qa-01-03-jh69pd38vg") {
 		t.Fatalf("name truncated although the row fits: %q", plain)
 	}
-	if !strings.Contains(plain, "fix/publication-si-01-03-jh69pd38vg") {
+	if !strings.Contains(plain, "fix/rolloutplan-qa-01-03-jh69pd38vg") {
 		t.Fatalf("branch truncated although the row fits: %q", plain)
 	}
-	if !strings.Contains(plain, "~/work/prefapp/") {
+	if !strings.Contains(plain, "~/work/example/") {
 		t.Fatalf("folder dropped although the row fits: %q", plain)
 	}
 }
@@ -264,7 +264,7 @@ func TestProjectsFlatRowFitsWithoutTruncation(t *testing.T) {
 func TestProjectsFlatNameIsCappedAndKeepsGitColumnAt80(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
-	model.SetQuery("gitops")
+	model.SetQuery("deploy")
 	model.SetSize(80, 24)
 	layout := model.frame().projectLayout()
 	if minName := 16; layout.name < minName {
@@ -287,7 +287,7 @@ func TestProjectsFlatNameIsCappedAndKeepsGitColumnAt80(t *testing.T) {
 func TestProjectsFlatKeepsNamesUpTo30At80(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
-	model.SetQuery("gitops")
+	model.SetQuery("deploy")
 	model.SetSize(80, 24)
 	layout := model.frame().projectLayout()
 	shown := 0
@@ -312,7 +312,7 @@ func TestProjectsFlatKeepsNamesUpTo30At80(t *testing.T) {
 func TestProjectsFlatDropsFolderBeforeCuttingBranch(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
-	model.SetQuery("gitops")
+	model.SetQuery("deploy")
 	model.SetSize(60, 16)
 	layout := model.frame().projectLayout()
 	if layout.path != 0 {
@@ -322,7 +322,7 @@ func TestProjectsFlatDropsFolderBeforeCuttingBranch(t *testing.T) {
 		t.Fatalf("branch width %d fell below the floor %d", layout.git, minBranch)
 	}
 	plain := shell.Plain(model.View())
-	if strings.Contains(plain, "~/work/prefapp") {
+	if strings.Contains(plain, "~/work/example") {
 		t.Fatalf("dropped folder column still rendered: %q", plain)
 	}
 }
@@ -402,15 +402,15 @@ func TestProjectBranchTruncatesBeforeSummary(t *testing.T) {
 func TestProjectsFlatFolderLeadsNameAsPath(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
-	model.SetQuery("gitops")
+	model.SetQuery("deploy")
 	model.SetSize(120, 16)
 	plain := shell.Plain(model.View())
-	if !strings.Contains(plain, "~/work/prefapp/gitops-k8s") {
+	if !strings.Contains(plain, "~/work/example/deploy-k8s") {
 		t.Fatalf("folder did not lead the name as a path: %q", plain)
 	}
 	offset := -1
 	for _, line := range strings.Split(plain, "\n") {
-		index := strings.Index(line, "gitops-")
+		index := strings.Index(line, "deploy-")
 		if index < 0 {
 			continue
 		}
@@ -429,13 +429,13 @@ func TestProjectsFlatFolderLeadsNameAsPath(t *testing.T) {
 func TestProjectsFlatFolderLeftTruncatesThenDrops(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 	model := NewModel(context.Background(), Deps{Projects: projectFixture()}, ProjectsTab)
-	model.SetQuery("gitops")
+	model.SetQuery("deploy")
 	model.SetSize(100, 16)
 	plain := shell.Plain(model.View())
-	if !strings.Contains(plain, "…") || !strings.Contains(plain, "fapp/") {
+	if !strings.Contains(plain, "…") || !strings.Contains(plain, "mple/") {
 		t.Fatalf("folder was not left-truncated and kept its tail: %q", plain)
 	}
-	name := "gitops-publication-si-01-03-jh69pd38vg"
+	name := "deploy-rolloutplan-qa-01-03-jh69pd38vg"
 	if !strings.Contains(plain, name) {
 		t.Fatalf("folder truncation starved the name: %q", plain)
 	}
