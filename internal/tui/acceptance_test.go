@@ -227,17 +227,19 @@ func TestTabKeysAndQuerySwitching(t *testing.T) {
 			t.Fatalf("key %v selected %q, want %q", key, model.Tab(), want)
 		}
 	}
+	// Agent and container rows rank on the local hostname, so the query holds
+	// a slash that no hostname can match.
 	auto := NewModel(context.Background(), richDeps(), AgentsTab)
-	auto.SetQuery("nexo")
-	if auto.Tab() != ProjectsTab || auto.Query() != "nexo" {
+	auto.SetQuery("work/nexo")
+	if auto.Tab() != ProjectsTab || auto.Query() != "work/nexo" {
 		t.Fatalf("zero-match query did not switch tabs: %q/%q", auto.Tab(), auto.Query())
 	}
-	model.SetQuery("nexo")
-	if model.Query() != "nexo" || model.Tab() != ProjectsTab {
+	model.SetQuery("work/nexo")
+	if model.Query() != "work/nexo" || model.Tab() != ProjectsTab {
 		t.Fatalf("query/tab = %q/%q", model.Query(), model.Tab())
 	}
 	model = updateModel(t, model, keyMsg(tea.KeyF2))
-	if model.Query() != "nexo" {
+	if model.Query() != "work/nexo" {
 		t.Fatal("switching tabs lost query")
 	}
 	if model.Tab() != AgentsTab && model.Tab() != ContainersTab && model.Tab() != ProjectsTab {
