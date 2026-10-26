@@ -9,6 +9,8 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/containerstate"
+	"github.com/vieitesss/nexo/internal/proxy"
+	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
 var (
@@ -101,8 +103,14 @@ type createBlock struct {
 	Options createOptions `json:"options"`
 }
 
+// createOptions is one terminal block's native options. A project terminal
+// only needs a working directory; a proxy block runs a direct command with no
+// shell and no login wrapper.
 type createOptions struct {
-	CWD string `json:"cwd,omitempty"`
+	CWD     string   `json:"cwd,omitempty"`
+	Shell   string   `json:"shell,omitempty"`
+	Login   *bool    `json:"login,omitempty"`
+	Command []string `json:"command,omitempty"`
 }
 
 type createResult struct {
@@ -174,10 +182,20 @@ func (b *Backend) blocks(ctx context.Context, sessionID string) ([]block, error)
 }
 
 // ListContainers maps Rex sessions to nexo containers and reports each
-// session's focused block for optional previews.
+// session's focused block for optional previews. A session recorded as a
+// machine proxy is listed as the machine it attaches to, never as a local
+// container.
 func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container, error) {
 	if b == nil || b.Runner == nil {
 		return nil, errors.New("rex container lister requires a command runner")
+	}
+	store, err := b.metadata(ctx)
+	if err != nil {
+		return nil, err
+	}
+	proxies, err := store.proxies()
+	if err != nil {
+		return nil, err
 	}
 	sessions, err := b.sessions(ctx)
 	if err != nil {
@@ -186,11 +204,23 @@ func (b *Backend) ListContainers(ctx context.Context) ([]capabilities.Container,
 	machine := containerstate.LocalMachine()
 	containers := make([]capabilities.Container, 0, len(sessions))
 	for _, session := range sessions {
+		panes := b.focusedBlock(ctx, session.ID)
+		if record, ok := proxies[session.ID]; ok {
+			proxyMachine := proxyidentity.NormalizeMachineName(record.Machine)
+			containers = append(containers, capabilities.Container{
+				ID:           session.ID,
+				Name:         proxy.ProxyDisplayName("", proxyMachine),
+				Machine:      proxyMachine,
+				ActivePaneID: panes,
+				Proxy:        true,
+			})
+			continue
+		}
 		containers = append(containers, capabilities.Container{
 			ID:           session.ID,
 			Name:         session.Label,
 			Machine:      machine,
-			ActivePaneID: b.focusedBlock(ctx, session.ID),
+			ActivePaneID: panes,
 		})
 	}
 	return containers, nil
@@ -330,9 +360,31 @@ func (b *Backend) focusAndRecord(ctx context.Context, session sessionInfo, noFoc
 	if err != nil || !focused {
 		return err
 	}
-	return b.recordContainer(ctx, containerstate.Entry{
-		ID:      session.ID,
-		Name:    session.Label,
-		Machine: containerstate.LocalMachine(),
-	})
+	entry, err := b.containerEntry(ctx, session)
+	if err != nil {
+		return err
+	}
+	return b.recordContainer(ctx, entry)
+}
+
+// containerEntry classifies one session from authoritative metadata before
+// recording it, so focusing a proxy row never demotes the machine proxy to a
+// local container.
+func (b *Backend) containerEntry(ctx context.Context, session sessionInfo) (containerstate.Entry, error) {
+	store, err := b.metadata(ctx)
+	if err != nil {
+		return containerstate.Entry{}, err
+	}
+	record, ok, err := store.lookupProxy(session.ID)
+	if err != nil {
+		return containerstate.Entry{}, err
+	}
+	if !ok {
+		return containerstate.Entry{ID: session.ID, Name: session.Label, Machine: containerstate.LocalMachine()}, nil
+	}
+	entry := containerstate.Entry{ID: session.ID, Machine: proxyidentity.NormalizeMachineName(record.Machine), Proxy: true}
+	if record.RemoteKind != proxy.RemoteKindTmux {
+		entry.RemoteKind = record.RemoteKind
+	}
+	return entry, nil
 }

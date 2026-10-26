@@ -16,22 +16,36 @@ type call struct {
 func (c call) key() string { return strings.Join(c.args, " ") }
 
 // fakeRunner answers exact Rex command lines and records every request so a
-// test can assert the CLI surface a behaviour produces.
+// test can assert the CLI surface a behaviour produces. handler answers a
+// request whose payload a test cannot spell in advance, such as a session
+// creation carrying the resolved nexo binary; fail injects a request error.
 type fakeRunner struct {
 	calls   []call
 	outputs map[string]string
 	errors  map[string]error
+	handler func(call) ([]byte, bool)
+	fail    func(call) error
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	request := call{name: name, args: append([]string(nil), args...)}
 	f.calls = append(f.calls, request)
 	key := request.key()
+	if f.fail != nil {
+		if err := f.fail(request); err != nil {
+			return nil, err
+		}
+	}
 	if err, ok := f.errors[key]; ok {
 		return nil, err
 	}
 	if output, ok := f.outputs[key]; ok {
 		return []byte(output), nil
+	}
+	if f.handler != nil {
+		if output, ok := f.handler(request); ok {
+			return output, nil
+		}
 	}
 	return nil, fmt.Errorf("unexpected command: %s %s", name, key)
 }

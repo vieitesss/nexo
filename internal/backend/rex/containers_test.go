@@ -20,6 +20,7 @@ var (
 
 func TestListContainersMapsSessionsAndFocusedBlocks(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string]string{
+		whoamiKey:               `{"host_id":"host-1","instance_id":"instance-1"}`,
 		api("session.list", ""): twoSessions,
 		api("session.view", `{"session_id":"session:1"}`): `{"session_id":"session:1","label":"api","active_window_id":"window:1","windows":[` +
 			`{"window_id":"window:1","focused_block_id":"block:9"},{"window_id":"window:2","focused_block_id":"block:3"}]}`,

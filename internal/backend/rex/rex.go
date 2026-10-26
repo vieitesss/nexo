@@ -54,6 +54,12 @@ type Backend struct {
 	identity    identity
 	identified  bool
 	identityErr error
+
+	// proxyConfig and proxyConfigPath apply to machine proxies: the attachment
+	// transport, SSH settings, and the optional config file the child nexo
+	// process inherits.
+	proxyConfig     config.RemoteConfig
+	proxyConfigPath string
 }
 
 // New constructs a Rex backend over the supplied command runner. Informational
