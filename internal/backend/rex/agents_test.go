@@ -665,3 +665,48 @@ func TestListAgentsIgnoresWorkingMarkersInTheScrollback(t *testing.T) {
 		t.Fatalf("ReadScreen() = %q, want the full screen and scrollback", content)
 	}
 }
+
+// TestListAgentsRecordsOneMixedSnapshotInOneTransaction pins the batch: a block
+// with a native status and a block observed from its process and screen are one
+// ledger transaction with one clock instant, and native rows stay first.
+func TestListAgentsRecordsOneMixedSnapshotInOneTransaction(t *testing.T) {
+	now := time.Date(2026, time.October, 22, 9, 48, 0, 0, time.UTC)
+	runner := &fakeRunner{outputs: map[string]string{
+		whoamiKey:               `{"host_id":"host-1","instance_id":"instance-1"}`,
+		api("session.list", ""): sessionsJSON(sessionJSON("session:1", "screen"), sessionJSON("session:2", "native")),
+		api("session.list_blocks", `{"session_id":"session:1"}`):                                        blocksJSON(terminalBlockJSON("block:screen", "host-1")),
+		api("session.list_blocks", `{"session_id":"session:2"}`):                                        blocksJSON(terminalBlockJSON("block:native", "host-1")),
+		api("block.method", blockMethodPayload("session:1", "block:screen", "program_status")):          `{"records":[]}`,
+		api("block.method", blockMethodPayload("session:1", "block:screen", "process")):                 `{"foreground":{"pid":42,"name":"node","script":"/opt/homebrew/bin/claude"}}`,
+		api("block.method", blockCallPayload("session:1", "block:screen", "format", `{"format":"vt"}`)): vtCapture(24, "⠋ Working… (esc to interrupt)"),
+		api("block.method", blockMethodPayload("session:1", "block:screen", "size")):                    `{"rows":24}`,
+		api("block.method", blockMethodPayload("session:2", "block:native", "program_status")):          statusJSON("blocked", "claude-code", "2026-10-22T09:48:34+02:00"),
+		api("block.method", blockMethodPayload("session:2", "block:native", "process")):                 `{}`,
+	}}
+	backend := newTestBackend(t, runner, nil)
+	samples := 0
+	backend.now = func() time.Time {
+		samples++
+		return now
+	}
+
+	agents, err := backend.ListAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ListAgents() error = %v", err)
+	}
+	if samples != 1 {
+		t.Fatalf("ledger clock samples = %d, want one transaction for the snapshot", samples)
+	}
+	if len(agents) != 2 {
+		t.Fatalf("agents = %#v, want one row per block", agents)
+	}
+	if agents[0].PaneID != "block:native" || agents[1].PaneID != "block:screen" {
+		t.Fatalf("agents = %#v, want the native block listed before the screen block", agents)
+	}
+	if agents[0].State != "stopped" || agents[1].State != "working" {
+		t.Fatalf("states = %q and %q, want each observation to use its own mode", agents[0].State, agents[1].State)
+	}
+	if agents[0].StoppedSince == nil || !agents[0].StoppedSince.Equal(now) {
+		t.Fatalf("stopped age = %v, want the batch instant %v", agents[0].StoppedSince, now)
+	}
+}

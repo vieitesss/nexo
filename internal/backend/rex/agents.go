@@ -37,8 +37,9 @@ type agentSnapshot struct {
 	// status is the native state mapped for the ledger. It stays empty for the
 	// process/screen fallback, which has no native lifecycle.
 	status string
-	// working is the fallback's screen observation. Native snapshots derive it
-	// from status, so the native state stays the only native fact.
+	// working is the observation's working evidence: the native status mapped
+	// to work, or the screen marker of a fallback observation. The presence of
+	// status is what selects the ledger's native transition mode.
 	working bool
 	// sequence is the native observation generation: the owner process that
 	// published the record. A repeated report from the same owner keeps its
@@ -85,7 +86,7 @@ func (b *Backend) ListAgents(ctx context.Context) ([]capabilities.Agent, error) 
 		return nil, err
 	}
 	var present []string
-	var native, fallback []agentSnapshot
+	var snapshots []agentSnapshot
 	for _, session := range sessions {
 		blocks, err := b.blocks(ctx, session.ID)
 		if err != nil {
@@ -103,40 +104,52 @@ func (b *Backend) ListAgents(ctx context.Context) ([]capabilities.Agent, error) 
 			if !ok {
 				continue
 			}
-			if snapshot.status == "" {
-				fallback = append(fallback, snapshot)
-			} else {
-				native = append(native, snapshot)
-			}
+			snapshots = append(snapshots, snapshot)
 		}
 	}
-	states, err := b.recordAgentState(ctx, cfg, present, native, fallback)
+	states, err := b.recordAgentState(ctx, cfg, present, snapshots)
 	if err != nil {
 		return nil, err
 	}
-	agents := make([]capabilities.Agent, 0, len(native)+len(fallback))
-	for _, group := range [][]agentSnapshot{native, fallback} {
-		for _, snapshot := range group {
-			state := states[snapshot.block.ID]
-			branch := ""
-			if localBlock(snapshot.block, resolved) {
-				branch = git.Branch(ctx, b.Runner, snapshot.path)
-			}
-			agents = append(agents, capabilities.Agent{
-				PaneID:       snapshot.block.ID,
-				Target:       snapshot.block.ID,
-				ContainerID:  snapshot.session.ID,
-				Container:    snapshot.session.Label,
-				Window:       snapshot.block.Label,
-				Harness:      snapshot.harness,
-				State:        state.State,
-				Seen:         state.Seen,
-				StoppedSince: state.StoppedSince,
-				Branch:       branch,
-			})
+	agents := make([]capabilities.Agent, 0, len(snapshots))
+	for _, snapshot := range nativeFirst(snapshots) {
+		state := states[snapshot.block.ID]
+		branch := ""
+		if localBlock(snapshot.block, resolved) {
+			branch = git.Branch(ctx, b.Runner, snapshot.path)
 		}
+		agents = append(agents, capabilities.Agent{
+			PaneID:       snapshot.block.ID,
+			Target:       snapshot.block.ID,
+			ContainerID:  snapshot.session.ID,
+			Container:    snapshot.session.Label,
+			Window:       snapshot.block.Label,
+			Harness:      snapshot.harness,
+			State:        state.State,
+			Seen:         state.Seen,
+			StoppedSince: state.StoppedSince,
+			Branch:       branch,
+		})
 	}
 	return agents, nil
+}
+
+// nativeFirst reports the native observations before the process/screen ones,
+// in snapshot order. It only orders the rows nexo returns; the ledger records
+// the snapshot in the order it was observed.
+func nativeFirst(snapshots []agentSnapshot) []agentSnapshot {
+	ordered := make([]agentSnapshot, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if snapshot.status != "" {
+			ordered = append(ordered, snapshot)
+		}
+	}
+	for _, snapshot := range snapshots {
+		if snapshot.status == "" {
+			ordered = append(ordered, snapshot)
+		}
+	}
+	return ordered
 }
 
 // observeAgent reports the agent evidence for one terminal block. Native
@@ -154,11 +167,13 @@ func (b *Backend) observeAgent(ctx context.Context, session sessionInfo, current
 	live, _ := b.blockProcess(ctx, session.ID, current.ID)
 	path := processPath(live)
 	if record, harness, ok := selectStatusRecord(records, allow); ok {
+		status := normalizeStatus(record.State)
 		return agentSnapshot{
 			session:  session,
 			block:    current,
 			harness:  harness,
-			status:   normalizeStatus(record.State),
+			status:   status,
+			working:  status == "working",
 			sequence: record.generation(),
 			path:     path,
 		}, true
@@ -182,69 +197,45 @@ func (b *Backend) observeAgent(ctx context.Context, session sessionInfo, current
 	}, true
 }
 
-// recordAgentState turns the observed blocks into ledger state. Native and
-// process/screen observations follow different transition policies, so each
-// group is recorded with the complete present set: neither group prunes the
-// other.
-func (b *Backend) recordAgentState(ctx context.Context, cfg config.AgentsConfig, present []string, native, fallback []agentSnapshot) (map[string]agentstate.State, error) {
+// recordAgentState turns the observed blocks into durable agent state in one
+// ledger batch: one clock instant, one document replacement, and one
+// observation per block whose own evidence selects the transition mode.
+func (b *Backend) recordAgentState(ctx context.Context, cfg config.AgentsConfig, present []string, snapshots []agentSnapshot) (map[string]agentstate.State, error) {
 	ledger, err := b.agentLedger(ctx)
 	if err != nil {
 		return nil, err
 	}
-	states := make(map[string]agentstate.State, len(native)+len(fallback))
-	if err := recordObservations(ledger, present, nativeObservations(native), agentstate.Policy{}, states); err != nil {
+	observations := agentObservations(snapshots)
+	results, err := ledger.Observe(
+		agentstate.Batch{Present: present, Observations: observations},
+		agentstate.Policy{IdleThreshold: time.Duration(cfg.IdleSeconds) * time.Second},
+		nil,
+	)
+	if err != nil {
 		return nil, err
 	}
-	if len(fallback) == 0 {
-		return states, nil
-	}
-	policy := agentstate.Policy{IdleThreshold: time.Duration(cfg.IdleSeconds) * time.Second}
-	if err := recordObservations(ledger, present, fallbackObservations(fallback), policy, states); err != nil {
-		return nil, err
+	states := make(map[string]agentstate.State, len(results))
+	for index, result := range results {
+		states[observations[index].ID] = result.State
 	}
 	return states, nil
 }
 
-// recordObservations applies one policy to one group of observations and adds
-// the resulting states to states, keyed by the identity they describe.
-func recordObservations(ledger *agentstate.Ledger, present []string, observations []agentstate.Observation, policy agentstate.Policy, states map[string]agentstate.State) error {
-	results, err := ledger.Observe(
-		agentstate.Batch{Present: present, Observations: observations},
-		policy,
-		nil,
-	)
-	if err != nil {
-		return err
-	}
-	for index, result := range results {
-		states[observations[index].ID] = result.State
-	}
-	return nil
-}
-
-func nativeObservations(snapshots []agentSnapshot) []agentstate.Observation {
+// agentObservations converts one snapshot into ledger observations in block
+// order. A block with a native status contributes its native record; a block
+// without one contributes its process/screen evidence.
+func agentObservations(snapshots []agentSnapshot) []agentstate.Observation {
 	observations := make([]agentstate.Observation, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		observations = append(observations, agentstate.Observation{
 			ID:       snapshot.block.ID,
-			Working:  snapshot.status == "working",
+			Working:  snapshot.working,
 			Status:   snapshot.status,
 			Sequence: snapshot.sequence,
 			// Rex's idle convention: an idle program waits at its prompt, so
 			// nothing is waiting for the user. A focused block is only the
 			// session's typing target, never proof that an app displays it.
 			NativeSeen: snapshot.status == "idle",
-		})
-	}
-	return observations
-}
-
-func fallbackObservations(snapshots []agentSnapshot) []agentstate.Observation {
-	observations := make([]agentstate.Observation, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		observations = append(observations, agentstate.Observation{
-			ID:      snapshot.block.ID,
-			Working: snapshot.working,
 		})
 	}
 	return observations
