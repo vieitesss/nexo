@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/vieitesss/nexo/internal/config"
 )
 
 func TestRexBlockBindsOnlyChosenKeys(t *testing.T) {
@@ -114,6 +116,49 @@ func TestRexBindingsRoundTripByAction(t *testing.T) {
 	tuiKey, agentsKey := bindingsFromContents(contents, "rex")
 	if tuiKey != "ctrl+space>o" || agentsKey != "ctrl+space>a" {
 		t.Fatalf("bindings = %q, %q; want ctrl+space>o, ctrl+space>a", tuiKey, agentsKey)
+	}
+}
+
+func TestRexBindingsDecodeAnEscapedKey(t *testing.T) {
+	// One trailing backslash is a valid Rex chord, but Lua and Go write it
+	// escaped, so reading the block back must decode it again.
+	key := `ctrl+space>\`
+	if err := config.ValidateBindingKeyForBackend("rex", key); err != nil {
+		t.Fatalf("Rex rejects the chosen key %q: %v", key, err)
+	}
+	contents := "-- keep\n" + LuaManagedStart + "\n" + RexBlock("/opt/nexo", key, "") + "\n" + LuaManagedEnd + "\n"
+	if !strings.Contains(contents, `rex.bind("ctrl+space>\\", "nexo_tui")`) {
+		t.Fatalf("generated block did not escape the key:\n%s", contents)
+	}
+	tuiKey, agentsKey := bindingsFromContents(contents, "rex")
+	if tuiKey != key || agentsKey != "" {
+		t.Fatalf("read-back keys = %q, %q; want %q and no agents key", tuiKey, agentsKey, key)
+	}
+	if err := validateBindings("rex", tuiKey, agentsKey); err != nil {
+		t.Fatalf("read-back key does not validate: %v", err)
+	}
+}
+
+func TestSetupRexDryRunKeepsAnEscapedBinding(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	initPath := rexConfigPath(home)
+	if err := os.MkdirAll(filepath.Dir(initPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	contents := LuaManagedStart + "\n" + RexBlock(nexoPath(), `ctrl+space>\`, "") + "\n" + LuaManagedEnd + "\n"
+	if err := os.WriteFile(initPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notify := true
+	out := &bytes.Buffer{}
+	in := Input{Runner: &rexSetupRunner{}, Home: home, Stdout: out, TTY: false}
+	err := Run(context.Background(), in, Options{Backend: "rex", ConfigPath: filepath.Join(home, ".config", "nexo", "config.toml"), LocalOnly: true, DryRun: true, Yes: true, Notify: &notify})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "--- "+initPath) {
+		t.Fatalf("rerun planned a change to the escaped binding:\n%s", out.String())
 	}
 }
 

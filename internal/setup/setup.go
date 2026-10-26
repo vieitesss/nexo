@@ -1621,17 +1621,33 @@ func rexBindingsFromContents(contents string) (string, string) {
 	body := managedBodyBetween(contents, LuaManagedStart, LuaManagedEnd)
 	tuiKey, agentsKey := "", ""
 	for _, match := range rexBindActionPattern.FindAllStringSubmatch(body, -1) {
+		key, ok := rexBindingKey(match[1])
+		if !ok {
+			continue
+		}
 		switch match[2] {
 		case "nexo_agents":
-			agentsKey = match[1]
+			agentsKey = key
 		case "nexo_tui":
-			tuiKey = match[1]
+			tuiKey = key
 		}
 	}
 	return tuiKey, agentsKey
 }
 
-var rexBindActionPattern = regexp.MustCompile(`rex\.bind\(\s*["']([^"']+)["']\s*,\s*["'](nexo_tui|nexo_agents)["']\s*\)`)
+var rexBindActionPattern = regexp.MustCompile(`rex\.bind\(\s*("(?:[^"\\]|\\.)*"|'[^']*')\s*,\s*["'](nexo_tui|nexo_agents)["']\s*\)`)
+
+// rexBindingKey decodes the Lua string literal RexBlock wrote for a key, so an
+// escaped key reads back as the key the user chose. A literal that does not
+// decode is no binding: the form asks for that key again instead of writing it
+// back escaped.
+func rexBindingKey(literal string) (string, bool) {
+	if strings.HasPrefix(literal, "'") {
+		return literal[1 : len(literal)-1], true
+	}
+	key, err := strconv.Unquote(literal)
+	return key, err == nil
+}
 
 func managedBody(contents string) string {
 	return managedBodyBetween(contents, ManagedStart, ManagedEnd)
