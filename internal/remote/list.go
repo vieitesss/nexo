@@ -446,16 +446,26 @@ type herdrWorkspace struct {
 	Label string `json:"label"`
 }
 
-func decodeHerdr(output []byte, machine string) ([]capabilities.Container, error) {
+// herdrResult unwraps the `result` envelope every Herdr command prints. A
+// response without one is returned whole, so a caller can still decode a bare
+// result object.
+func herdrResult(output []byte) (json.RawMessage, error) {
 	var envelope struct {
 		Result json.RawMessage `json:"result"`
 	}
 	if err := json.Unmarshal(output, &envelope); err != nil {
-		return nil, fmt.Errorf("decode remote Herdr workspace list: %w", err)
+		return nil, err
 	}
-	raw := output
-	if len(envelope.Result) != 0 && string(envelope.Result) != "null" {
-		raw = envelope.Result
+	if len(envelope.Result) == 0 || string(envelope.Result) == "null" {
+		return output, nil
+	}
+	return envelope.Result, nil
+}
+
+func decodeHerdr(output []byte, machine string) ([]capabilities.Container, error) {
+	raw, err := herdrResult(output)
+	if err != nil {
+		return nil, fmt.Errorf("decode remote Herdr workspace list: %w", err)
 	}
 	var result struct {
 		Type       string           `json:"type"`
