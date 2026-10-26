@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,7 +40,11 @@ type agentSnapshot struct {
 	// working is the fallback's screen observation. Native snapshots derive it
 	// from status, so the native state stays the only native fact.
 	working bool
-	path    string
+	// sequence is the native observation generation: the owner process that
+	// published the record. A repeated report from the same owner keeps its
+	// stopped age; a new owner starts a new one.
+	sequence uint64
+	path     string
 }
 
 // ConfigureAgents applies the shared agents configuration. The recognized
@@ -147,8 +153,15 @@ func (b *Backend) observeAgent(ctx context.Context, session sessionInfo, current
 	}
 	live, _ := b.blockProcess(ctx, session.ID, current.ID)
 	path := processPath(live)
-	if status, harness, ok := selectStatusRecord(records, allow); ok {
-		return agentSnapshot{session: session, block: current, harness: harness, status: status, path: path}, true
+	if record, harness, ok := selectStatusRecord(records, allow); ok {
+		return agentSnapshot{
+			session:  session,
+			block:    current,
+			harness:  harness,
+			status:   normalizeStatus(record.State),
+			sequence: record.generation(),
+			path:     path,
+		}, true
 	}
 	harness := processHarness(live, allow)
 	if harness == "" {
@@ -211,9 +224,10 @@ func nativeObservations(snapshots []agentSnapshot) []agentstate.Observation {
 	observations := make([]agentstate.Observation, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		observations = append(observations, agentstate.Observation{
-			ID:      snapshot.block.ID,
-			Working: snapshot.status == "working",
-			Status:  snapshot.status,
+			ID:       snapshot.block.ID,
+			Working:  snapshot.status == "working",
+			Status:   snapshot.status,
+			Sequence: snapshot.sequence,
 			// Rex's idle convention: an idle program waits at its prompt, so
 			// nothing is waiting for the user. A focused block is only the
 			// session's typing target, never proof that an app displays it.
@@ -321,13 +335,14 @@ func (b *Backend) locateBlock(ctx context.Context, blockID string) (sessionInfo,
 	return sessionInfo{}, block{}, fmt.Errorf("rex block %q not found", blockID)
 }
 
-// selectStatusRecord reports the native state and configured harness of the
-// record that names the block's agent. Status records are generic, so
-// non-agent programs such as cargo or terraform are filtered out by nexo's
-// configured harness policy.
-func selectStatusRecord(records []statusRecord, allow map[string]struct{}) (string, string, bool) {
+// selectStatusRecord reports the record that names the block's agent and the
+// configured harness it belongs to. Status records are generic, so non-agent
+// programs such as cargo or terraform are filtered out by nexo's configured
+// harness policy.
+func selectStatusRecord(records []statusRecord, allow map[string]struct{}) (statusRecord, string, bool) {
 	best := -1
-	var chosenStatus, chosenHarness string
+	var chosen statusRecord
+	chosenHarness := ""
 	for _, record := range records {
 		app := strings.TrimSpace(record.EffectiveApp)
 		if app == "" {
@@ -337,14 +352,25 @@ func selectStatusRecord(records []statusRecord, allow map[string]struct{}) (stri
 		if !ok {
 			continue
 		}
-		status := normalizeStatus(record.State)
-		rank := statusPriority[status]
+		rank := statusPriority[normalizeStatus(record.State)]
 		if rank <= best {
 			continue
 		}
-		best, chosenStatus, chosenHarness = rank, status, harness
+		best, chosen, chosenHarness = rank, record, harness
 	}
-	return chosenStatus, chosenHarness, best >= 0
+	return chosen, chosenHarness, best >= 0
+}
+
+// generation is the observation generation of one status record: the process
+// that published it. Rex's updated_at moves on every report, so it cannot tell
+// a repeated report from new work, while a restarted agent gets a new owner.
+func (r statusRecord) generation() uint64 {
+	if r.Owner == nil {
+		return 0
+	}
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(r.Owner.Name + "/" + strconv.Itoa(r.Owner.PID)))
+	return hash.Sum64()
 }
 
 // normalizeStatus returns one of the five native states. Rex documents an

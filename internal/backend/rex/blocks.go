@@ -34,12 +34,20 @@ type pwdResult struct {
 	Owner *processInfo `json:"owner"`
 }
 
+// statusOwner is the process that published a status record when the report
+// arrived. Rex compares both fields because the system reuses process ids.
+type statusOwner struct {
+	PID  int    `json:"pid"`
+	Name string `json:"name"`
+}
+
 // statusRecord is one native program-status report (OSC 7501). A block can hold
 // several records: the root report plus one per child id.
 type statusRecord struct {
-	State        string `json:"state"`
-	App          string `json:"app"`
-	EffectiveApp string `json:"effective_app"`
+	State        string       `json:"state"`
+	App          string       `json:"app"`
+	EffectiveApp string       `json:"effective_app"`
+	Owner        *statusOwner `json:"owner"`
 }
 
 type statusReport struct {

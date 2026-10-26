@@ -2,6 +2,7 @@ package rex
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -421,5 +422,92 @@ func TestListAgentsRefreshesNativeAcknowledgementWhenObservationResumes(t *testi
 	resumed := listOnce(t, backend, 1)
 	if resumed[0].State != "stopped" || !resumed[0].Seen {
 		t.Fatalf("agent = %#v, want the resumed idle report seen again", resumed[0])
+	}
+}
+
+// statusJSONOwned is one program-status report published by an owner process.
+// Rex replaces updated_at on every report and names the reporting process by
+// pid and name, because pids are reused.
+func statusJSONOwned(state, app, updatedAt string, pid int, name string) string {
+	return `{"records":[{"state":"` + state + `","app":"` + app + `","effective_app":"` + app +
+		`","updated_at":"` + updatedAt + `","owner":{"pid":` + strconv.Itoa(pid) + `,"name":"` + name + `"}}]}`
+}
+
+func TestListAgentsKeepsAcknowledgementForTheSameOwner(t *testing.T) {
+	statusPayload := api("block.method", blockMethodPayload("session:1", "block:1", "program_status"))
+	now := time.Date(2026, time.October, 22, 9, 48, 0, 0, time.UTC)
+	backend := clockedBackend(t, agentFixture{
+		records: statusJSONOwned("blocked", "claude-code", "2026-10-22T09:48:34+02:00", 42, "zsh"),
+	}, &now)
+	runner := backend.Runner.(*fakeRunner)
+	ledger, err := backend.agentLedger(context.Background())
+	if err != nil {
+		t.Fatalf("agentLedger() error = %v", err)
+	}
+
+	first := listOnce(t, backend, 1)
+	if first[0].StoppedSince == nil {
+		t.Fatalf("agent = %#v, want a stopped agent", first[0])
+	}
+	if err := ledger.MarkSeen(first[0].PaneID); err != nil {
+		t.Fatalf("MarkSeen() error = %v", err)
+	}
+
+	// The same process re-reports the same state. Rex moves updated_at on
+	// every report, so only the owner identity can tell it apart from new work.
+	now = now.Add(time.Minute)
+	runner.outputs[statusPayload] = statusJSONOwned("blocked", "claude-code", "2026-10-22T09:49:40+02:00", 42, "zsh")
+	repeated := listOnce(t, backend, 1)
+	if !repeated[0].Seen {
+		t.Fatalf("agent = %#v, want the acknowledged agent to stay seen", repeated[0])
+	}
+	if repeated[0].StoppedSince == nil || !repeated[0].StoppedSince.Equal(*first[0].StoppedSince) {
+		t.Fatalf("StoppedSince = %v, want the preserved age %v", repeated[0].StoppedSince, first[0].StoppedSince)
+	}
+}
+
+func TestListAgentsResetsAcknowledgementForANewOwner(t *testing.T) {
+	statusPayload := api("block.method", blockMethodPayload("session:1", "block:1", "program_status"))
+	now := time.Date(2026, time.October, 22, 9, 48, 0, 0, time.UTC)
+	backend := clockedBackend(t, agentFixture{
+		records: statusJSONOwned("blocked", "claude-code", "2026-10-22T09:48:34+02:00", 42, "zsh"),
+	}, &now)
+	runner := backend.Runner.(*fakeRunner)
+	ledger, err := backend.agentLedger(context.Background())
+	if err != nil {
+		t.Fatalf("agentLedger() error = %v", err)
+	}
+	first := listOnce(t, backend, 1)
+	if first[0].StoppedSince == nil {
+		t.Fatalf("agent = %#v, want a stopped agent", first[0])
+	}
+	if err := ledger.MarkSeen(first[0].PaneID); err != nil {
+		t.Fatalf("MarkSeen() error = %v", err)
+	}
+
+	// A new process now owns the block. Its identical status text is new work,
+	// not the report the user already acknowledged.
+	now = now.Add(time.Minute)
+	runner.outputs[statusPayload] = statusJSONOwned("blocked", "claude-code", "2026-10-22T09:49:40+02:00", 43, "zsh")
+	replaced := listOnce(t, backend, 1)
+	if replaced[0].Seen {
+		t.Fatalf("agent = %#v, want a new owner to be unseen", replaced[0])
+	}
+	if replaced[0].StoppedSince == nil || !replaced[0].StoppedSince.Equal(now) {
+		t.Fatalf("StoppedSince = %v, want a fresh stop at %v", replaced[0].StoppedSince, now)
+	}
+
+	// Pids are reused, so a different process name is a new owner too.
+	if err := ledger.MarkSeen(replaced[0].PaneID); err != nil {
+		t.Fatalf("MarkSeen() error = %v", err)
+	}
+	now = now.Add(time.Minute)
+	runner.outputs[statusPayload] = statusJSONOwned("blocked", "claude-code", "2026-10-22T09:50:40+02:00", 43, "login")
+	renamed := listOnce(t, backend, 1)
+	if renamed[0].Seen {
+		t.Fatalf("agent = %#v, want a reused pid with another name to be unseen", renamed[0])
+	}
+	if renamed[0].StoppedSince == nil || !renamed[0].StoppedSince.Equal(now) {
+		t.Fatalf("StoppedSince = %v, want a fresh stop at %v", renamed[0].StoppedSince, now)
 	}
 }
