@@ -12,7 +12,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
@@ -41,6 +43,11 @@ type Backend struct {
 	messages io.Writer
 	stateDir string
 
+	// agents is the shared agents policy; agentsMu guards it because the TUI
+	// configures agents once and then polls from another goroutine.
+	agentsMu sync.Mutex
+	agents   config.AgentsConfig
+
 	identity    identity
 	identified  bool
 	identityErr error
@@ -50,7 +57,7 @@ type Backend struct {
 // notices such as a focus that no connected app can perform are written to
 // messages, which may be nil.
 func New(r runner.CommandRunner, messages io.Writer) *Backend {
-	return &Backend{Runner: r, binary: locateBinary(osLookup()), messages: messages}
+	return &Backend{Runner: r, binary: locateBinary(osLookup()), messages: messages, agents: (config.AgentsConfig{}).WithDefaults()}
 }
 
 // Error reports a failed Rex operation and preserves Rex's stderr.

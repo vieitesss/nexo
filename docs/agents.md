@@ -42,6 +42,22 @@ and resets it on a new `state_change_seq` or working transition. Branches are
 read with `git branch --show-current` from Herdr's native foreground or pane
 working directory.
 
+On Rex, agent state comes from the program status a program reports itself
+with OSC 7501. That protocol is generic, so only records whose app matches
+`[agents] processes` count as an agent: a cargo or terraform build reporting
+`working` stays out of the list. `working` is a working agent, `idle` is a seen
+stopped agent, and `blocked`, `done` and `error` are unseen stopped agents;
+a block that reports several records is one row, and the record that needs you
+most (blocked, then error, then working, then done, then idle) names it. Rex
+stamps every report with a new `updated_at`, so nexo keys stopped age on the
+reported state instead: re-reporting the same state keeps `stopped_since`.
+A block whose program reports no recognized status falls back to nexo's own
+observation, which resolves the harness from the block's process and reads the
+working indicator from its screen. Rex exposes no seen flag, so an agent is
+marked seen only after `nexo` itself focused that block and a connected Rex app
+really switched to its session; with no app connected the focus is a no-op and
+nothing is acknowledged. Rex needs no watcher for this listing.
+
 On tmux, `nexo agents watch` runs the poller; only one watcher is active for a
 server at a time. The watcher installs its focus hooks without changing tmux
 server options. If `focus-events` is off, it shows a message explaining that

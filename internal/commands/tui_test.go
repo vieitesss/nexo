@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/backend"
+	"github.com/vieitesss/nexo/internal/backend/rex"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
@@ -169,5 +170,19 @@ func TestTUIRejectsUnknownTab(t *testing.T) {
 	var usageErr UsageError
 	if !errors.As(err, &usageErr) {
 		t.Fatalf("Run() error = %T, want UsageError", err)
+	}
+}
+
+func TestTUIDependenciesAcceptTheRexAdapter(t *testing.T) {
+	adapter := rex.New(nil, nil)
+	deps, err := tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Rex}, Adapter: adapter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deps.AgentSource != adapter {
+		t.Fatalf("AgentSource = %T, want the Rex backend", deps.AgentSource)
+	}
+	if deps.FocusAgent == nil {
+		t.Fatal("FocusAgent = nil, want the Rex pane focuser")
 	}
 }

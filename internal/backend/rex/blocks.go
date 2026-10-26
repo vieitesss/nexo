@@ -14,9 +14,10 @@ import (
 )
 
 type processInfo struct {
-	PID  int    `json:"pid"`
-	Name string `json:"name"`
-	CWD  string `json:"cwd"`
+	PID    int    `json:"pid"`
+	Name   string `json:"name"`
+	Script string `json:"script"`
+	CWD    string `json:"cwd"`
 }
 
 // processResult is the block process method. A shell may expose a child, a
@@ -94,11 +95,15 @@ func (b *Backend) blockPaths(ctx context.Context, sessionID string, block block)
 }
 
 func (b *Backend) blockMethod(ctx context.Context, sessionID, blockID, method string) ([]byte, error) {
+	return b.blockCall(ctx, sessionID, blockID, method, map[string]any{})
+}
+
+func (b *Backend) blockCall(ctx context.Context, sessionID, blockID, method string, args map[string]any) ([]byte, error) {
 	return b.api(ctx, "block.method", blockMethodInput{
 		SessionID: sessionID,
 		BlockID:   blockID,
 		Method:    method,
-		Args:      map[string]any{},
+		Args:      args,
 	})
 }
 
