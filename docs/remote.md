@@ -177,10 +177,12 @@ Herdr focus is server-wide: `herdr workspace focus` moves every client
 attached to that remote server, so two local machines watching one remote
 Herdr follow each other. This assumes one user per remote machine.
 
-When the remote server is not running, or has no workspaces, the pane prints
-`no Herdr server on MACHINE — press r to retry, q to close` (or `no workspaces
-on MACHINE — …`) and creates nothing. Detaching with `prefix+q` closes only
-the local proxy, exactly as for a tmux remote.
+When the remote server is not running, or the workspace listing does not show
+a workspace, the pane prints `no Herdr server on MACHINE — press r to retry, q
+to close` (or `no workspaces on MACHINE — …`) and creates nothing. A listing
+that fails, comes back empty, or cannot be read takes that same path: the pane
+attaches only after a listing confirms a workspace exists. Detaching with
+`prefix+q` closes only the local proxy, exactly as for a tmux remote.
 
 `nexo remote previous`/M-o never lists remotes, so it recreates the machine
 proxy with the mode recorded for it when it was opened: after detaching from a
