@@ -100,7 +100,9 @@ func (s *Source) ListAgents(ctx context.Context) ([]capabilities.Agent, error) {
 	}
 	results, err := s.ledger().Observe(
 		agentstate.Batch{Present: present, Observations: observations},
-		agentstate.Policy{Native: true},
+		// Every Herdr observation carries a native status, so no screen idle
+		// window applies.
+		agentstate.Policy{},
 		nil,
 	)
 	if err != nil {

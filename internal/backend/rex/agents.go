@@ -192,7 +192,7 @@ func (b *Backend) recordAgentState(ctx context.Context, cfg config.AgentsConfig,
 		return nil, err
 	}
 	states := make(map[string]agentstate.State, len(native)+len(fallback))
-	if err := recordObservations(ledger, present, nativeObservations(native), agentstate.Policy{Native: true}, states); err != nil {
+	if err := recordObservations(ledger, present, nativeObservations(native), agentstate.Policy{}, states); err != nil {
 		return nil, err
 	}
 	if len(fallback) == 0 {

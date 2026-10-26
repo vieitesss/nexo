@@ -27,9 +27,11 @@ type State struct {
 	StateChangeSeq uint64     `json:"state_change_seq,omitempty"`
 }
 
-// Observation is one normalized backend observation. Native adapters set
-// Status and Sequence and leave WorkingIndicator semantics to the native
-// status mapping; screen adapters set Working and leave Status empty.
+// Observation is one normalized backend observation. The observation itself
+// selects its transition policy: a native adapter sets Status and Sequence and
+// leaves WorkingIndicator semantics to the native status mapping; a screen
+// adapter sets Working and leaves Status empty. An adapter only emits a native
+// observation after normalizing a non-empty native status.
 type Observation struct {
 	ID         string
 	Working    bool
@@ -48,11 +50,11 @@ type Batch struct {
 	Observations []Observation
 }
 
-// Policy selects the transition semantics for a batch.
+// Policy applies to every observation in a batch without deciding how any one
+// of them is observed.
 type Policy struct {
-	// Native uses the multiplexer-provided status and sequence. When false,
-	// Working and IdleThreshold implement nexo's screen-observation policy.
-	Native        bool
+	// IdleThreshold is the idle window of a screen observation. A native
+	// observation carries its own status and never consults it.
 	IdleThreshold time.Duration
 }
 
@@ -257,7 +259,7 @@ func (l *Ledger) read() (Document, error) {
 }
 
 func transition(previous State, observation Observation, policy Policy, now time.Time) (State, bool) {
-	if policy.Native {
+	if observation.Status != "" {
 		// A native observation owns the state now: a leftover screen idle
 		// window must not decide when this native state started.
 		previous.LastIndicator = time.Time{}
