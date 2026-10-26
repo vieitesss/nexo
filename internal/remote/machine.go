@@ -234,10 +234,14 @@ func (p OperationPolicy) create(ctx context.Context, commandRunner runner.Comman
 		if err != nil {
 			return err
 		}
-		// Herdr focuses workspaces by ID, so prefer what the create call
-		// returned over the requested label.
 		target := name
-		if workspace != "" {
+		if bridgedHerdr(local, result.Kind) {
+			// A bridged open focuses the workspace by ID, and Herdr rejects
+			// labels there, so a create response without one leaves nothing to
+			// open. The native path never addresses the workspace by ID.
+			if workspace == "" {
+				return fmt.Errorf("create remote Herdr container on %s: the remote reported no workspace ID", result.Machine)
+			}
 			target = workspace
 		}
 		return p.openValidated(ctx, commandRunner, local, result.Machine, result.Kind, target)
@@ -345,7 +349,8 @@ func createHerdrWorkspace(ctx context.Context, commandRunner runner.CommandRunne
 }
 
 // createdHerdrWorkspaceID reads the workspace ID from a create response. An
-// unparsable response is not an error: the caller falls back to the label.
+// unparsable response yields no ID, which the caller reports: a label is not an
+// address Herdr can focus.
 func createdHerdrWorkspaceID(output []byte) string {
 	raw, err := herdrResult(output)
 	if err != nil {
