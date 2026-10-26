@@ -27,7 +27,7 @@ func init() {
 
 func (openCommand) Name() string { return "open" }
 func (openCommand) Help() Help {
-	return Help{Summary: "Open a discovered project candidate.", Usage: "nexo open [flags] PATH", Flags: []FlagHelp{{Long: "--no-focus", Description: "Create or reuse the container without switching to it."}, {Long: "--container-id", Value: "ID", Description: "Use a specific backend container: ReX session or Herdr workspace."}, {Long: "--workspace-id", Value: "ID", Description: "Alias of --container-id."}}, Examples: []string{"nexo open ~/src/api", "nexo open --no-focus ~/src/api"}}
+	return Help{Summary: "Open a discovered project candidate.", Usage: "nexo open [flags] PATH", Flags: []FlagHelp{{Long: "--no-focus", Description: "Create or reuse the container without switching to it."}, {Long: "--container-id", Value: "ID", Description: "Use a specific backend container: Rex session or Herdr workspace."}, {Long: "--workspace-id", Value: "ID", Description: "Alias of --container-id."}}, Examples: []string{"nexo open ~/src/api", "nexo open --no-focus ~/src/api"}}
 }
 
 func (openCommand) Run(ctx context.Context, invocation Invocation) error {
