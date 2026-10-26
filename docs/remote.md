@@ -24,6 +24,9 @@ tmux's canonical spelling, nexo uses a suffix such as `MACHINE~remote` rather
 than adopting it. Legacy tagged `MACHINE/CONTAINER` sessions are left untouched
 and remain readable as their machine; they are not migrated or adopted.
 
+A Rex local backend keeps the same one-proxy-per-machine rule with a Rex
+session instead of a tmux one; see [Rex proxies](#rex-proxies).
+
 ```toml
 [remote]
 machines = ["devbox"]
@@ -193,6 +196,39 @@ the machine switches to Herdr. A proxy also keeps the mode it was created
 with: if a machine starts running a Herdr server later, close its proxy with
 `nexo remote close MACHINE` and open it again. History entries written before
 nexo recorded the mode read as tmux.
+
+## Rex proxies
+
+Rex proxies use the same design with a Rex session as the container. nexo
+creates one session per machine whose only block runs the hidden
+`nexo --backend rex remote attach` command, focuses it in the Rex app, and
+switches it later instead of creating a second session. Both remote kinds
+attach this way: tmux through the standard attach shell, Herdr through
+`--remote-kind herdr`, so a Rex pane reaches the remote Herdr client without a
+local Herdr install.
+
+The block runs that command directly: `shell = "none"` and no login shell, so
+no profile, alias, or interpolation can change what the pane attaches to.
+`--backend rex` is part of the rendezvous key, so a Rex proxy and a tmux proxy
+for the same machine never share a remote file. An explicit
+`remote open MACHINE/CONTAINER` retargets the client already in the pane and
+records the kind it just proved; a failed switch leaves the healthy proxy
+alone.
+
+Rex has no native project or proxy metadata, so the machine identity lives in
+nexo's sidecar document for that server run, keyed by the native session ID.
+The session label is display data: a session the user names after a machine is
+never adopted as that machine's proxy, and a record whose session the server no
+longer has resolves to nothing. Because the record is scoped to one server run,
+restarting the Rex server retires the old IDs with it. A proxy nexo cannot
+record is destroyed rather than left behind as an unlabeled session.
+
+Remote Rex is not a terminal attachment: Rex registers its own remote machines
+instead of exposing an SSH client, so opening a container on a detected Rex
+remote reports `cannot attach to a remote "rex" machine` and creates nothing.
+`remote close MACHINE[/CONTAINER]` works as usual. Closing or pasting from
+inside a Rex proxy needs the proxy's block ID rather than a pane environment
+variable, so give those commands an explicit target instead.
 
 ## tmux remotes from Herdr
 

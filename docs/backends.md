@@ -1,7 +1,7 @@
 # Backends
 
-This note checks the retained v1 capability interfaces against the three
-candidate backends, in priority order. It is a design check only: it does not add
+This note checks the retained v1 capability interfaces against the candidate
+backends, in priority order. It is a design check only: it does not add
 backend code or change backend selection. A single nexo invocation still
 selects exactly one backend: nexo never aggregates multiplexers and never
 controls one multiplexer from another backend.
@@ -12,6 +12,7 @@ controls one multiplexer from another backend.
 | --- | --- | --- |
 | **tmux** | Implemented | Opens projects and sessions, lists/renames/closes containers, reads pane screens, focuses panes, creates and extracts Git worktrees, detects agents by process and screen polling, watches, notifies, highlights unseen windows, shows a toggleable glance row listing agent panes, and proxies remote tmux containers over SSH/mosh/et — including remote Herdr machines, whose client it runs in the proxy pane. |
 | **Herdr** | Implemented | Opens and manages native workspaces, reads pane screens, focuses panes, creates and extracts Git worktrees, consumes Herdr's native agent state and notifications, registers Herdr remote machines for its native sidebar, and fills the tmux-remote gap with a workspace proxy. The plugin manifest supplies the popup surface. |
+| **Rex** | Implemented | Opens projects as Rex sessions, lists/renames/closes sessions, reads the focused block's screen, focuses blocks, creates and extracts Git worktrees, reads Rex's native agent state, and proxies remote tmux and Herdr containers in one Rex session per machine. Remote Rex machines are not a terminal attachment, so a remote `rex` kind is rejected instead of proxied. |
 | **Zellij** | Planned | Capability interfaces checked on paper: native project/session actions, pane listing, screen reads, focus, and floating panes; nexo would fill agent, notification, and remote-proxy gaps. |
 | **WezTerm** | Planned | Capability interfaces checked on paper: native spawn/list/read/focus; no popup CLI operation, and workspace switching needs a Lua/user action. |
 | **Kitty** | Planned | Capability interfaces checked on paper: native tab launch, pane listing, screen reads, focus, and overlays; agent state, notifications, and remote proxies would be nexo gaps. |
