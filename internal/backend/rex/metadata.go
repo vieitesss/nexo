@@ -128,6 +128,19 @@ func (m metadataIndex) update(mutate func(*metadataDocument) bool) error {
 	return statefile.WriteAtomic(m.path(), contents)
 }
 
+// proxyLockPath names the per-machine lock file that serializes one proxy
+// transaction for this server run.
+func (m metadataIndex) proxyLockPath(machine string) string {
+	return statefile.Path(m.dir, m.namespace+"-proxy-"+machine, "lock")
+}
+
+// lockProxy serializes proxy lookup, creation, and recording per machine
+// across invocations: a second open waits, then rechecks existence instead of
+// creating a duplicate.
+func (m metadataIndex) lockProxy(machine string) (func(), error) {
+	return statefile.Lock(m.proxyLockPath(machine), false)
+}
+
 func (m metadataIndex) read() (metadataDocument, error) {
 	contents, err := os.ReadFile(m.path())
 	if errors.Is(err, os.ErrNotExist) {

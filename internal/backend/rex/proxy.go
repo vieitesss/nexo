@@ -117,6 +117,20 @@ func (b *Backend) Proxy(ctx context.Context, remoteKind, machine, container stri
 		container = proxy.CanonicalContainerName(container)
 	}
 
+	// Lookup, creation, and recording are one transaction per machine: two
+	// invocations opening the same machine must not both observe absence. The
+	// existence check runs again under the lock rather than trusting a read
+	// from before it.
+	store, err := b.metadata(ctx)
+	if err != nil {
+		return err
+	}
+	unlock, err := store.lockProxy(machine)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	sessionID, err := b.ProxySessionID(ctx, machine, "")
 	if err != nil {
 		return err

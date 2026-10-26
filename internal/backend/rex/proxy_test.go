@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/proxy"
@@ -308,13 +310,22 @@ func TestProxyRollsBackAnUnidentifiedSession(t *testing.T) {
 	if err := os.WriteFile(document, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	store, err := backend.metadata(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The machine lock already exists, so the read-only directory still lets
+	// the proxy reach the record write that must fail.
+	if err := os.WriteFile(store.proxyLockPath("devbox"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// The identity document stays readable, but nothing can be written to it.
 	if err := os.Chmod(backend.stateDir, 0o500); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(backend.stateDir, 0o700) })
 
-	err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "devbox", "")
+	err = backend.Proxy(context.Background(), proxy.RemoteKindTmux, "devbox", "")
 	if err == nil {
 		t.Fatal("Proxy() = nil error, want the failed identity record reported")
 	}
@@ -537,5 +548,125 @@ func seedProxySession(t *testing.T, backend *Backend) {
 	t.Helper()
 	if err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "devbox", ""); err != nil {
 		t.Fatalf("seed proxy error = %v", err)
+	}
+}
+
+// sharedProxyServer is one fake Rex server two concurrent backends address: a
+// session created through one backend is listed by the other, exactly as two
+// invocations of one server would see it.
+type sharedProxyServer struct {
+	mu       sync.Mutex
+	created  []string
+	sessions []sessionInfo
+}
+
+func (s *sharedProxyServer) add(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.created = append(s.created, sessionID)
+	s.sessions = append(s.sessions, sessionInfo{ID: sessionID, Label: "devbox"})
+}
+
+func (s *sharedProxyServer) list() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	payload, err := json.Marshal(sessionList{Sessions: s.sessions})
+	if err != nil {
+		return ""
+	}
+	return string(payload)
+}
+
+func (s *sharedProxyServer) createdSessions() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.created...)
+}
+
+// sharedProxyRunner answers one backend's requests against the shared server.
+// create runs inside session.create, before the session is listed.
+func sharedProxyRunner(server *sharedProxyServer, sessionID string, create func()) *fakeRunner {
+	runner := &fakeRunner{outputs: map[string]string{api("client.list", ""): `{"clients":[]}`}}
+	runner.handler = func(request call) ([]byte, bool) {
+		switch {
+		case request.key() == api("session.list", ""):
+			return []byte(server.list()), true
+		case len(request.args) == 5 && request.args[2] == "call" && request.args[3] == "session.create":
+			if create != nil {
+				create()
+			}
+			server.add(sessionID)
+			return []byte(`{"session_id":"` + sessionID + `","initial_windows":[{"window_id":"window:1","block_ids":["block:1"]}]}`), true
+		}
+		return nil, false
+	}
+	return runner
+}
+
+// TestProxySerializesConcurrentOpensForOneMachine pins the one proxy per
+// machine invariant under concurrency: two invocations opening the same machine
+// end with one proxy session created and recorded, not two.
+func TestProxySerializesConcurrentOpensForOneMachine(t *testing.T) {
+	shared := t.TempDir()
+	server := &sharedProxyServer{}
+	creating := make(chan struct{})
+	release := make(chan struct{})
+
+	first := newProxyBackend(t, sharedProxyRunner(server, "session:first", func() {
+		close(creating)
+		<-release
+	}))
+	second := newProxyBackend(t, sharedProxyRunner(server, "session:second", nil))
+	for _, backend := range []*Backend{first, second} {
+		backend.stateDir = shared
+		useIdentity(backend, identity{HostID: "host-1", InstanceID: "instance-1"})
+	}
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- first.Proxy(context.Background(), proxy.RemoteKindTmux, "devbox", "") }()
+	select {
+	case <-creating:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first open never created a proxy session")
+	}
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- second.Proxy(context.Background(), proxy.RemoteKindTmux, "devbox", "") }()
+
+	// The second open must stay outside the transaction the first one holds.
+	var secondErr error
+	finishedEarly := false
+	select {
+	case secondErr = <-secondDone:
+		finishedEarly = true
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	firstErr := <-firstDone
+	if !finishedEarly {
+		secondErr = <-secondDone
+	}
+	if firstErr != nil || secondErr != nil {
+		t.Fatalf("Proxy() errors = %v, %v", firstErr, secondErr)
+	}
+	if finishedEarly {
+		t.Fatal("the second open finished while the first still held the machine transaction")
+	}
+
+	if created := server.createdSessions(); len(created) != 1 || created[0] != "session:first" {
+		t.Fatalf("session.create calls = %#v, want one machine proxy", created)
+	}
+	store, err := first.metadata(context.Background())
+	if err != nil {
+		t.Fatalf("metadata() error = %v", err)
+	}
+	records, err := store.proxies()
+	if err != nil {
+		t.Fatalf("proxies() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("recorded proxies = %#v, want one proxy for devbox", records)
+	}
+	if _, ok := records["session:first"]; !ok {
+		t.Fatalf("recorded proxies = %#v, want the first proxy session", records)
 	}
 }
