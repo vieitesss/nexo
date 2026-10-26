@@ -258,6 +258,9 @@ func (l *Ledger) read() (Document, error) {
 
 func transition(previous State, observation Observation, policy Policy, now time.Time) (State, bool) {
 	if policy.Native {
+		// A native observation owns the state now: a leftover screen idle
+		// window must not decide when this native state started.
+		previous.LastIndicator = time.Time{}
 		statusChanged := previous.Status != observation.Status || previous.StateChangeSeq != observation.Sequence
 		if previous.Status == "" {
 			statusChanged = true
@@ -293,6 +296,13 @@ func transition(previous State, observation Observation, policy Policy, now time
 			previous.Seen = true
 		}
 		return previous, enteredStopped
+	}
+
+	// The block no longer publishes a native lifecycle, so its record, the
+	// sequence, the stopped age and the acknowledgement recorded for it cannot
+	// describe the state nexo now observes for itself.
+	if previous.Status != "" || previous.StateChangeSeq != 0 {
+		previous = State{}
 	}
 
 	if previous.LastIndicator.IsZero() {

@@ -293,7 +293,7 @@ func (b *Backend) agentLedger(ctx context.Context) (*agentstate.Ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	return agentstate.New(b.stateDir, "rex:"+resolved.namespace(), nil), nil
+	return agentstate.New(b.stateDir, "rex:"+resolved.namespace(), b.now), nil
 }
 
 // locateBlock resolves a native block id to its owning session. Block ids are

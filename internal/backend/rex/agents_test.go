@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/vieitesss/nexo/internal/capabilities"
 )
 
 // agentFixture is one fake block's native evidence. A status is the
@@ -327,5 +330,96 @@ func TestListAgentsIgnoresAnUnreadableStatusReport(t *testing.T) {
 	}
 	if recovered[0].StoppedSince == nil || !recovered[0].StoppedSince.Equal(*first[0].StoppedSince) {
 		t.Fatalf("StoppedSince = %v, want the preserved age %v", recovered[0].StoppedSince, first[0].StoppedSince)
+	}
+}
+
+// cleanScreen is a terminal sitting at a prompt: the process is an agent, but
+// nothing on screen says it is working.
+const cleanScreen = `{"content":"$ git status\nnothing to commit\n$"}`
+
+// workingScreen is a live spinner, the fallback's proof that an agent works.
+const workingScreen = `{"content":"⠋ Working… (esc to interrupt)"}`
+
+// agentProcess makes the fallback recognise a claude agent in the block.
+const agentProcess = `{"foreground":{"pid":42,"name":"node","script":"/opt/homebrew/bin/claude","cwd":"/tmp/project"}}`
+
+// listOnce lists agents and requires the expected number of rows.
+func listOnce(t *testing.T, backend *Backend, want int) []capabilities.Agent {
+	t.Helper()
+	agents, err := backend.ListAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ListAgents() error = %v", err)
+	}
+	if len(agents) != want {
+		t.Fatalf("agents = %#v, want %d", agents, want)
+	}
+	return agents
+}
+
+// clockedBackend fixes the ledger clock so a test can move between observations.
+func clockedBackend(t *testing.T, fixture agentFixture, now *time.Time) *Backend {
+	t.Helper()
+	backend, _ := agentBackend(t, fixture)
+	backend.now = func() time.Time { return *now }
+	return backend
+}
+
+func TestListAgentsResetsNativeStateWhenObservationFallsBack(t *testing.T) {
+	statusPayload := api("block.method", blockMethodPayload("session:1", "block:1", "program_status"))
+	blocked := statusJSON("blocked", "claude-code", "2026-10-22T09:48:34+02:00")
+	now := time.Date(2026, time.October, 22, 9, 48, 0, 0, time.UTC)
+	backend := clockedBackend(t, agentFixture{records: blocked, process: agentProcess, screen: workingScreen}, &now)
+	runner := backend.Runner.(*fakeRunner)
+
+	native := listOnce(t, backend, 1)
+	if native[0].State != "stopped" || native[0].StoppedSince == nil || !native[0].StoppedSince.Equal(now) {
+		t.Fatalf("agent = %#v, want the native blocked stop at %v", native[0], now)
+	}
+
+	// The program stops reporting and the screen still shows an old spinner.
+	// The stale native record must not survive the handoff.
+	now = now.Add(10 * time.Second)
+	runner.outputs[statusPayload] = `{"records":[]}`
+	fallback := listOnce(t, backend, 1)
+	if fallback[0].State != "working" || fallback[0].StoppedSince != nil {
+		t.Fatalf("agent = %#v, want the fallback to observe a working agent", fallback[0])
+	}
+
+	// The same native state resumes: because the fallback cleared the native
+	// record, this is a fresh stop, not a repeated report of the old one.
+	now = now.Add(10 * time.Second)
+	runner.outputs[statusPayload] = blocked
+	resumed := listOnce(t, backend, 1)
+	if resumed[0].State != "stopped" || resumed[0].Seen {
+		t.Fatalf("agent = %#v, want a fresh unseen stop", resumed[0])
+	}
+	if resumed[0].StoppedSince == nil || !resumed[0].StoppedSince.Equal(now) {
+		t.Fatalf("StoppedSince = %v, want the fresh stop at %v", resumed[0].StoppedSince, now)
+	}
+}
+
+func TestListAgentsRefreshesNativeAcknowledgementWhenObservationResumes(t *testing.T) {
+	statusPayload := api("block.method", blockMethodPayload("session:1", "block:1", "program_status"))
+	idle := statusJSON("idle", "claude-code", "2026-10-22T09:48:34+02:00")
+	now := time.Date(2026, time.October, 22, 9, 48, 0, 0, time.UTC)
+	backend := clockedBackend(t, agentFixture{records: idle, process: agentProcess, screen: cleanScreen}, &now)
+	runner := backend.Runner.(*fakeRunner)
+
+	native := listOnce(t, backend, 1)
+	if native[0].State != "stopped" || !native[0].Seen {
+		t.Fatalf("agent = %#v, want the idle agent seen", native[0])
+	}
+
+	now = now.Add(10 * time.Second)
+	runner.outputs[statusPayload] = `{"records":[]}`
+	if fallback := listOnce(t, backend, 1); fallback[0].State != "working" {
+		t.Fatalf("agent = %#v, want the fallback to observe a new working agent", fallback[0])
+	}
+
+	now = now.Add(10 * time.Second)
+	runner.outputs[statusPayload] = idle
+	resumed := listOnce(t, backend, 1)
+	if resumed[0].State != "stopped" || !resumed[0].Seen {
+		t.Fatalf("agent = %#v, want the resumed idle report seen again", resumed[0])
 	}
 }

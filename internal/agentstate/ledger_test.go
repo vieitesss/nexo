@@ -251,3 +251,59 @@ func TestDocumentRoundTripKeepsAdapterFields(t *testing.T) {
 		t.Fatalf("round trip = %#v, want %#v", after, before)
 	}
 }
+
+// observeOnce records one observation under a policy and returns its state.
+func observeOnce(t *testing.T, ledger *Ledger, policy Policy, observation Observation) State {
+	t.Helper()
+	results, err := ledger.Observe(Batch{
+		Present:      []string{observation.ID},
+		Observations: []Observation{observation},
+	}, policy, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return results[0].State
+}
+
+func TestScreenObservationClearsNativeFields(t *testing.T) {
+	now := time.Date(2025, time.January, 1, 12, 0, 0, 0, time.UTC)
+	ledger := New(t.TempDir(), "rex-test", func() time.Time { return now })
+	if state := observeOnce(t, ledger, Policy{Native: true}, Observation{ID: "block", Status: "blocked"}); state.StoppedSince == nil {
+		t.Fatalf("native state = %#v, want a stopped agent", state)
+	}
+	if err := ledger.MarkSeen("block"); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(10 * time.Second)
+	state := observeOnce(t, ledger, Policy{IdleThreshold: 3 * time.Second}, Observation{ID: "block", Working: true})
+	if state.State != "working" || state.Seen || state.StoppedSince != nil {
+		t.Fatalf("screen state = %#v, want a working unseen agent", state)
+	}
+	if state.Status != "" || state.StateChangeSeq != 0 {
+		t.Fatalf("screen state = %#v, want no native record left behind", state)
+	}
+}
+
+func TestNativeObservationClearsScreenFields(t *testing.T) {
+	now := time.Date(2025, time.January, 1, 12, 0, 0, 0, time.UTC)
+	ledger := New(t.TempDir(), "rex-test", func() time.Time { return now })
+	observeOnce(t, ledger, Policy{IdleThreshold: 3 * time.Second}, Observation{ID: "block", Working: true})
+
+	now = now.Add(10 * time.Second)
+	state := observeOnce(t, ledger, Policy{Native: true}, Observation{ID: "block", Status: "idle", NativeSeen: true})
+	if state.State != "stopped" || !state.Seen {
+		t.Fatalf("native state = %#v, want the idle agent seen", state)
+	}
+	if !state.LastIndicator.IsZero() {
+		t.Fatalf("native state = %#v, want no screen idle threshold left behind", state)
+	}
+
+	// A screen observation that follows starts its own idle window instead of
+	// inheriting the native acknowledgement or the old threshold.
+	now = now.Add(time.Second)
+	state = observeOnce(t, ledger, Policy{IdleThreshold: 3 * time.Second}, Observation{ID: "block"})
+	if state.State != "working" || state.Seen {
+		t.Fatalf("screen state = %#v, want a fresh unseen observation", state)
+	}
+}
