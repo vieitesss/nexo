@@ -82,3 +82,44 @@ func TestSplitTmuxBinding(t *testing.T) {
 		}
 	}
 }
+
+// The accepted names and modifiers match what `rex config check` reports for
+// a rex.bind key. Sequences use Rex's own grammar: chords joined by ">".
+func TestValidateBindingKeyForRexMatchesRexConfigCheck(t *testing.T) {
+	for _, key := range []string{
+		"", "ctrl+space>o", "ctrl+space>shift+-", "ctrl+space>escape", "ctrl+space>enter",
+		"ctrl+space>tab", "ctrl+space>up", "ctrl+space>f12", "ctrl+space>plus", "ctrl+space>o>p",
+		"ctrl+s", "alt+g", "cmd+shift+n", "ctrl+alt+delete", "f5", "shift+f5", "ctrl+space>ctrl+x",
+	} {
+		if err := ValidateBindingKeyForBackend("rex", key); err != nil {
+			t.Errorf("rex key %q rejected: %v", key, err)
+		}
+	}
+	for _, key := range []string{
+		"a", "A", "space", "shift+a", "1", "?", "plus", ">", "prefix+a", "C-s", "ctrl+",
+		"ctrl+space>", "ctrl+space>btab", "ctrl+space>return", "ctrl+space>minus",
+		"ctrl+space>a b", "ctrl+space>a;run-shell", "ctrl+space\no", "ctrl+space>ctrl",
+		"ctrl+space>ctrl+space", "ctrl+x>ctrl+space",
+	} {
+		if err := ValidateBindingKeyForBackend("rex", key); err == nil {
+			t.Errorf("rex key %q accepted", key)
+		}
+	}
+}
+
+func TestValidateBindingKeyForRexKeepsTypingKeysBehindASequence(t *testing.T) {
+	for _, key := range []string{"a", "A", "shift+a", "1", "?", "space", "plus", "+"} {
+		err := ValidateBindingKeyForBackend("rex", key)
+		if err == nil || !strings.Contains(err.Error(), "ctrl+space>") {
+			t.Errorf("rex direct key %q error = %v, want a ctrl+space> suggestion", key, err)
+		}
+	}
+	// The prefix key alone is reserved; as the first chord of a sequence it is
+	// exactly how Rex bindings are written.
+	if err := ValidateBindingKeyForBackend("rex", "ctrl+space"); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("rex ctrl+space error = %v, want a reserved-key error", err)
+	}
+	if err := ValidateBindingKeyForBackend("rex", "ctrl+space>o"); err != nil {
+		t.Fatalf("rex ctrl+space>o rejected: %v", err)
+	}
+}

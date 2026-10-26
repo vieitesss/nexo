@@ -44,7 +44,12 @@ func ValidateBindingKeyForBackend(backend, key string) error {
 			return fmt.Errorf("binding key must not contain control characters")
 		}
 	}
-	if !strings.EqualFold(strings.TrimSpace(backend), "tmux") {
+	switch strings.ToLower(strings.TrimSpace(backend)) {
+	case "tmux":
+		// The tmux parser below.
+	case "rex":
+		return validateRexBindingKey(key)
+	default:
 		return validateNativeBindingKey(key)
 	}
 	tmuxKey, afterPrefix := SplitTmuxBinding(key)
@@ -103,7 +108,7 @@ func validateNativeBindingKey(key string) error {
 	case named:
 	case utf8.RuneCountInString(base) == 1 && !unicode.IsSpace([]rune(base)[0]):
 		typing = true
-	case isHerdrFunctionKey(base):
+	case isFunctionKey(base):
 	default:
 		return fmt.Errorf("%s is not a Herdr key; write it like ctrl+s, alt+g, f5 or prefix+a", key)
 	}
@@ -116,7 +121,7 @@ func validateNativeBindingKey(key string) error {
 	return nil
 }
 
-func isHerdrFunctionKey(key string) bool {
+func isFunctionKey(key string) bool {
 	digits, ok := strings.CutPrefix(strings.ToLower(key), "f")
 	if !ok || digits == "" {
 		return false
@@ -127,6 +132,86 @@ func isHerdrFunctionKey(key string) bool {
 		}
 	}
 	return true
+}
+
+// rexModifiers are the modifier names Rex accepts before a key.
+var rexModifiers = map[string]bool{"ctrl": true, "control": true, "shift": true, "alt": true, "option": true, "meta": true, "cmd": true, "super": true}
+
+// rexNamedKeys are the non-character key names `rex config check` accepts.
+// Rex spells punctuation as the character itself, not as a name.
+var rexNamedKeys = map[string]bool{
+	"enter": true, "tab": true, "esc": true, "escape": true, "backspace": true,
+	"up": true, "down": true, "left": true, "right": true, "home": true, "end": true,
+	"insert": true, "delete": true, "pageup": true, "pagedown": true,
+	"space": true, "plus": true,
+}
+
+// rexChord is one step of a Rex key sequence: modifiers plus one key.
+type rexChord struct {
+	base     string
+	ctrl     bool
+	modified bool
+	typing   bool
+}
+
+// validateRexBindingKey validates Rex's own key grammar: chords joined by ">",
+// with modifiers joined by "+". prefix+ is a Herdr spelling and is not an
+// alias here. Ctrl-Space is allowed only as the leading chord of a sequence,
+// which is how Rex prefix bindings are written; as the whole binding or after
+// another chord it is reserved. A first chord that would type is rejected, so
+// setup cannot steal an ordinary key from the terminal.
+func validateRexBindingKey(key string) error {
+	if strings.Contains(strings.ToLower(key), TmuxPrefixMarker) {
+		return fmt.Errorf("%s uses prefix+, which is not a Rex key; write the Rex sequence like ctrl+space>a", key)
+	}
+	steps := strings.Split(key, ">")
+	chords := make([]rexChord, len(steps))
+	for index, step := range steps {
+		if step == "" {
+			return fmt.Errorf("%q is not a Rex key sequence; write it like ctrl+space>a", key)
+		}
+		chord, err := parseRexChord(step)
+		if err != nil {
+			return err
+		}
+		if chord.ctrl && (chord.base == "space" || chord.base == "@") && (len(steps) == 1 || index > 0) {
+			return fmt.Errorf("Ctrl-Space is reserved; use it as the start of a sequence (ctrl+space>a) or choose another Rex binding key")
+		}
+		chords[index] = chord
+	}
+	first := chords[0]
+	if first.typing && !first.modified {
+		return fmt.Errorf("%s without a sequence or modifier would take that key from typing; use ctrl+space>%s or add ctrl+ or alt+", key, key)
+	}
+	return nil
+}
+
+func parseRexChord(input string) (rexChord, error) {
+	parts := strings.Split(input, "+")
+	if strings.HasSuffix(input, "++") || input == "+" {
+		// "+" is itself a key, as in ctrl++ or ctrl+space>+.
+		parts = append(parts[:len(parts)-2], "+")
+	}
+	base := parts[len(parts)-1]
+	chord := rexChord{base: strings.ToLower(base)}
+	for _, modifier := range parts[:len(parts)-1] {
+		name := strings.ToLower(modifier)
+		if !rexModifiers[name] {
+			return chord, fmt.Errorf("%q is not a Rex modifier in %s; use ctrl, alt, shift, cmd or super", modifier, input)
+		}
+		chord.modified = chord.modified || name != "shift"
+		chord.ctrl = chord.ctrl || name == "ctrl" || name == "control"
+	}
+	switch {
+	case rexNamedKeys[chord.base]:
+		chord.typing = chord.base == "space" || chord.base == "plus"
+	case utf8.RuneCountInString(base) == 1 && !unicode.IsSpace([]rune(base)[0]):
+		chord.typing = true
+	case isFunctionKey(base):
+	default:
+		return chord, fmt.Errorf("%s is not a Rex key; write a sequence like ctrl+space>o or a named key like escape", input)
+	}
+	return chord, nil
 }
 
 type tmuxBindingKey struct {
