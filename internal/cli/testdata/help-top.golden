@@ -17,10 +17,10 @@ Commands:
   worktree                   Create or extract Git worktrees.
 
 Global flags:
-  --backend auto|tmux|herdr  Select the backend (default: auto-detect).
-  --json                     Write structured output where supported.
-  --version                  Print the nexo version.
-  -c, --config-file PATH     Read configuration from PATH.
-  -h, --help                 Show help for this command.
+  --backend auto|tmux|herdr|rex  Select the backend (default: auto-detect).
+  --json                         Write structured output where supported.
+  --version                      Print the nexo version.
+  -c, --config-file PATH         Read configuration from PATH.
+  -h, --help                     Show help for this command.
 
 Run 'nexo <command> --help' for more.

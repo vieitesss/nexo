@@ -81,6 +81,12 @@ func osLookup() binaryLookup {
 	return binaryLookup{LookPath: exec.LookPath, Getenv: os.Getenv, HomeDir: os.UserHomeDir}
 }
 
+// FindBinary resolves the Rex CLI the way every adapter call will: PATH first,
+// then the server's REX_BIN_DIR, then the macOS application bundle.
+func FindBinary() string {
+	return locateBinary(osLookup())
+}
+
 // locateBinary resolves the Rex executable: PATH first, then the server's
 // REX_BIN_DIR, then the macOS application bundle. The fallback name keeps the
 // runner's own "not found" diagnostic in front of the user.

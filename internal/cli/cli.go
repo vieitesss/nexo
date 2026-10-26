@@ -181,11 +181,12 @@ func RunWithRegistry(registry *commands.Registry, args []string, stdout, stderr 
 		return 2
 	}
 	selection, err := backend.Resolve(context.Background(), backend.ResolveInput{
-		Flag:   options.Backend,
-		Config: cfg,
-		Env:    environment,
-		TTY:    tty,
-		Runner: commandRunner,
+		Flag:     options.Backend,
+		Config:   cfg,
+		Env:      environment,
+		TTY:      tty,
+		Runner:   commandRunner,
+		Messages: stderr,
 	})
 	if err != nil {
 		writeError(stderr, err)

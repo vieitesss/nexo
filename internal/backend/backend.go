@@ -3,13 +3,16 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/backend/herdr"
+	"github.com/vieitesss/nexo/internal/backend/rex"
 	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
@@ -23,6 +26,7 @@ const (
 	Auto  Kind = "auto"
 	Tmux  Kind = "tmux"
 	Herdr Kind = "herdr"
+	Rex   Kind = "rex"
 	None  Kind = "none"
 )
 
@@ -30,10 +34,10 @@ const (
 func ParseKind(value string) (Kind, error) {
 	kind := Kind(strings.ToLower(strings.TrimSpace(value)))
 	switch kind {
-	case Auto, Tmux, Herdr:
+	case Auto, Tmux, Herdr, Rex:
 		return kind, nil
 	default:
-		return "", fmt.Errorf("invalid backend %q (want auto, tmux, or herdr)", value)
+		return "", fmt.Errorf("invalid backend %q (want auto, tmux, herdr, or rex)", value)
 	}
 }
 
@@ -61,7 +65,7 @@ type Selection struct {
 // was detected.
 func (s Selection) Require() error {
 	if s.Kind == None {
-		return errors.New("no live multiplexer detected; run nexo inside tmux or Herdr, or pass --backend")
+		return errors.New("no live multiplexer detected; run nexo inside tmux, Herdr, or Rex, or pass --backend")
 	}
 	return nil
 }
@@ -74,6 +78,9 @@ type ResolveInput struct {
 	Env    Environment
 	TTY    string
 	Runner runner.CommandRunner
+	// Messages receives informational notices from the selected adapter, such
+	// as a focus no app can perform. A nil writer discards them.
+	Messages io.Writer
 }
 
 // Resolve applies flag > config > auto-detection and initializes the selected backend.
@@ -88,13 +95,13 @@ func Resolve(ctx context.Context, input ResolveInput) (Selection, error) {
 			return Selection{}, err
 		}
 		if kind != Auto {
-			return newSelection(kind, "flag", fmt.Sprintf("selected by --backend=%s", kind), input.Runner, input.Env), nil
+			return newSelection(kind, "flag", fmt.Sprintf("selected by --backend=%s", kind), input), nil
 		}
 		selected, reason, err := detect(ctx, input.Env, input.TTY, input.Runner)
 		if err != nil {
 			return Selection{}, err
 		}
-		return newSelection(selected, "auto-detect", reason, input.Runner, input.Env), nil
+		return newSelection(selected, "auto-detect", reason, input), nil
 	}
 
 	if input.Config.Backend != "" {
@@ -103,7 +110,7 @@ func Resolve(ctx context.Context, input ResolveInput) (Selection, error) {
 			return Selection{}, fmt.Errorf("config backend: %w", err)
 		}
 		if kind != Auto {
-			return newSelection(kind, "config", fmt.Sprintf("selected by config backend=%s", kind), input.Runner, input.Env), nil
+			return newSelection(kind, "config", fmt.Sprintf("selected by config backend=%s", kind), input), nil
 		}
 	}
 
@@ -111,13 +118,47 @@ func Resolve(ctx context.Context, input ResolveInput) (Selection, error) {
 	if err != nil {
 		return Selection{}, err
 	}
-	return newSelection(selected, "auto-detect", reason, input.Runner, input.Env), nil
+	return newSelection(selected, "auto-detect", reason, input), nil
 }
 
 func detect(ctx context.Context, env Environment, tty string, commandRunner runner.CommandRunner) (Kind, string, error) {
 	herdrMarker, herdrReason := herdrEnvironment(env)
 	tmuxMarker, tmuxReason := tmuxEnvironment(env)
+	rexMarker, rexReason := rexEnvironment(env)
 
+	rexLive := false
+	var rexErr error
+	if rexMarker {
+		rexLive, rexErr = rexSessionLive(ctx, env, commandRunner)
+	}
+
+	kind, reason, err := innerMultiplexer(ctx, tty, commandRunner, herdrMarker, tmuxMarker, herdrReason, tmuxReason)
+	if err != nil {
+		return "", "", err
+	}
+	if kind != None {
+		// A multiplexer running inside the Rex block owns the panes the user is
+		// typing in, so it is the inner one.
+		if rexLive {
+			reason = reason + " inside a Rex block"
+		}
+		return kind, reason, nil
+	}
+	switch {
+	case rexLive:
+		return Rex, rexReason, nil
+	case rexMarker && rexErr != nil:
+		return None, fmt.Sprintf("REX_SESSION is set but could not be verified against the Rex server: %v", rexErr), nil
+	case rexMarker:
+		return None, "REX_SESSION is stale: the Rex server does not own that session", nil
+	default:
+		return None, "no supported multiplexer detected", nil
+	}
+}
+
+// innerMultiplexer resolves the tmux/Herdr pair, including when both markers
+// are inherited from an outer multiplexer.
+func innerMultiplexer(ctx context.Context, tty string, commandRunner runner.CommandRunner, herdrMarker, tmuxMarker bool, herdrReason, tmuxReason string) (Kind, string, error) {
 	switch {
 	case herdrMarker && tmuxMarker:
 		owns, err := tmuxOwnsTTY(ctx, tty, commandRunner)
@@ -148,6 +189,41 @@ func herdrEnvironment(env Environment) (bool, string) {
 		return true, "detected Herdr via HERDR_PANE_ID"
 	}
 	return false, ""
+}
+
+// rexEnvironment reports whether the invocation carries a Rex block context.
+// The marker alone is not evidence: it can be stale, inherited, or forged, so
+// detection verifies it against the live server before trusting it.
+func rexEnvironment(env Environment) (bool, string) {
+	if value, ok := env.LookupEnv("REX_SESSION"); ok && strings.TrimSpace(value) != "" {
+		return true, "detected Rex via REX_SESSION (confirmed by the server)"
+	}
+	return false, ""
+}
+
+// rexSessionLive asks the live server whether it owns the marker's session.
+// Rex reports caller location only for ids that resolve, so a stale marker can
+// never name a session it does not own.
+func rexSessionLive(ctx context.Context, env Environment, commandRunner runner.CommandRunner) (bool, error) {
+	session, _ := env.LookupEnv("REX_SESSION")
+	session = strings.TrimSpace(session)
+	if session == "" {
+		return false, nil
+	}
+	if commandRunner == nil {
+		return false, errors.New("no command runner")
+	}
+	output, err := commandRunner.Run(ctx, rex.FindBinary(), "--autostart=false", "whoami", "--json")
+	if err != nil {
+		return false, fmt.Errorf("rex whoami: %w", err)
+	}
+	var whoami struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(output, &whoami); err != nil {
+		return false, fmt.Errorf("decode rex whoami: %w", err)
+	}
+	return strings.TrimSpace(whoami.SessionID) == session, nil
 }
 
 func tmuxEnvironment(env Environment) (bool, string) {
@@ -191,19 +267,20 @@ func tmuxOwnsTTY(ctx context.Context, tty string, commandRunner runner.CommandRu
 	return false, nil
 }
 
-func newSelection(kind Kind, source, reason string, commandRunner runner.CommandRunner, environment Environment) Selection {
+func newSelection(kind Kind, source, reason string, input ResolveInput) Selection {
 	selection := Selection{
 		Kind:   kind,
 		Source: source,
 		Reason: reason,
 	}
-	return selection.withCapabilities(commandRunner, environment)
+	return selection.withCapabilities(input)
 }
 
 // withCapabilities attaches the selected backend adapter and reports its
 // capabilities. Resolution owns this step so every invocation receives one
 // fully initialized selection rather than relying on the caller to complete it.
-func (s Selection) withCapabilities(commandRunner runner.CommandRunner, environment Environment) Selection {
+func (s Selection) withCapabilities(input ResolveInput) Selection {
+	environment := input.Env
 	if environment == nil {
 		environment = OSEnvironment{}
 	}
@@ -212,9 +289,11 @@ func (s Selection) withCapabilities(commandRunner runner.CommandRunner, environm
 	switch s.Kind {
 	case Tmux:
 		inside, _ := tmuxEnvironment(environment)
-		s.Adapter = tmux.New(commandRunner, inside)
+		s.Adapter = tmux.New(input.Runner, inside)
 	case Herdr:
-		s.Adapter = herdr.New(commandRunner)
+		s.Adapter = herdr.New(input.Runner)
+	case Rex:
+		s.Adapter = rex.New(input.Runner, input.Messages)
 	}
 	s.Capabilities = capabilities.Names(s.Adapter)
 	if s.Capabilities == nil {

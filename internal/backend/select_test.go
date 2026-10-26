@@ -6,6 +6,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/vieitesss/nexo/internal/backend/rex"
 	"github.com/vieitesss/nexo/internal/config"
 )
 
@@ -49,6 +50,28 @@ func TestResolveAutoFlagSkipsConfig(t *testing.T) {
 	}
 	if got.Kind != Tmux || got.Source != "auto-detect" {
 		t.Fatalf("selection = %#v, want tmux from auto-detect", got)
+	}
+}
+
+func TestResolveRexKindFromFlagAndConfig(t *testing.T) {
+	flag := "rex"
+	got, err := Resolve(context.Background(), ResolveInput{Flag: &flag, Env: mapEnvironment{}})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got.Kind != Rex || got.Source != "flag" {
+		t.Fatalf("selection = %#v, want rex from flag", got)
+	}
+	if _, ok := got.Adapter.(*rex.Backend); !ok {
+		t.Fatalf("adapter = %T, want a Rex backend", got.Adapter)
+	}
+
+	got, err = Resolve(context.Background(), ResolveInput{Config: config.Config{Backend: "rex"}, Env: mapEnvironment{"TMUX": "yes"}})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got.Kind != Rex || got.Source != "config" {
+		t.Fatalf("selection = %#v, want rex from config", got)
 	}
 }
 

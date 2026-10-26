@@ -42,7 +42,7 @@ type FlagHelp struct {
 }
 
 var globalFlags = []FlagHelp{
-	{Long: "--backend", Value: "auto|tmux|herdr", Description: "Select the backend (default: auto-detect)."},
+	{Long: "--backend", Value: "auto|tmux|herdr|rex", Description: "Select the backend (default: auto-detect)."},
 	{Short: "-c", Long: "--config-file", Value: "PATH", Description: "Read configuration from PATH."},
 	{Long: "--json", Description: "Write structured output where supported."},
 	{Short: "-h", Long: "--help", Description: "Show help for this command."},

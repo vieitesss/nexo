@@ -406,6 +406,21 @@ func TestLoadParsesBackend(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsRexBackend(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("backend = \"rex\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Backend != "rex" {
+		t.Fatalf("Backend = %q, want rex", got.Backend)
+	}
+}
+
 func TestLoadRejectsInvalidBackend(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("backend = \"screen\"\n"), 0o600); err != nil {
