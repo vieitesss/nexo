@@ -138,7 +138,13 @@ func (b *Backend) ListAgents(ctx context.Context) ([]capabilities.Agent, error) 
 // status, process or screen cannot be read produces no observation, but its
 // presence is already recorded, so its durable state survives.
 func (b *Backend) observeAgent(ctx context.Context, session sessionInfo, current block, cfg config.AgentsConfig, allow map[string]struct{}) (agentSnapshot, bool) {
-	records, _ := b.programStatus(ctx, session.ID, current.ID)
+	records, err := b.programStatus(ctx, session.ID, current.ID)
+	if err != nil {
+		// A failed read is not a report that carries no status: the block may
+		// still publish a native lifecycle, and the screen must not overwrite
+		// a state nexo could not read.
+		return agentSnapshot{}, false
+	}
 	live, _ := b.blockProcess(ctx, session.ID, current.ID)
 	path := processPath(live)
 	if status, harness, ok := selectStatusRecord(records, allow); ok {

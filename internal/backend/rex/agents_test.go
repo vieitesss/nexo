@@ -280,3 +280,52 @@ func TestFocusPaneWithoutAConnectedAppMarksNothingSeen(t *testing.T) {
 		t.Fatalf("agent = %#v, want an unselected focus to leave the agent unseen", agents[0])
 	}
 }
+
+// malformedStatus is a program-status reply that does not decode. It is a
+// failed read, not a successful report that carries no records.
+const malformedStatus = `{"records":[`
+
+func TestListAgentsIgnoresAnUnreadableStatusReport(t *testing.T) {
+	statusPayload := api("block.method", blockMethodPayload("session:1", "block:1", "program_status"))
+	backend, runner := agentBackend(t, agentFixture{
+		records: statusJSON("blocked", "claude-code", "2026-10-22T09:48:34+02:00"),
+		process: `{"foreground":{"pid":42,"name":"node","script":"/opt/homebrew/bin/claude","cwd":"/tmp/project"}}`,
+		screen:  `{"content":"⠋ Working… (esc to interrupt)"}`,
+	})
+	first, err := backend.ListAgents(context.Background())
+	if err != nil || len(first) != 1 || first[0].StoppedSince == nil {
+		t.Fatalf("ListAgents() = %#v, %v; want one stopped agent", first, err)
+	}
+	ledger, err := backend.agentLedger(context.Background())
+	if err != nil {
+		t.Fatalf("agentLedger() error = %v", err)
+	}
+	if err := ledger.MarkSeen("block:1"); err != nil {
+		t.Fatalf("MarkSeen() error = %v", err)
+	}
+
+	// A status read that fails says nothing about the block: the working
+	// spinner on screen must not replace the native state it cannot read.
+	runner.outputs[statusPayload] = malformedStatus
+	unreadable, err := backend.ListAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ListAgents() error = %v", err)
+	}
+	if len(unreadable) != 0 {
+		t.Fatalf("agents = %#v, want no observation from an unreadable status", unreadable)
+	}
+
+	// The next successful report finds the ledger untouched: the block is
+	// still the same stop, acknowledged, with its original stopped age.
+	runner.outputs[statusPayload] = statusJSON("blocked", "claude-code", "2026-10-22T09:52:00+02:00")
+	recovered, err := backend.ListAgents(context.Background())
+	if err != nil || len(recovered) != 1 {
+		t.Fatalf("ListAgents() = %#v, %v; want the recovered agent", recovered, err)
+	}
+	if recovered[0].State != "stopped" || !recovered[0].Seen {
+		t.Fatalf("agent = %#v, want the acknowledged stopped state preserved", recovered[0])
+	}
+	if recovered[0].StoppedSince == nil || !recovered[0].StoppedSince.Equal(*first[0].StoppedSince) {
+		t.Fatalf("StoppedSince = %v, want the preserved age %v", recovered[0].StoppedSince, first[0].StoppedSince)
+	}
+}
