@@ -172,7 +172,7 @@ func (s tmuxProxyStore) ListProxyCandidates(ctx context.Context) ([]proxyidentit
 // is the only process in its pane; closing this local session cannot close the
 // remote container.
 func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
-	return b.openProxy(ctx, proxy.RemoteKindTmux, machine, proxy.CanonicalContainerName(strings.TrimSpace(container)))
+	return b.openProxy(ctx, proxy.RemoteKindTmux, machine, container)
 }
 
 // ProxyRemote opens or switches the machine proxy for a remote machine whose
@@ -183,7 +183,7 @@ func (b *Backend) ProxyRemote(ctx context.Context, remoteKind, machine, containe
 	if remoteKind != proxy.RemoteKindHerdr {
 		return fmt.Errorf("tmux remote proxy cannot attach to a %q remote", remoteKind)
 	}
-	return b.openProxy(ctx, remoteKind, machine, strings.TrimSpace(container))
+	return b.openProxy(ctx, remoteKind, machine, container)
 }
 
 func (b *Backend) openProxy(ctx context.Context, remoteKind, machine, container string) error {
@@ -191,6 +191,13 @@ func (b *Backend) openProxy(ctx context.Context, remoteKind, machine, container 
 		return errors.New("tmux remote proxy requires a command runner")
 	}
 	machine = strings.TrimSpace(machine)
+	container = strings.TrimSpace(container)
+	// tmux rewrites '.' and ':' when it creates a session, so its targets are
+	// canonicalized at this seam. A Herdr workspace ID is opaque and must reach
+	// the remote client exactly as given.
+	if remoteKind != proxy.RemoteKindHerdr {
+		container = proxy.CanonicalContainerName(container)
+	}
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return err
 	}
