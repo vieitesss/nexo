@@ -544,6 +544,37 @@ func TestProxySwitchesAnExistingHerdrBridgeClientWithoutRespawning(t *testing.T)
 	}
 }
 
+// TestFailedBridgeSwitchKeepsTheHealthyAttachment pins that a failed switch
+// connection only reports itself. The Herdr client in the pane is healthy and
+// its own reconnect loop owns liveness, so respawning the pane would destroy a
+// working attachment and still report success.
+func TestFailedBridgeSwitchKeepsTheHealthyAttachment(t *testing.T) {
+	// The Herdr switch shell exits 1 when the server probe fails, which is what
+	// a transient SSH failure surfaces as.
+	failed := exec.Command("sh", "-c", "exit 1").Run()
+	if failed == nil {
+		t.Fatal("expected a non-zero exit from the helper shell")
+	}
+	args := proxy.SwitchSSHArgs(config.RemoteConfig{}, "tmux", proxy.RemoteKindHerdr, "rpi", "w3")
+	runner := &fakeRunner{
+		sequences: map[string][][]byte{
+			"list-sessions -F #{session_id}\t#{@nexo-proxy}": {[]byte("$1\trpi\n")},
+		},
+		fail: map[string]error{commandKey(args): failed},
+	}
+	backend := New(runner, true)
+	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "")
+	err := backend.Proxy(context.Background(), proxy.RemoteKindHerdr, "rpi", "w3")
+	if !errors.Is(err, failed) {
+		t.Fatalf("Proxy() error = %v, want the switch connection failure", err)
+	}
+	for _, call := range runner.calls {
+		if len(call.args) > 1 && (call.args[1] == "respawn-pane" || call.args[1] == "new-session") {
+			t.Fatalf("failed switch replaced the bridge pane: %#v", runner.calls)
+		}
+	}
+}
+
 func TestProxyReportsAMissingHerdrWorkspaceInsteadOfStartingOne(t *testing.T) {
 	exitTwo := exec.Command("sh", "-c", "exit 2").Run()
 	if exitTwo == nil {
