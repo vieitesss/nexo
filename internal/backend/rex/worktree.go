@@ -16,9 +16,9 @@ var (
 	_ capabilities.WorktreeRemover            = (*Backend)(nil)
 )
 
-// CreateWorktree creates the worktree with Git and opens it in a session. The
-// shared lifecycle owns destination preflight and cleanup sequencing; only the
-// native worktree and session work lives here.
+// CreateWorktree creates the worktree and opens it in a session. The shared
+// lifecycle owns destination preflight and cleanup sequencing and the shared
+// Git transaction owns the worktree commands; only the session work lives here.
 func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.WorktreeCreateOptions) (capabilities.Worktree, error) {
 	if b == nil || b.Runner == nil {
 		return capabilities.Worktree{}, errors.New("rex worktree creator requires a command runner")

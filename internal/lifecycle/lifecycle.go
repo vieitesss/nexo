@@ -19,10 +19,10 @@ import (
 // retains container lookup, creation, and focus semantics.
 type ProjectAdapter func(context.Context, string, capabilities.OpenOptions) (capabilities.OpenedContainer, error)
 
-// WorktreeAdapter is the native worktree seam supplied by a backend. Create
-// owns native worktree creation and its immediate rollback; Open is used when
-// creation does not itself return an opened container. Rollback owns cleanup
-// after a successful native create cannot be opened.
+// WorktreeAdapter is the worktree seam supplied by a backend. Create owns
+// creation and its immediate rollback; Open is used when creation does not
+// itself return an opened container. Rollback owns cleanup after a successful
+// create cannot be opened. Native container lifetime stays in the backend.
 type WorktreeAdapter struct {
 	Create   func(context.Context, capabilities.WorktreeCreateOptions) (capabilities.Worktree, error)
 	Open     ProjectAdapter
