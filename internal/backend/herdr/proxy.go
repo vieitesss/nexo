@@ -158,7 +158,7 @@ func (b *Backend) createProxyWorkspace(ctx context.Context, machine, initial str
 }
 
 func (b *Backend) switchRemoteProxy(ctx context.Context, machine, container string) error {
-	_, err := b.Runner.Run(ctx, "ssh", proxy.RemoteSwitchSSHArgs(b.proxyConfig, "herdr", machine, container)...)
+	_, err := b.Runner.Run(ctx, "ssh", proxy.SwitchSSHArgs(b.proxyConfig, "herdr", proxy.RemoteKindTmux, machine, container)...)
 	return err
 }
 

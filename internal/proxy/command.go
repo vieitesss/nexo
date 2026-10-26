@@ -150,6 +150,22 @@ func RemoteAttachShell(key, machine, initial string) string {
 	return strings.Join(lines, "\n")
 }
 
+// herdrServerCase is the one statement of whether the remote Herdr server is
+// running. It records the status JSON in $status and defines herdr_compact to
+// strip its whitespace, so no shell restates the probe or matches the JSON a
+// different way. unmatched supplies the case branches for a server that is not
+// running; the probe itself never starts one.
+func herdrServerCase(unmatched ...string) []string {
+	lines := []string{
+		"status=$(herdr status server --json 2>/dev/null) || status=",
+		"herdr_compact() { printf '%s' \"$1\" | tr -d '[:space:]'; }",
+		"case \"$(herdr_compact \"$status\")\" in",
+		"  *'\"running\":true'*) ;;",
+	}
+	lines = append(lines, unmatched...)
+	return append(lines, "esac")
+}
+
 // HerdrAttachShell attaches a proxy pane to the default Herdr session on a
 // remote machine. Herdr starts a server (and an empty server creates a
 // workspace) when a client attaches, so the shell guards both cases and waits
@@ -158,7 +174,6 @@ func RemoteAttachShell(key, machine, initial string) string {
 func HerdrAttachShell(machine, initial string) string {
 	lines := []string{
 		"machine=" + ShellQuote(machine),
-		"herdr_compact() { printf '%s' \"$1\" | tr -d '[:space:]'; }",
 		"ask_retry() {",
 		"  printf '%s\\n' \"$1\" >&2",
 		"  tty_state=$(stty -g 2>/dev/null) || tty_state=",
@@ -173,13 +188,11 @@ func HerdrAttachShell(machine, initial string) string {
 	} else {
 		lines = append(lines, "initial=")
 	}
+	lines = append(lines, "while :; do")
+	lines = append(lines, herdrServerCase(
+		`  *) ask_retry "no Herdr server on $machine — press r to retry, q to close" || exit 0; continue ;;`,
+	)...)
 	lines = append(lines,
-		"while :; do",
-		"  status=$(herdr status server --json 2>/dev/null) || status=",
-		"  case \"$(herdr_compact \"$status\")\" in",
-		"    *'\"running\":true'*) ;;",
-		"    *) ask_retry \"no Herdr server on $machine — press r to retry, q to close\" || exit 0; continue ;;",
-		"  esac",
 		"  if [ -n \"$initial\" ]; then",
 		"    target=$initial",
 		"    initial=",
@@ -227,26 +240,10 @@ func RemoteSwitchClientShell(key, machine, container string) string {
 // code 2 means the workspace is missing; any other exit leaves the pane to the
 // attach guard, which reports a stopped server and keeps its retry loop.
 func HerdrSwitchShell(workspaceID string) string {
-	lines := []string{
-		"status=$(herdr status server --json 2>/dev/null) || status=",
-		"compact=$(printf '%s' \"$status\" | tr -d '[:space:]')",
-		"case \"$compact\" in",
-		"  *'\"running\":true'*) ;;",
-		"  *) exit 1 ;;",
-		"esac",
-		"herdr workspace focus " + ShellQuote(workspaceID) + " >/dev/null 2>&1 || exit 2",
-	}
-	return strings.Join(lines, "\n")
-}
-
-// HerdrSwitchSSHArgs builds the plain SSH invocation that retargets an
-// existing remote Herdr client.
-func HerdrSwitchSSHArgs(remote config.RemoteConfig, machine, workspaceID string) []string {
-	args := []string{"-o", "BatchMode=yes"}
-	if strings.TrimSpace(remote.SSHConfig) != "" {
-		args = append(args, "-F", remote.SSHConfig)
-	}
-	return append(args, machine, "sh -c "+ShellQuote(HerdrSwitchShell(workspaceID)))
+	lines := herdrServerCase("  *) exit 1 ;;")
+	return strings.Join(append(lines,
+		"herdr workspace focus "+ShellQuote(workspaceID)+" >/dev/null 2>&1 || exit 2",
+	), "\n")
 }
 
 // IsMissingRemoteTarget reports the explicit-open sentinel returned by the
@@ -256,10 +253,14 @@ func IsMissingRemoteTarget(err error) bool {
 	return errors.As(err, &exitErr) && exitErr.ExitCode() == MissingRemoteTargetExitCode
 }
 
-// RemoteSwitchSSHArgs builds the plain SSH invocation used by both local
-// backends to switch an existing remote proxy client.
-func RemoteSwitchSSHArgs(remote config.RemoteConfig, backend, machine, container string) []string {
+// SwitchSSHArgs builds the plain SSH invocation that retargets the remote
+// client of an existing proxy. It mirrors TransportArgs: the remote kind picks
+// the switch shell, and the backend only keys the tmux rendezvous file.
+func SwitchSSHArgs(remote config.RemoteConfig, backend, remoteKind, machine, container string) []string {
 	command := RemoteSwitchClientShell(ProxyRendezvousKey(backend, machine), machine, container)
+	if remoteKind == RemoteKindHerdr {
+		command = HerdrSwitchShell(container)
+	}
 	args := []string{"-o", "BatchMode=yes"}
 	if strings.TrimSpace(remote.SSHConfig) != "" {
 		args = append(args, "-F", remote.SSHConfig)

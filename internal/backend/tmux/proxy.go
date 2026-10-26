@@ -304,11 +304,7 @@ func (b *Backend) proxySessionName(ctx context.Context, machine string) (string,
 }
 
 func (b *Backend) switchRemoteProxy(ctx context.Context, remoteKind, machine, container string) error {
-	if remoteKind == proxy.RemoteKindHerdr {
-		_, err := b.Runner.Run(ctx, "ssh", proxy.HerdrSwitchSSHArgs(b.proxyConfig, machine, container)...)
-		return err
-	}
-	_, err := b.Runner.Run(ctx, "ssh", proxy.RemoteSwitchSSHArgs(b.proxyConfig, "tmux", machine, container)...)
+	_, err := b.Runner.Run(ctx, "ssh", proxy.SwitchSSHArgs(b.proxyConfig, "tmux", remoteKind, machine, container)...)
 	return err
 }
 

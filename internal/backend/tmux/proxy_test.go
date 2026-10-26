@@ -478,7 +478,7 @@ func TestProxyRemoteCreatesTheHerdrBridgePaneInTheSameProxySession(t *testing.T)
 }
 
 func TestProxyRemoteSwitchesAnExistingBridgeClientWithoutRespawning(t *testing.T) {
-	args := proxy.HerdrSwitchSSHArgs(config.RemoteConfig{}, "rpi", "w3")
+	args := proxy.SwitchSSHArgs(config.RemoteConfig{}, "tmux", proxy.RemoteKindHerdr, "rpi", "w3")
 	runner := &fakeRunner{
 		sequences: map[string][][]byte{
 			"list-sessions -F #{session_id}\t#{@nexo-proxy}": {[]byte("$1\trpi\n")},
@@ -511,7 +511,7 @@ func TestProxyRemoteReportsAMissingWorkspaceInsteadOfStartingOne(t *testing.T) {
 	if exitTwo == nil {
 		t.Fatal("expected a non-zero exit from the helper shell")
 	}
-	args := proxy.HerdrSwitchSSHArgs(config.RemoteConfig{}, "rpi", "w9")
+	args := proxy.SwitchSSHArgs(config.RemoteConfig{}, "tmux", proxy.RemoteKindHerdr, "rpi", "w9")
 	runner := &fakeRunner{
 		sequences: map[string][][]byte{
 			"list-sessions -F #{session_id}\t#{@nexo-proxy}": {[]byte("$1\trpi\n")},
