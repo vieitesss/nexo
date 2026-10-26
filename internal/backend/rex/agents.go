@@ -2,10 +2,8 @@ package rex
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,22 +21,6 @@ var (
 	_ capabilities.PaneFocuser       = (*Backend)(nil)
 )
 
-// statusRecord is one native program-status report (OSC 7501). A block can hold
-// several records: the root report plus one per child id.
-type statusRecord struct {
-	State        string `json:"state"`
-	App          string `json:"app"`
-	EffectiveApp string `json:"effective_app"`
-}
-
-type statusReport struct {
-	Records []statusRecord `json:"records"`
-}
-
-type screenResult struct {
-	Content string `json:"content"`
-}
-
 // statusPriority orders the native states by the attention they need. Several
 // records can share one block, and the highest-ranked recognized record names
 // the block's agent; a tie keeps the earlier record, which is the root.
@@ -52,7 +34,9 @@ type agentSnapshot struct {
 	harness string
 	// status is the native state mapped for the ledger. It stays empty for the
 	// process/screen fallback, which has no native lifecycle.
-	status  string
+	status string
+	// working is the fallback's screen observation. Native snapshots derive it
+	// from status, so the native state stays the only native fact.
 	working bool
 	path    string
 }
@@ -89,7 +73,7 @@ func (b *Backend) ListAgents(ctx context.Context) ([]capabilities.Agent, error) 
 		return nil, err
 	}
 	cfg := b.agentsConfig()
-	allow := harnessAllowList(cfg)
+	allow := agentdetect.AllowList(cfg.Processes)
 	sessions, err := b.sessions(ctx)
 	if err != nil {
 		return nil, err
@@ -120,44 +104,45 @@ func (b *Backend) ListAgents(ctx context.Context) ([]capabilities.Agent, error) 
 			}
 		}
 	}
-	states, err := b.recordAgentState(ctx, resolved, cfg, present, native, fallback)
+	states, err := b.recordAgentState(ctx, cfg, present, native, fallback)
 	if err != nil {
 		return nil, err
 	}
 	agents := make([]capabilities.Agent, 0, len(native)+len(fallback))
-	for _, snapshot := range append(append([]agentSnapshot{}, native...), fallback...) {
-		state := states[snapshot.block.ID]
-		branch := ""
-		if localBlock(snapshot.block, resolved) {
-			branch = git.Branch(ctx, b.Runner, snapshot.path)
+	for _, group := range [][]agentSnapshot{native, fallback} {
+		for _, snapshot := range group {
+			state := states[snapshot.block.ID]
+			branch := ""
+			if localBlock(snapshot.block, resolved) {
+				branch = git.Branch(ctx, b.Runner, snapshot.path)
+			}
+			agents = append(agents, capabilities.Agent{
+				PaneID:       snapshot.block.ID,
+				Target:       snapshot.block.ID,
+				ContainerID:  snapshot.session.ID,
+				Container:    snapshot.session.Label,
+				Window:       snapshot.block.Label,
+				Harness:      snapshot.harness,
+				State:        state.State,
+				Seen:         state.Seen,
+				StoppedSince: state.StoppedSince,
+				Branch:       branch,
+			})
 		}
-		agents = append(agents, capabilities.Agent{
-			PaneID:       snapshot.block.ID,
-			Target:       snapshot.block.ID,
-			ContainerID:  snapshot.session.ID,
-			Container:    snapshot.session.Label,
-			Window:       snapshot.block.Label,
-			Harness:      snapshot.harness,
-			State:        state.State,
-			Seen:         state.Seen,
-			StoppedSince: state.StoppedSince,
-			Branch:       branch,
-		})
 	}
 	return agents, nil
 }
 
-// observeAgent reports the agent evidence for one terminal block.
+// observeAgent reports the agent evidence for one terminal block. Native
+// status wins; otherwise the block's processes and screen decide. A block whose
+// status, process or screen cannot be read produces no observation, but its
+// presence is already recorded, so its durable state survives.
 func (b *Backend) observeAgent(ctx context.Context, session sessionInfo, current block, cfg config.AgentsConfig, allow map[string]struct{}) (agentSnapshot, bool) {
-	records, err := b.programStatus(ctx, session.ID, current.ID)
-	if err != nil {
-		records = nil
-	}
+	records, _ := b.programStatus(ctx, session.ID, current.ID)
 	live, _ := b.blockProcess(ctx, session.ID, current.ID)
 	path := processPath(live)
-	if record, harness, ok := selectStatusRecord(records, allow); ok {
-		status, working := mapNativeStatus(record.State)
-		return agentSnapshot{session: session, block: current, harness: harness, status: status, working: working, path: path}, true
+	if status, harness, ok := selectStatusRecord(records, allow); ok {
+		return agentSnapshot{session: session, block: current, harness: harness, status: status, path: path}, true
 	}
 	harness := processHarness(live, allow)
 	if harness == "" {
@@ -180,35 +165,40 @@ func (b *Backend) observeAgent(ctx context.Context, session sessionInfo, current
 // process/screen observations follow different transition policies, so each
 // group is recorded with the complete present set: neither group prunes the
 // other.
-func (b *Backend) recordAgentState(ctx context.Context, resolved identity, cfg config.AgentsConfig, present []string, native, fallback []agentSnapshot) (map[string]agentstate.State, error) {
-	ledger := agentstate.New(b.stateDir, "rex:"+resolved.namespace(), nil)
-	states := make(map[string]agentstate.State, len(native)+len(fallback))
-	results, err := ledger.Observe(
-		agentstate.Batch{Present: present, Observations: nativeObservations(native)},
-		agentstate.Policy{Native: true},
-		nil,
-	)
+func (b *Backend) recordAgentState(ctx context.Context, cfg config.AgentsConfig, present []string, native, fallback []agentSnapshot) (map[string]agentstate.State, error) {
+	ledger, err := b.agentLedger(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for index, result := range results {
-		states[native[index].block.ID] = result.State
+	states := make(map[string]agentstate.State, len(native)+len(fallback))
+	if err := recordObservations(ledger, present, nativeObservations(native), agentstate.Policy{Native: true}, states); err != nil {
+		return nil, err
 	}
 	if len(fallback) == 0 {
 		return states, nil
 	}
-	results, err = ledger.Observe(
-		agentstate.Batch{Present: present, Observations: fallbackObservations(fallback)},
-		agentstate.Policy{IdleThreshold: time.Duration(cfg.IdleSeconds) * time.Second},
+	policy := agentstate.Policy{IdleThreshold: time.Duration(cfg.IdleSeconds) * time.Second}
+	if err := recordObservations(ledger, present, fallbackObservations(fallback), policy, states); err != nil {
+		return nil, err
+	}
+	return states, nil
+}
+
+// recordObservations applies one policy to one group of observations and adds
+// the resulting states to states, keyed by the identity they describe.
+func recordObservations(ledger *agentstate.Ledger, present []string, observations []agentstate.Observation, policy agentstate.Policy, states map[string]agentstate.State) error {
+	results, err := ledger.Observe(
+		agentstate.Batch{Present: present, Observations: observations},
+		policy,
 		nil,
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for index, result := range results {
-		states[fallback[index].block.ID] = result.State
+		states[observations[index].ID] = result.State
 	}
-	return states, nil
+	return nil
 }
 
 func nativeObservations(snapshots []agentSnapshot) []agentstate.Observation {
@@ -216,7 +206,7 @@ func nativeObservations(snapshots []agentSnapshot) []agentstate.Observation {
 	for _, snapshot := range snapshots {
 		observations = append(observations, agentstate.Observation{
 			ID:      snapshot.block.ID,
-			Working: snapshot.working,
+			Working: snapshot.status == "working",
 			Status:  snapshot.status,
 			// Rex's idle convention: an idle program waits at its prompt, so
 			// nothing is waiting for the user. A focused block is only the
@@ -283,11 +273,21 @@ func (b *Backend) FocusPane(ctx context.Context, paneID string) error {
 		// agent has not been acknowledged.
 		return nil
 	}
-	resolved, err := b.server(ctx)
+	ledger, err := b.agentLedger(ctx)
 	if err != nil {
 		return err
 	}
-	return agentstate.New(b.stateDir, "rex:"+resolved.namespace(), nil).MarkSeen(current.ID)
+	return ledger.MarkSeen(current.ID)
+}
+
+// agentLedger scopes agent state to this Rex server run, the same scope
+// container history uses: native block ids are only unique within one server.
+func (b *Backend) agentLedger(ctx context.Context) (*agentstate.Ledger, error) {
+	resolved, err := b.server(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return agentstate.New(b.stateDir, "rex:"+resolved.namespace(), nil), nil
 }
 
 // locateBlock resolves a native block id to its owning session. Block ids are
@@ -315,49 +315,13 @@ func (b *Backend) locateBlock(ctx context.Context, blockID string) (sessionInfo,
 	return sessionInfo{}, block{}, fmt.Errorf("rex block %q not found", blockID)
 }
 
-func (b *Backend) programStatus(ctx context.Context, sessionID, blockID string) ([]statusRecord, error) {
-	output, err := b.blockMethod(ctx, sessionID, blockID, "program_status")
-	if err != nil {
-		return nil, err
-	}
-	var report statusReport
-	if err := json.Unmarshal(output, &report); err != nil {
-		return nil, fmt.Errorf("decode rex block %q program_status: %w", blockID, err)
-	}
-	return report.Records, nil
-}
-
-func (b *Backend) blockProcess(ctx context.Context, sessionID, blockID string) (processResult, error) {
-	output, err := b.blockMethod(ctx, sessionID, blockID, "process")
-	if err != nil {
-		return processResult{}, err
-	}
-	var live processResult
-	if err := json.Unmarshal(output, &live); err != nil {
-		return processResult{}, fmt.Errorf("decode rex block %q process: %w", blockID, err)
-	}
-	return live, nil
-}
-
-func (b *Backend) screen(ctx context.Context, sessionID, blockID string) (string, error) {
-	output, err := b.blockCall(ctx, sessionID, blockID, "format", map[string]any{"format": "text", "trim": true})
-	if err != nil {
-		return "", err
-	}
-	var decoded screenResult
-	if err := json.Unmarshal(output, &decoded); err != nil {
-		return "", fmt.Errorf("decode rex block %q format: %w", blockID, err)
-	}
-	return decoded.Content, nil
-}
-
-// selectStatusRecord picks the record that names the block's agent. Status
-// records are generic, so non-agent programs such as cargo or terraform are
-// filtered out by nexo's configured harness policy.
-func selectStatusRecord(records []statusRecord, allow map[string]struct{}) (statusRecord, string, bool) {
+// selectStatusRecord reports the native state and configured harness of the
+// record that names the block's agent. Status records are generic, so
+// non-agent programs such as cargo or terraform are filtered out by nexo's
+// configured harness policy.
+func selectStatusRecord(records []statusRecord, allow map[string]struct{}) (string, string, bool) {
 	best := -1
-	var chosen statusRecord
-	chosenHarness := ""
+	var chosenStatus, chosenHarness string
 	for _, record := range records {
 		app := strings.TrimSpace(record.EffectiveApp)
 		if app == "" {
@@ -367,21 +331,14 @@ func selectStatusRecord(records []statusRecord, allow map[string]struct{}) (stat
 		if !ok {
 			continue
 		}
-		rank := statusPriority[normalizeStatus(record.State)]
+		status := normalizeStatus(record.State)
+		rank := statusPriority[status]
 		if rank <= best {
 			continue
 		}
-		best, chosen, chosenHarness = rank, record, harness
+		best, chosenStatus, chosenHarness = rank, status, harness
 	}
-	return chosen, chosenHarness, best >= 0
-}
-
-// mapNativeStatus maps a native state to the ledger's native status and to
-// whether the agent is working. The specific state is preserved so that
-// working, blocked and done transitions stay distinct.
-func mapNativeStatus(state string) (string, bool) {
-	normalized := normalizeStatus(state)
-	return normalized, normalized == "working"
+	return chosenStatus, chosenHarness, best >= 0
 }
 
 // normalizeStatus returns one of the five native states. Rex documents an
@@ -392,19 +349,6 @@ func normalizeStatus(state string) string {
 		return normalized
 	}
 	return "idle"
-}
-
-// harnessAllowList is nexo's configured harness policy as a lookup set.
-func harnessAllowList(cfg config.AgentsConfig) map[string]struct{} {
-	allow := make(map[string]struct{}, len(cfg.Processes))
-	for _, process := range cfg.Processes {
-		name := strings.ToLower(filepath.Base(strings.TrimSpace(process)))
-		if name == "" || name == "." {
-			continue
-		}
-		allow[name] = struct{}{}
-	}
-	return allow
 }
 
 // recognisedApp resolves the harness a program-status app identity belongs to.

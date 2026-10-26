@@ -34,6 +34,22 @@ type pwdResult struct {
 	Owner *processInfo `json:"owner"`
 }
 
+// statusRecord is one native program-status report (OSC 7501). A block can hold
+// several records: the root report plus one per child id.
+type statusRecord struct {
+	State        string `json:"state"`
+	App          string `json:"app"`
+	EffectiveApp string `json:"effective_app"`
+}
+
+type statusReport struct {
+	Records []statusRecord `json:"records"`
+}
+
+type screenResult struct {
+	Content string `json:"content"`
+}
+
 type blockMethodInput struct {
 	SessionID string         `json:"session_id"`
 	BlockID   string         `json:"block_id"`
@@ -60,15 +76,11 @@ func localBlock(block block, server identity) bool {
 // A block with no readable directory produces an empty list: it is not
 // evidence that the block is idle.
 func (b *Backend) blockPaths(ctx context.Context, sessionID string, block block) ([]string, error) {
-	var paths []string
-	probe, err := b.blockMethod(ctx, sessionID, block.ID, "process")
+	live, err := b.blockProcess(ctx, sessionID, block.ID)
 	if err != nil {
 		return nil, err
 	}
-	var live processResult
-	if err := json.Unmarshal(probe, &live); err != nil {
-		return nil, fmt.Errorf("decode rex block %q process: %w", block.ID, err)
-	}
+	var paths []string
 	for _, process := range []*processInfo{live.Child, live.Foreground} {
 		if process != nil && strings.TrimSpace(process.CWD) != "" {
 			paths = append(paths, process.CWD)
@@ -80,7 +92,7 @@ func (b *Backend) blockPaths(ctx context.Context, sessionID string, block block)
 		}
 	}
 
-	probe, err = b.blockMethod(ctx, sessionID, block.ID, "pwd")
+	probe, err := b.blockMethod(ctx, sessionID, block.ID, "pwd")
 	if err != nil {
 		return nil, err
 	}
@@ -107,18 +119,56 @@ func (b *Backend) blockCall(ctx context.Context, sessionID, blockID, method stri
 	})
 }
 
+// blockProcess reports the programs one block owns, foreground and
+// descendants alike.
+func (b *Backend) blockProcess(ctx context.Context, sessionID, blockID string) (processResult, error) {
+	output, err := b.blockMethod(ctx, sessionID, blockID, "process")
+	if err != nil {
+		return processResult{}, err
+	}
+	var live processResult
+	if err := json.Unmarshal(output, &live); err != nil {
+		return processResult{}, fmt.Errorf("decode rex block %q process: %w", blockID, err)
+	}
+	return live, nil
+}
+
+// programStatus reports the native state a block's programs publish for
+// themselves. The records are generic: which of them names an agent is the
+// adapter's policy, not a decoding concern.
+func (b *Backend) programStatus(ctx context.Context, sessionID, blockID string) ([]statusRecord, error) {
+	output, err := b.blockMethod(ctx, sessionID, blockID, "program_status")
+	if err != nil {
+		return nil, err
+	}
+	var report statusReport
+	if err := json.Unmarshal(output, &report); err != nil {
+		return nil, fmt.Errorf("decode rex block %q program_status: %w", blockID, err)
+	}
+	return report.Records, nil
+}
+
+// screen reads one block's visible text and scrollback as plain text.
+func (b *Backend) screen(ctx context.Context, sessionID, blockID string) (string, error) {
+	output, err := b.blockCall(ctx, sessionID, blockID, "format", map[string]any{"format": "text", "trim": true})
+	if err != nil {
+		return "", err
+	}
+	var decoded screenResult
+	if err := json.Unmarshal(output, &decoded); err != nil {
+		return "", fmt.Errorf("decode rex block %q format: %w", blockID, err)
+	}
+	return decoded.Content, nil
+}
+
 // BlockProcessPIDs reports the pids of one block's child and foreground
 // programs. Detection compares their controlling terminal with the
 // invocation's own, because the terminal API exposes no tty field.
 func BlockProcessPIDs(ctx context.Context, commandRunner runner.CommandRunner, sessionID, blockID string) ([]int, error) {
 	probe := New(commandRunner, nil)
-	output, err := probe.blockMethod(ctx, sessionID, blockID, "process")
+	live, err := probe.blockProcess(ctx, sessionID, blockID)
 	if err != nil {
 		return nil, err
-	}
-	var live processResult
-	if err := json.Unmarshal(output, &live); err != nil {
-		return nil, fmt.Errorf("decode rex block %q process: %w", blockID, err)
 	}
 	var pids []int
 	for _, process := range []*processInfo{live.Child, live.Foreground} {
