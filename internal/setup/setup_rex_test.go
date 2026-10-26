@@ -45,13 +45,15 @@ func TestRexBlockBindsOnlyChosenKeys(t *testing.T) {
 	}
 }
 
-func TestRexBlockLaunchesNexoInALayerForTheOriginatingClient(t *testing.T) {
+func TestRexBlockOpensNexoInANewWindowForTheOriginatingClient(t *testing.T) {
 	body := RexBlock("/opt/nexo", "ctrl+space>o", "")
 	for _, want := range []string{
 		`local nexo_bin = "/opt/nexo"`,
 		`"REX_CLIENT=" .. tostring(ctx.client_id or "")`,
 		`"--backend=rex", "tui"`,
-		`local layer, err = rex.session.new_layer(request)`,
+		`rex.session.new_window{`,
+		`session_id = ctx.session_id`,
+		`window_label = label`,
 		`flavor = nexo_terminal .. ".shell"`,
 		`command = argv`,
 		`login = false`,
@@ -59,19 +61,25 @@ func TestRexBlockLaunchesNexoInALayerForTheOriginatingClient(t *testing.T) {
 		`focus = true`,
 		`on_completion = true`,
 		`quick_exit_threshold_ms = 0`,
-		`rex.block.call(nexo_terminal, "set_theme"`,
-		`rex.session.describe_block{ block_id = ctx.block_id }`,
-		`return layer`,
-		`{ 0, 0, 1, 1 }`,
-		`{ 0.25, 0.25, 0.5, 0.5 }`,
-		`nexo_launch(ctx, { "agents" }`,
+		`return window`,
+		`nexo_launch(ctx, {}, "nexo")`,
+		`nexo_launch(ctx, { "agents" }, "nexo agents")`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Rex block lacks %q:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, "rex.on(") {
-		t.Fatalf("Rex block registers a global hook:\n%s", body)
+	// The window is tiled, so nothing the floating layer needed belongs here.
+	for _, unwanted := range []string{
+		"new_layer",
+		"bounds",
+		"set_theme",
+		"describe_block",
+		"rex.on(",
+	} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("Rex block still contains %q:\n%s", unwanted, body)
+		}
 	}
 }
 

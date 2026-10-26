@@ -236,9 +236,10 @@ func HerdrBlock(tuiKey, agentsKey string) string {
 
 // RexBlock defines the two nexo actions and only the bindings the user chose.
 // The actions are always defined so a blank choice stays opt-in without
-// forcing the user to write Lua. Each action launches the same binary in a
-// floating layer and passes the originating client through REX_CLIENT, so a
-// project picked in the popup focuses the app the action came from.
+// forcing the user to write Lua. Each action opens the same binary in a new
+// window of the session the key was pressed in and passes the originating
+// client through REX_CLIENT, so a project picked in nexo focuses the app the
+// action came from. The window closes when nexo exits.
 func RexBlock(nexoPath, tuiKey, agentsKey string) string {
 	var bindings strings.Builder
 	if strings.TrimSpace(tuiKey) != "" {
@@ -251,19 +252,15 @@ func RexBlock(nexoPath, tuiKey, agentsKey string) string {
 	fmt.Fprintf(&b, `local nexo_bin = %s
 local nexo_terminal = "com.superlogical.terminal"
 
--- nexo runs in a floating layer and closes it when the TUI exits.
-local function nexo_launch(ctx, args, bounds)
+-- nexo opens in a new window of this session and closes it when the TUI exits.
+local function nexo_launch(ctx, args, label)
   local argv = { "/usr/bin/env", "REX_CLIENT=" .. tostring(ctx.client_id or ""), nexo_bin, "--backend=rex", "tui" }
   for _, arg in ipairs(args) do
     table.insert(argv, arg)
   end
-  local window_id
-  if ctx.block_id then
-    local described = rex.session.describe_block{ block_id = ctx.block_id }
-    window_id = described and described.block and described.block.window_id
-  end
-  local request = {
-    bounds = bounds,
+  local window, err = rex.session.new_window{
+    session_id = ctx.session_id,
+    window_label = label,
     focus = true,
     layout = rex.layout.block{
       flavor = nexo_terminal .. ".shell",
@@ -275,30 +272,15 @@ local function nexo_launch(ctx, args, bounds)
       },
     },
   }
-  if window_id then
-    request.window_id = window_id
-  else
-    request.session_id = ctx.session_id
-  end
-  local layer, err = rex.session.new_layer(request)
   if err ~= nil then error(err, 0) end
-  -- Floating layers have no background of their own, so give this one the
-  -- app background instead of letting the panes behind show through.
-  local style = rex.exec({ "defaults", "read", "-g", "AppleInterfaceStyle" })
-  local dark = style and style.stdout and style.stdout:find("Dark") ~= nil
-  rex.block.call(nexo_terminal, "set_theme", {
-    block_id = layer.block_ids[1],
-    background = dark and "#0d1117" or "#ffffff",
-    foreground = dark and "#e6edf3" or "#1f2328",
-  })
-  return layer
+  return window
 end
 
 rex.action({
   name = "nexo_tui",
   title = "nexo TUI",
   run = function(ctx)
-    return nexo_launch(ctx, {}, { 0, 0, 1, 1 })
+    return nexo_launch(ctx, {}, "nexo")
   end,
 })
 
@@ -306,7 +288,7 @@ rex.action({
   name = "nexo_agents",
   title = "nexo agents",
   run = function(ctx)
-    return nexo_launch(ctx, { "agents" }, { 0.25, 0.25, 0.5, 0.5 })
+    return nexo_launch(ctx, { "agents" }, "nexo agents")
   end,
 })
 `, strconv.Quote(nexoPath))
@@ -326,8 +308,8 @@ func rexConfigPath(home string) string {
 	return filepath.Join(home, ".config", "rex", "init.lua")
 }
 
-// nexoPath is the absolute binary the Rex action launches, so the popup does
-// not depend on the app's PATH.
+// nexoPath is the absolute binary the Rex action launches, so the new window
+// does not depend on the app's PATH.
 func nexoPath() string {
 	path, err := os.Executable()
 	if err != nil || strings.TrimSpace(path) == "" {
