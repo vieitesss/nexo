@@ -5,9 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -155,7 +152,7 @@ func (b *Backend) createProxyWorkspace(ctx context.Context, machine, initial str
 	if err := b.verifyProxyToken(ctx, workspaceID, identityValue); err != nil {
 		return "", b.operationWithCleanup(err, workspaceID)
 	}
-	command, err := proxy.AttachCommand(proxyBinary(), "herdr", b.proxyConfigPath, proxy.RemoteKindTmux, "", initial, true)
+	command, err := proxy.AttachCommand(proxy.ExecutablePath(), "herdr", b.proxyConfigPath, proxy.RemoteKindTmux, "", initial, true)
 	if err != nil {
 		return "", b.operationWithCleanup(err, workspaceID)
 	}
@@ -370,17 +367,6 @@ func decodeCreatedWorkspace(output []byte) (workspaceID, paneID string) {
 		return "", ""
 	}
 	return result.Workspace.ID, result.RootPane.ID
-}
-
-func proxyBinary() string {
-	binary := os.Args[0]
-	if resolved, err := exec.LookPath(binary); err == nil {
-		binary = resolved
-	}
-	if absolute, err := filepath.Abs(binary); err == nil {
-		binary = absolute
-	}
-	return binary
 }
 
 var _ capabilities.RemoteProxy = (*Backend)(nil)

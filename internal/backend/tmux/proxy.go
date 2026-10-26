@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -203,7 +200,7 @@ func (b *Backend) openProxy(ctx context.Context, remoteKind, machine, container 
 	identity := proxyidentity.NewIdentity(machine, "")
 	machine = identity.Machine
 	attachCommand := func() (string, error) {
-		return proxy.AttachCommand(proxyBinary(), "tmux", b.proxyConfigPath, remoteKind, machine, container, false)
+		return proxy.AttachCommand(proxy.ExecutablePath(), "tmux", b.proxyConfigPath, remoteKind, machine, container, false)
 	}
 
 	sessionID, err := b.ProxySessionID(ctx, machine, "")
@@ -324,17 +321,6 @@ func (b *Backend) proxySessionName(ctx context.Context, machine string) (string,
 func (b *Backend) switchRemoteProxy(ctx context.Context, remoteKind, machine, container string) error {
 	_, err := b.Runner.Run(ctx, "ssh", proxy.SwitchSSHArgs(b.proxyConfig, "tmux", remoteKind, machine, container)...)
 	return err
-}
-
-func proxyBinary() string {
-	binary := os.Args[0]
-	if resolved, err := exec.LookPath(binary); err == nil {
-		binary = resolved
-	}
-	if absolute, err := filepath.Abs(binary); err == nil {
-		binary = absolute
-	}
-	return binary
 }
 
 var _ capabilities.RemoteProxy = (*Backend)(nil)

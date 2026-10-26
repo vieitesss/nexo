@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -51,6 +52,21 @@ func AttachCommand(binary, backend, configPath, remoteKind, machine, initial str
 		parts = append(parts, "--", ShellQuote(machine))
 	}
 	return strings.Join(parts, " "), nil
+}
+
+// ExecutablePath resolves the nexo executable a proxy pane runs. The
+// invocation's own binary is the only one known to carry this protocol, so a
+// bare argv[0] is looked up on PATH and the result is made absolute: the pane
+// starts from an unknown working directory and inherits no PATH guarantee.
+func ExecutablePath() string {
+	binary := os.Args[0]
+	if resolved, err := exec.LookPath(binary); err == nil {
+		binary = resolved
+	}
+	if absolute, err := filepath.Abs(binary); err == nil {
+		binary = absolute
+	}
+	return binary
 }
 
 // ShellQuote returns a POSIX single-quoted shell word.
