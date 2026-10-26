@@ -13,7 +13,6 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
-	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/proxy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
@@ -143,11 +142,7 @@ func (b *Backend) openProxy(ctx context.Context, remoteKind, machine, container 
 	if err := store.recordProxy(sessionID, proxyRecord{Machine: machine, RemoteKind: remoteKind}); err != nil {
 		return errors.Join(err, b.destroyProxySession(ctx, sessionID))
 	}
-	if _, err := b.selectSession(ctx, sessionID); err != nil {
-		// The proxy exists and is recorded, so the next open retargets it.
-		return err
-	}
-	return b.recordProxyHistory(ctx, sessionID, machine, remoteKind)
+	return b.focusAndRecord(ctx, sessionInfo{ID: sessionID}, false)
 }
 
 // retargetProxy switches the remote client of the existing machine proxy to an
@@ -173,10 +168,7 @@ func (b *Backend) retargetProxy(ctx context.Context, sessionID, remoteKind, mach
 			return err
 		}
 	}
-	if _, err := b.selectSession(ctx, sessionID); err != nil {
-		return err
-	}
-	return b.recordProxyHistory(ctx, sessionID, machine, remoteKind)
+	return b.focusAndRecord(ctx, sessionInfo{ID: sessionID}, false)
 }
 
 // createProxySession creates one single-block session. The block runs the
@@ -221,16 +213,6 @@ func (b *Backend) switchRemoteProxy(ctx context.Context, remoteKind, machine, co
 
 func (b *Backend) destroyProxySession(ctx context.Context, sessionID string) error {
 	return b.KillContainer(ctx, sessionID)
-}
-
-// recordProxyHistory records the machine the proxy attaches to. Only a
-// non-default kind is written: an absent kind already reads as tmux.
-func (b *Backend) recordProxyHistory(ctx context.Context, sessionID, machine, remoteKind string) error {
-	entry := containerstate.Entry{ID: sessionID, Machine: machine, Proxy: true}
-	if remoteKind != proxy.RemoteKindTmux {
-		entry.RemoteKind = remoteKind
-	}
-	return b.recordContainer(ctx, entry)
 }
 
 // attachmentBinary resolves the nexo executable the proxy block runs. The

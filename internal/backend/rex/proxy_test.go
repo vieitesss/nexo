@@ -156,7 +156,10 @@ func TestProxyFocusesAndRemembersTheProxy(t *testing.T) {
 // property of the remote machine, not the local backend: the pane runs the
 // Herdr attach shell and the recorded kind recreates the same bridge.
 func TestProxyBridgesAHerdrRemoteInTheSameMachineProxy(t *testing.T) {
-	runner := machineProxyRunner(t, "session:proxy", nil)
+	runner := machineProxyRunner(t, "session:proxy", map[string]string{
+		api("client.list", ""): oneApp,
+		api("client.perform", `{"client_id":"client:1","action":"session.select","args":{"session_id":"session:proxy"},"origin":"cli","timeout_ms":3000}`): `{"performed_by":"client:1"}`,
+	})
 	backend := newProxyBackend(t, runner)
 	useIdentity(backend, identity{HostID: "host-1", InstanceID: "instance-1"})
 
@@ -212,6 +215,8 @@ func TestProxyReusesTheMachineProxyAndSwitchesItsRemoteTarget(t *testing.T) {
 func TestProxySwitchUpdatesTheRememberedRemoteKind(t *testing.T) {
 	runner := machineProxyRunner(t, "session:proxy", map[string]string{
 		api("session.list", ""): `{"sessions":[{"session_id":"session:proxy","label":"rpi"}]}`,
+		api("client.list", ""):  oneApp,
+		api("client.perform", `{"client_id":"client:1","action":"session.select","args":{"session_id":"session:proxy"},"origin":"cli","timeout_ms":3000}`): `{"performed_by":"client:1"}`,
 	})
 	backend := newProxyBackend(t, runner)
 	useIdentity(backend, identity{HostID: "host-1", InstanceID: "instance-1"})
@@ -354,6 +359,32 @@ func TestProxySessionIDResolvesTheMachineProxyForAnExplicitContainer(t *testing.
 	}
 	if sessionID != "session:proxy" {
 		t.Fatalf("ProxySessionID(devbox, api) = %q, want the devbox proxy", sessionID)
+	}
+}
+
+// TestProxyDoesNotRecordFocusWithoutAnAcceptedSelection pins that proxy history
+// advances only when an app accepted session.select: a headless host opens and
+// retargets the proxy but leaves `remote previous` untouched.
+func TestProxyDoesNotRecordFocusWithoutAnAcceptedSelection(t *testing.T) {
+	runner := machineProxyRunner(t, "session:proxy", map[string]string{
+		api("session.list", ""): `{"sessions":[{"session_id":"session:proxy","label":"devbox"}]}`,
+	})
+	backend := newProxyBackend(t, runner)
+	useIdentity(backend, identity{HostID: "host-1", InstanceID: "instance-1"})
+
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "devbox", ""); err != nil {
+		t.Fatalf("Proxy() error = %v", err)
+	}
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "devbox", "api"); err != nil {
+		t.Fatalf("retarget Proxy() error = %v", err)
+	}
+
+	entries, err := backend.RecentContainers(context.Background())
+	if err != nil {
+		t.Fatalf("RecentContainers() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("no app accepted session.select, but proxy history = %#v", entries)
 	}
 }
 
