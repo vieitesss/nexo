@@ -124,6 +124,20 @@ func TestPromptSetupAbbreviatesHomePathDefault(t *testing.T) {
 	}
 }
 
+func TestPromptSetupSubmitsTheRexBackend(t *testing.T) {
+	values, err := PromptSetup(context.Background(), bytes.NewBufferString("\r\r\r\r\r"), &bytes.Buffer{}, SetupPromptDefaults{
+		Backend:   "rex",
+		LocalOnly: true,
+		Paths:     []string{"/work"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values.Backend != "rex" {
+		t.Fatalf("setup backend = %q, want rex", values.Backend)
+	}
+}
+
 func TestSetupBindingErrorsRecomputeWhenBackendChanges(t *testing.T) {
 	form := newStagedForm(context.Background(), []formStage{
 		{ID: "backend", Fields: []formField{{ID: "backend", Kind: formChoice, Default: "tmux", Options: []string{"tmux", "herdr"}}}},

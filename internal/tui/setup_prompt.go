@@ -79,7 +79,7 @@ func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, default
 	tuiPlaceholder, agentsPlaceholder := bindingPlaceholders(defaults.Backend)
 	initialBindings := defaults.Bindings[strings.ToLower(strings.TrimSpace(defaults.Backend))]
 	stages := []formStage{
-		{ID: "backend", Title: "Backend", Prompt: "Both tmux and Herdr are installed. Which one should setup connect nexo to?", Detected: defaults.BackendDetected, Fields: []formField{{ID: "backend", Default: defaults.Backend, Kind: formChoice, Options: []string{"tmux", "herdr"}}}},
+		{ID: "backend", Title: "Backend", Prompt: "Both tmux and Herdr are installed. Which one should setup connect nexo to?", Detected: defaults.BackendDetected, Fields: []formField{{ID: "backend", Default: defaults.Backend, Kind: formChoice, Options: config.SetupBackends}}},
 		{ID: "paths", Title: "Project roots", Prompt: "Which folders hold your projects? Separate them with commas.", Examples: []formExample{
 			{Input: "~/src", Meaning: "every folder in it is a project: ~/src/nexo, ~/src/dotfiles"},
 			{Input: "~/work/*", Meaning: "one level deeper: ~/work/acme/api, ~/work/acme/web"},
@@ -248,8 +248,8 @@ func validateSetupForm(f *stagedForm, defaultBackend string) formValidation {
 			// A choice has nothing to edit, so its problem is reported once as
 			// the stage error rather than under the control as well.
 			case field.ID == "backend":
-				if (backend != "tmux" && backend != "herdr" && backend != "rex") && result.Error == "" {
-					result.Error = "choose tmux, herdr or rex"
+				if !config.IsSetupBackend(backend) && result.Error == "" {
+					result.Error = "choose " + strings.Join(config.SetupBackends, ", ")
 				}
 			case field.ID == "tui-key" || field.ID == "agents-key":
 				// A backend change does not edit the input, so revalidate here and

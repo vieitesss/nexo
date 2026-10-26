@@ -458,7 +458,7 @@ func chooseBackend(ctx context.Context, in Input, options Options) (string, stri
 			reason = "detected in this terminal"
 		}
 	}
-	if selected == "tmux" || selected == "herdr" || selected == "rex" {
+	if config.IsSetupBackend(selected) {
 		return selected, reason, nil
 	}
 	var tmuxOK, herdrOK bool
@@ -941,7 +941,7 @@ func Run(ctx context.Context, in Input, options Options) error {
 			hosts = append([]string(nil), machines...)
 		}
 		bindings := make(map[string]tui.SetupBindings, 3)
-		for _, name := range []string{"tmux", "herdr", "rex"} {
+		for _, name := range config.SetupBackends {
 			tuiKey, agentsKey := existingBindings(in.Home, name)
 			bindings[name] = tui.SetupBindings{TUIKey: tuiKey, AgentsKey: agentsKey}
 		}
@@ -960,7 +960,7 @@ func Run(ctx context.Context, in Input, options Options) error {
 	if err := validateBindings(backendName, tuiKey, agentsKey); err != nil {
 		return err
 	}
-	if backendName != "tmux" && backendName != "herdr" && backendName != "rex" {
+	if !config.IsSetupBackend(backendName) {
 		return fmt.Errorf("invalid setup backend %q", backendName)
 	}
 	if backendName == "herdr" {
