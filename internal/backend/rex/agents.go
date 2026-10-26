@@ -167,11 +167,7 @@ func (b *Backend) observeAgent(ctx context.Context, session sessionInfo, current
 	if harness == "" {
 		return agentSnapshot{}, false
 	}
-	screen, err := b.screen(ctx, session.ID, current.ID)
-	if err != nil {
-		return agentSnapshot{}, false
-	}
-	rows, err := b.blockRows(ctx, session.ID, current.ID)
+	screen, err := b.visibleScreen(ctx, session.ID, current.ID)
 	if err != nil {
 		return agentSnapshot{}, false
 	}
@@ -181,7 +177,7 @@ func (b *Backend) observeAgent(ctx context.Context, session sessionInfo, current
 		harness: harness,
 		// Only the screen the user sees can prove live work: an old marker in
 		// the scrollback is history, not an agent that is running.
-		working: agentdetect.Working(harness, viewport(screen, rows), cfg.WorkingPattern),
+		working: agentdetect.Working(harness, screen, cfg.WorkingPattern),
 		path:    path,
 	}, true
 }

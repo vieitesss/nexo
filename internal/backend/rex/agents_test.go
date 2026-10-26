@@ -2,6 +2,7 @@ package rex
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -18,9 +19,27 @@ type agentFixture struct {
 	records string
 	process string
 	screen  string
-	// size is the block's terminal size. A fixture with a screen reports a
-	// 24-row terminal unless it says otherwise.
+	// viewport is the block's VT capture: the scrollback Rex still holds
+	// followed by every row the terminal is showing. The working check reads it.
+	viewport string
+	// size is the block's terminal size. A fixture with a screen or a viewport
+	// reports a 24-row terminal unless it says otherwise.
 	size string
+}
+
+// vtCapture is one Rex VT capture: transcript rows joined by CRLF, blank rows
+// completing the terminal, and the cursor escape Rex writes after the last row.
+func vtCapture(rows int, transcript ...string) string {
+	frame := append([]string(nil), transcript...)
+	for len(frame) < rows {
+		frame = append(frame, "")
+	}
+	frame[len(frame)-1] += "\x1b[1;1H"
+	content, err := json.Marshal(screenResult{Content: strings.Join(frame, "\r\n")})
+	if err != nil {
+		panic(err)
+	}
+	return string(content)
 }
 
 // agentBackend builds a backend with one session holding one terminal block.
@@ -39,6 +58,11 @@ func agentBackend(t *testing.T, fixture agentFixture) (*Backend, *fakeRunner) {
 	}
 	if fixture.screen != "" {
 		outputs[api("block.method", blockCallPayload("session:1", "block:1", "format", `{"format":"text","trim":true}`))] = fixture.screen
+	}
+	if fixture.viewport != "" {
+		outputs[api("block.method", blockCallPayload("session:1", "block:1", "format", `{"format":"vt"}`))] = fixture.viewport
+	}
+	if fixture.screen != "" || fixture.viewport != "" {
 		size := fixture.size
 		if size == "" {
 			size = `{"rows":24}`
@@ -120,9 +144,10 @@ func blockCallPayload(sessionID, blockID, method, args string) string {
 
 func TestListAgentsFallsBackToProcessAndScreenObservation(t *testing.T) {
 	backend, runner := agentBackend(t, agentFixture{
-		records: `{"records":[]}`,
-		process: `{"foreground":{"pid":42,"name":"node","script":"/opt/homebrew/bin/claude","cwd":"/tmp/project"}}`,
-		screen:  `{"content":"⠋ Working… (esc to interrupt)"}`,
+		records:  `{"records":[]}`,
+		process:  `{"foreground":{"pid":42,"name":"node","script":"/opt/homebrew/bin/claude","cwd":"/tmp/project"}}`,
+		screen:   `{"content":"⠋ Working… (esc to interrupt)"}`,
+		viewport: vtCapture(24, "⠋ Working… (esc to interrupt)"),
 	})
 	runner.outputs["-C /tmp/project branch --show-current"] = "feat/rex-backend\n"
 
@@ -350,6 +375,13 @@ const cleanScreen = `{"content":"$ git status\nnothing to commit\n$"}`
 // workingScreen is a live spinner, the fallback's proof that an agent works.
 const workingScreen = `{"content":"⠋ Working… (esc to interrupt)"}`
 
+// workingViewport and cleanViewport are the same screens as Rex's VT capture
+// returns them: a complete terminal frame.
+var (
+	workingViewport = vtCapture(24, "⠋ Working… (esc to interrupt)")
+	cleanViewport   = vtCapture(24, "$ git status", "nothing to commit", "$")
+)
+
 // agentProcess makes the fallback recognise a claude agent in the block.
 const agentProcess = `{"foreground":{"pid":42,"name":"node","script":"/opt/homebrew/bin/claude","cwd":"/tmp/project"}}`
 
@@ -378,7 +410,12 @@ func TestListAgentsResetsNativeStateWhenObservationFallsBack(t *testing.T) {
 	statusPayload := api("block.method", blockMethodPayload("session:1", "block:1", "program_status"))
 	blocked := statusJSON("blocked", "claude-code", "2026-10-22T09:48:34+02:00")
 	now := time.Date(2026, time.October, 22, 9, 48, 0, 0, time.UTC)
-	backend := clockedBackend(t, agentFixture{records: blocked, process: agentProcess, screen: workingScreen}, &now)
+	backend := clockedBackend(t, agentFixture{
+		records:  blocked,
+		process:  agentProcess,
+		screen:   workingScreen,
+		viewport: workingViewport,
+	}, &now)
 	runner := backend.Runner.(*fakeRunner)
 
 	native := listOnce(t, backend, 1)
@@ -412,7 +449,12 @@ func TestListAgentsRefreshesNativeAcknowledgementWhenObservationResumes(t *testi
 	statusPayload := api("block.method", blockMethodPayload("session:1", "block:1", "program_status"))
 	idle := statusJSON("idle", "claude-code", "2026-10-22T09:48:34+02:00")
 	now := time.Date(2026, time.October, 22, 9, 48, 0, 0, time.UTC)
-	backend := clockedBackend(t, agentFixture{records: idle, process: agentProcess, screen: cleanScreen}, &now)
+	backend := clockedBackend(t, agentFixture{
+		records:  idle,
+		process:  agentProcess,
+		screen:   cleanScreen,
+		viewport: cleanViewport,
+	}, &now)
 	runner := backend.Runner.(*fakeRunner)
 
 	native := listOnce(t, backend, 1)
@@ -521,6 +563,74 @@ func TestListAgentsResetsAcknowledgementForANewOwner(t *testing.T) {
 	}
 }
 
+func TestListAgentsFindsAWorkingMarkerUnderColours(t *testing.T) {
+	// Rex's VT capture keeps the colours a harness paints, so the live line
+	// reaches the detector wrapped in escape sequences.
+	coloured := "\x1b[1m⠋ Working\x1b[0m… (esc to interrupt)"
+
+	now := time.Date(2026, time.October, 22, 9, 48, 0, 0, time.UTC)
+	backend := clockedBackend(t, agentFixture{
+		records:  `{"records":[]}`,
+		process:  agentProcess,
+		screen:   cleanScreen,
+		viewport: vtCapture(24, coloured),
+	}, &now)
+
+	agents := listOnce(t, backend, 1)
+	if agents[0].State != "working" {
+		t.Fatalf("agent = %#v, want the coloured marker on screen to prove work", agents[0])
+	}
+	// A marker on screen keeps the agent working past the idle threshold; only
+	// the marker's disappearance can stop it.
+	now = now.Add(10 * time.Second)
+	later := listOnce(t, backend, 1)
+	if later[0].State != "working" {
+		t.Fatalf("agent = %#v, want the coloured marker to keep the agent working", later[0])
+	}
+}
+
+func TestListAgentsIgnoresAWorkingMarkerClearedFromTheScreen(t *testing.T) {
+	// A runner painted a spinner, then a program cleared the screen and left a
+	// clean prompt. Rex's text capture drops the blank rows at the bottom of the
+	// screen, so the block reports a three-line capture for a 24-row terminal and
+	// those lines are scrollback, not what the user sees.
+	spinner := "⠋ Working… (esc to interrupt)"
+	preview := `{"content":` + strconv.Quote(strings.Join([]string{spinner, "filler", "$ clean prompt"}, "\n")) + `}`
+
+	// The VT capture keeps the rows that scrolled off plus the whole screen the
+	// clear left behind: the prompt and the blank rows below it.
+	scrollback := []string{spinner}
+	for i := 1; i <= 7; i++ {
+		scrollback = append(scrollback, fmt.Sprintf("filler %d", i))
+	}
+	captured := append(scrollback, "$ clean prompt")
+	viewport := vtCapture(len(scrollback)+24, captured...)
+
+	now := time.Date(2026, time.October, 22, 9, 48, 0, 0, time.UTC)
+	backend := clockedBackend(t, agentFixture{
+		records:  `{"records":[]}`,
+		process:  agentProcess,
+		screen:   preview,
+		viewport: viewport,
+	}, &now)
+
+	listOnce(t, backend, 1)
+	now = now.Add(4 * time.Second)
+	idle := listOnce(t, backend, 1)
+	if idle[0].State != "stopped" {
+		t.Fatalf("agent = %#v, want a stop once the screen shows no marker", idle[0])
+	}
+
+	// The preview keeps showing the capture Rex returns, scrollback included.
+	content, err := backend.ReadScreen(context.Background(), "block:1")
+	if err != nil {
+		t.Fatalf("ReadScreen() error = %v", err)
+	}
+	if !strings.Contains(content, spinner) || !strings.Contains(content, "$ clean prompt") {
+		t.Fatalf("ReadScreen() = %q, want the full text capture", content)
+	}
+}
+
 func TestListAgentsIgnoresWorkingMarkersInTheScrollback(t *testing.T) {
 	// A long transcript pushed the live spinner off the screen; the block now
 	// sits at a clean prompt.
@@ -532,10 +642,11 @@ func TestListAgentsIgnoresWorkingMarkersInTheScrollback(t *testing.T) {
 
 	now := time.Date(2026, time.October, 22, 9, 48, 0, 0, time.UTC)
 	backend := clockedBackend(t, agentFixture{
-		records: `{"records":[]}`,
-		process: agentProcess,
-		screen:  `{"content":` + strconv.Quote(strings.Join(lines, "\n")) + `}`,
-		size:    `{"rows":24}`,
+		records:  `{"records":[]}`,
+		process:  agentProcess,
+		screen:   `{"content":` + strconv.Quote(strings.Join(lines, "\n")) + `}`,
+		viewport: vtCapture(24, lines...),
+		size:     `{"rows":24}`,
 	}, &now)
 
 	listOnce(t, backend, 1)

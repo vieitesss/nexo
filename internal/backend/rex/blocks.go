@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
@@ -187,19 +189,35 @@ func (b *Backend) blockRows(ctx context.Context, sessionID, blockID string) (int
 	return decoded.Rows, nil
 }
 
-// viewport returns the part of a screen capture the terminal is currently
-// showing. Rex returns the screen and its scrollback as one text block, so the
-// newest rows lines are the screen whenever it is full, and a capture shorter
-// than the screen has not scrolled at all.
-func viewport(content string, rows int) string {
-	if rows <= 0 {
-		return content
+// visibleScreen reads the rows the terminal is currently showing as plain
+// text. Rex's text capture drops the blank rows at the bottom of the screen, so
+// its newest lines can reach back into the scrollback; the VT capture always
+// carries a complete screen, which makes its newest rows lines exactly what the
+// user sees.
+func (b *Backend) visibleScreen(ctx context.Context, sessionID, blockID string) (string, error) {
+	output, err := b.blockCall(ctx, sessionID, blockID, "format", map[string]any{"format": "vt"})
+	if err != nil {
+		return "", err
 	}
-	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
-	if len(lines) <= rows {
-		return content
+	var decoded screenResult
+	if err := json.Unmarshal(output, &decoded); err != nil {
+		return "", fmt.Errorf("decode rex block %q format: %w", blockID, err)
 	}
-	return strings.Join(lines[len(lines)-rows:], "\n")
+	rows, err := b.blockRows(ctx, sessionID, blockID)
+	if err != nil {
+		return "", err
+	}
+	return ansi.Strip(lastRows(decoded.Content, rows)), nil
+}
+
+// lastRows returns the newest lines of a VT capture: the rows the terminal
+// shows. A capture with fewer lines than the terminal has not scrolled.
+func lastRows(capture string, rows int) string {
+	lines := strings.Split(capture, "\r\n")
+	if rows > 0 && len(lines) > rows {
+		lines = lines[len(lines)-rows:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // BlockProcessPIDs reports the pids of one block's child and foreground
