@@ -201,9 +201,14 @@ func HerdrAttachShell(machine, initial string) string {
 		"      continue",
 		"    fi",
 		"  fi",
+		// An empty server creates a workspace when a client attaches, so
+		// attach only after the listing shows one. A failed, empty, or
+		// unreadable listing takes the same retry path: nothing here may
+		// start remote state (D-4).
 		"  workspaces=$(herdr workspace list 2>/dev/null) || workspaces=",
 		"  case \"$(herdr_compact \"$workspaces\")\" in",
-		"    *'\"workspaces\":[]'*) ask_retry \"no workspaces on $machine — press r to retry, q to close\" || exit 0; continue ;;",
+		"    *'\"workspaces\":[{'*) ;;",
+		"    *) ask_retry \"no workspaces on $machine — press r to retry, q to close\" || exit 0; continue ;;",
 		"  esac",
 		"  exec herdr",
 		"done",
