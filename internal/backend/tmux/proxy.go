@@ -172,16 +172,33 @@ func (s tmuxProxyStore) ListProxyCandidates(ctx context.Context) ([]proxyidentit
 // is the only process in its pane; closing this local session cannot close the
 // remote container.
 func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
+	return b.openProxy(ctx, proxy.RemoteKindTmux, machine, proxy.CanonicalContainerName(strings.TrimSpace(container)))
+}
+
+// ProxyRemote opens or switches the machine proxy for a remote machine whose
+// multiplexer is not tmux. The local container is an ordinary tmux proxy
+// session; only its pane attaches to the remote Herdr client, so nexo never
+// drives Herdr from tmux and needs no local Herdr install.
+func (b *Backend) ProxyRemote(ctx context.Context, remoteKind, machine, container string) error {
+	if remoteKind != proxy.RemoteKindHerdr {
+		return fmt.Errorf("tmux remote proxy cannot attach to a %q remote", remoteKind)
+	}
+	return b.openProxy(ctx, remoteKind, machine, strings.TrimSpace(container))
+}
+
+func (b *Backend) openProxy(ctx context.Context, remoteKind, machine, container string) error {
 	if b == nil || b.Runner == nil {
 		return errors.New("tmux remote proxy requires a command runner")
 	}
 	machine = strings.TrimSpace(machine)
-	container = proxy.CanonicalContainerName(strings.TrimSpace(container))
 	if err := ValidateProxyIdentity(machine, container); err != nil {
 		return err
 	}
 	identity := proxyidentity.NewIdentity(machine, "")
 	machine = identity.Machine
+	attachCommand := func() (string, error) {
+		return proxy.AttachCommand(proxyBinary(), "tmux", b.proxyConfigPath, remoteKind, machine, container, false)
+	}
 
 	sessionID, err := b.ProxySessionID(ctx, machine, "")
 	if err != nil {
@@ -189,11 +206,14 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 	}
 	if sessionID != "" {
 		if container != "" {
-			if switchErr := b.switchRemoteProxy(ctx, machine, container); switchErr != nil {
+			if switchErr := b.switchRemoteProxy(ctx, remoteKind, machine, container); switchErr != nil {
 				if proxy.IsMissingRemoteTarget(switchErr) {
+					if remoteKind == proxy.RemoteKindHerdr {
+						return fmt.Errorf("no workspace %s on %s", container, machine)
+					}
 					return fmt.Errorf("no session %s on %s", container, machine)
 				}
-				command, commandErr := proxy.AttachCommand(proxyBinary(), "tmux", b.proxyConfigPath, machine, container, false)
+				command, commandErr := attachCommand()
 				if commandErr != nil {
 					return commandErr
 				}
@@ -207,7 +227,7 @@ func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
 		if nameErr != nil {
 			return nameErr
 		}
-		command, commandErr := proxy.AttachCommand(proxyBinary(), "tmux", b.proxyConfigPath, machine, container, false)
+		command, commandErr := attachCommand()
 		if commandErr != nil {
 			return commandErr
 		}
@@ -283,7 +303,11 @@ func (b *Backend) proxySessionName(ctx context.Context, machine string) (string,
 	}
 }
 
-func (b *Backend) switchRemoteProxy(ctx context.Context, machine, container string) error {
+func (b *Backend) switchRemoteProxy(ctx context.Context, remoteKind, machine, container string) error {
+	if remoteKind == proxy.RemoteKindHerdr {
+		_, err := b.Runner.Run(ctx, "ssh", proxy.HerdrSwitchSSHArgs(b.proxyConfig, machine, container)...)
+		return err
+	}
 	_, err := b.Runner.Run(ctx, "ssh", proxy.RemoteSwitchSSHArgs(b.proxyConfig, "tmux", machine, container)...)
 	return err
 }
@@ -300,6 +324,7 @@ func proxyBinary() string {
 }
 
 var _ capabilities.RemoteProxy = (*Backend)(nil)
+var _ capabilities.RemoteKindProxy = (*Backend)(nil)
 var _ capabilities.RemotePaste = (*Backend)(nil)
 var _ capabilities.RemoteConfigurator = (*Backend)(nil)
 var _ capabilities.ProxySessionResolver = (*Backend)(nil)

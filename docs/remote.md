@@ -147,8 +147,48 @@ new MACHINE NAME` creates the remote workspace with Herdr over SSH and follows
 the same native-open flow. Closing a Herdr remote container reports that there
 is no local proxy to close; it never closes the remote workspace.
 
-A Herdr remote cannot be opened from the tmux backend. nexo returns an
-unsupported-backend message directing the user to open it from Herdr instead.
+A Herdr remote cannot be opened from the tmux backend without a proxy: from
+tmux, nexo bridges to it with the machine proxy described in
+[Herdr remotes from tmux](#herdr-remotes-from-tmux). Other local backends
+report an unsupported-backend message.
+
+## Herdr remotes from tmux
+
+When the local backend is tmux and the remote kind is Herdr, nexo creates the
+same one machine proxy it creates for a tmux remote, but the pane's only
+content is the remote Herdr client. The hidden
+`nexo remote attach --remote-kind herdr` command runs one SSH round trip that
+checks the remote server with the read-only `herdr status server --json`,
+focuses the requested workspace, and `exec`s `herdr`. nexo never starts a
+remote Herdr server, never lets an empty server create a workspace, and never
+edits the remote Herdr configuration, so Herdr's own chrome appears in the
+pane unchanged. Nothing is needed locally beyond tmux: no local Herdr install,
+no saved `herdr machine`, and no nested client.
+
+The remote target is a workspace ID (`w2`) or a workspace label. A label is
+resolved against the listing that produced the place, and a label matching
+more than one workspace is rejected with both IDs instead of guessed. Herdr
+addresses workspaces by ID, so an explicit open while the proxy exists does
+not re-attach: it runs `ssh MACHINE herdr workspace focus wN`, which retargets
+the client already in the pane, then focuses the local proxy session. That is
+the same shape as the tmux switch and keeps one attachment per machine.
+
+Herdr focus is server-wide: `herdr workspace focus` moves every client
+attached to that remote server, so two local machines watching one remote
+Herdr follow each other. This assumes one user per remote machine.
+
+When the remote server is not running, or has no workspaces, the pane prints
+`no Herdr server on MACHINE — press r to retry, q to close` (or `no workspaces
+on MACHINE — …`) and creates nothing. Detaching with `prefix+q` closes only
+the local proxy, exactly as for a tmux remote.
+
+`nexo remote previous`/M-o never lists remotes, so it cannot tell a Herdr
+machine from a tmux one: for a machine without a proxy yet it creates a
+tmux-mode proxy, whose pane then reports that the machine has no tmux
+sessions. Open the machine once with `nexo remote open MACHINE/WORKSPACE`
+before relying on M-o. For the same reason a proxy keeps the mode it was
+created with: if a machine starts running a Herdr server later, close its
+proxy with `nexo remote close MACHINE` and open it again.
 
 ## tmux remotes from Herdr
 
@@ -191,8 +231,8 @@ proxy only removes the local container; it never closes the remote container.
 
 Commands:
 
-- `nexo remote open MACHINE/CONTAINER` opens a native Herdr container or the
-  appropriate local proxy.
+- `nexo remote open MACHINE/CONTAINER` opens a native Herdr container, a
+  bridged one, or the appropriate local proxy.
 - `nexo remote new MACHINE [NAME]` creates a remote Herdr workspace or tmux
   session and opens it using the same rules as `remote open`.
 - `nexo remote close [MACHINE|MACHINE/CONTAINER]` closes only the local proxy. With no

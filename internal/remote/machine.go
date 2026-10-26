@@ -84,9 +84,14 @@ func (o Orchestrator) Machine(ctx context.Context, machine string) (MachineResul
 	return result, nil
 }
 
-// Open selects the native Herdr path or a tmux proxy from the machine result.
-// Tmux names are canonicalized at this seam, after remote kind detection.
+// Open selects the native Herdr path, a tmux proxy, or the bridge from a
+// non-Herdr local backend to a remote Herdr machine. Tmux names are
+// canonicalized at this seam, after remote kind detection.
 func (o Orchestrator) Open(ctx context.Context, result MachineResult, container string) error {
+	container, err := resolveRemoteTarget(o.listing.config.Backend, result, container)
+	if err != nil {
+		return err
+	}
 	return o.policy.open(ctx, o.listing.runner, o.listing.config.Backend, result.Machine, result.Kind, container)
 }
 
@@ -114,6 +119,11 @@ func (o Orchestrator) FocusAgent(ctx context.Context, result MachineResult, agen
 	if err := FocusRemotePane(ctx, o.listing.runner, o.listing.config.SSHConfig, result.Machine, result.Kind, agent.PaneID); err != nil {
 		return err
 	}
+	// A bridged Herdr agent is addressed by its workspace ID: the label is
+	// display data and `workspace focus` takes IDs only.
+	if result.Kind == KindHerdr && o.listing.config.Backend != backend.Herdr && strings.TrimSpace(agent.ContainerID) != "" {
+		container = strings.TrimSpace(agent.ContainerID)
+	}
 	return o.policy.openValidated(ctx, o.listing.runner, o.listing.config.Backend, result.Machine, result.Kind, container)
 }
 
@@ -124,13 +134,45 @@ func (p OperationPolicy) validateKind(local backend.Kind, machine string, kind K
 			return fmt.Errorf("unsupported: %s runs tmux; use tmux or Herdr to %s it", machine, operation)
 		}
 	case KindHerdr:
-		if local != backend.Herdr {
-			return fmt.Errorf("unsupported: %s runs Herdr; use Herdr to %s it", machine, operation)
+		// A Herdr remote opens natively from Herdr. From any other local
+		// backend it needs a local proxy whose only pane attaches to the
+		// remote Herdr client.
+		if local != backend.Herdr && local != backend.Tmux {
+			return fmt.Errorf("unsupported: %s runs Herdr; use tmux or Herdr to %s it", machine, operation)
 		}
 	default:
 		return fmt.Errorf("remote machine %q has an unknown multiplexer kind", machine)
 	}
 	return nil
+}
+
+// resolveRemoteTarget maps a requested container to the identity the selected
+// remote path needs. The bridge needs a Herdr workspace ID, so an exact ID wins
+// and a unique workspace label is accepted for convenience.
+func resolveRemoteTarget(local backend.Kind, result MachineResult, container string) (string, error) {
+	if result.Kind != KindHerdr || local == backend.Herdr {
+		return container, nil
+	}
+	target := strings.TrimSpace(container)
+	for _, candidate := range result.Containers {
+		if candidate.ID == target {
+			return candidate.ID, nil
+		}
+	}
+	matches := make([]string, 0, 1)
+	for _, candidate := range result.Containers {
+		if candidate.Name == target {
+			matches = append(matches, candidate.ID)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no workspace %s on %s", target, result.Machine)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("workspace label %s is ambiguous on %s: %s", target, result.Machine, strings.Join(matches, ", "))
+	}
 }
 
 func (p OperationPolicy) open(ctx context.Context, commandRunner runner.CommandRunner, local backend.Kind, machine string, kind Kind, container string) error {
@@ -142,7 +184,10 @@ func (p OperationPolicy) open(ctx context.Context, commandRunner runner.CommandR
 
 func (p OperationPolicy) openValidated(ctx context.Context, commandRunner runner.CommandRunner, local backend.Kind, machine string, kind Kind, container string) error {
 	if kind == KindHerdr {
-		return p.openHerdr(ctx, commandRunner, machine, container)
+		if local == backend.Herdr {
+			return p.openHerdr(ctx, commandRunner, machine, container)
+		}
+		return p.openBridgedHerdr(ctx, local, machine, container)
 	}
 	container = proxy.CanonicalContainerName(container)
 	if p.Resolver != nil {
@@ -158,16 +203,37 @@ func (p OperationPolicy) openValidated(ctx context.Context, commandRunner runner
 	return p.Proxy.Proxy(ctx, machine, container)
 }
 
+// openBridgedHerdr opens a remote Herdr workspace through a local proxy whose
+// pane attaches to the remote Herdr client. The local backend still owns the
+// proxy container, so nexo never controls Herdr from another multiplexer.
+func (p OperationPolicy) openBridgedHerdr(ctx context.Context, local backend.Kind, machine, container string) error {
+	if p.Proxy == nil {
+		return fmt.Errorf("backend %q does not support remote proxies", local)
+	}
+	bridged, ok := p.Proxy.(capabilities.RemoteKindProxy)
+	if !ok {
+		return fmt.Errorf("backend %q cannot attach to a remote Herdr machine", local)
+	}
+	return bridged.ProxyRemote(ctx, string(KindHerdr), machine, container)
+}
+
 func (p OperationPolicy) create(ctx context.Context, commandRunner runner.CommandRunner, local backend.Kind, sshConfig string, result MachineResult, name string) error {
 	if err := p.validateKind(local, result.Machine, result.Kind, "open"); err != nil {
 		return err
 	}
 	switch result.Kind {
 	case KindHerdr:
-		if err := createHerdrWorkspace(ctx, commandRunner, sshConfig, result.Machine, name); err != nil {
+		workspace, err := createHerdrWorkspace(ctx, commandRunner, sshConfig, result.Machine, name)
+		if err != nil {
 			return err
 		}
-		return p.openValidated(ctx, commandRunner, local, result.Machine, result.Kind, name)
+		// Herdr focuses workspaces by ID, so prefer what the create call
+		// returned over the requested label.
+		target := name
+		if workspace != "" {
+			target = workspace
+		}
+		return p.openValidated(ctx, commandRunner, local, result.Machine, result.Kind, target)
 	case KindTmux:
 		container, err := createTmuxContainer(ctx, commandRunner, sshConfig, result.Machine, name)
 		if err != nil {
@@ -250,9 +316,11 @@ func createTmuxContainer(ctx context.Context, commandRunner runner.CommandRunner
 	return canonical, nil
 }
 
-func createHerdrWorkspace(ctx context.Context, commandRunner runner.CommandRunner, sshConfig, machine, name string) error {
+// createHerdrWorkspace creates a labelled workspace and returns its ID when
+// the remote reports one.
+func createHerdrWorkspace(ctx context.Context, commandRunner runner.CommandRunner, sshConfig, machine, name string) (string, error) {
 	if commandRunner == nil {
-		return errors.New("remote new requires a command runner")
+		return "", errors.New("remote new requires a command runner")
 	}
 	args := []string{"-o", "BatchMode=yes"}
 	if sshConfig = strings.TrimSpace(sshConfig); sshConfig != "" {
@@ -262,9 +330,33 @@ func createHerdrWorkspace(ctx context.Context, commandRunner runner.CommandRunne
 	output, err := commandRunner.Run(ctx, "ssh", args...)
 	if err != nil {
 		if text := strings.TrimSpace(string(output)); text != "" {
-			return fmt.Errorf("create remote Herdr container: %s", text)
+			return "", fmt.Errorf("create remote Herdr container: %s", text)
 		}
-		return fmt.Errorf("create remote Herdr container on %s: %w", machine, err)
+		return "", fmt.Errorf("create remote Herdr container on %s: %w", machine, err)
 	}
-	return nil
+	return createdHerdrWorkspaceID(output), nil
+}
+
+// createdHerdrWorkspaceID reads the workspace ID from a create response. An
+// unparsable response is not an error: the caller falls back to the label.
+func createdHerdrWorkspaceID(output []byte) string {
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if json.Unmarshal(output, &envelope) != nil {
+		return ""
+	}
+	raw := output
+	if len(envelope.Result) != 0 && string(envelope.Result) != "null" {
+		raw = envelope.Result
+	}
+	var result struct {
+		Workspace struct {
+			ID string `json:"workspace_id"`
+		} `json:"workspace"`
+	}
+	if json.Unmarshal(raw, &result) != nil {
+		return ""
+	}
+	return strings.TrimSpace(result.Workspace.ID)
 }

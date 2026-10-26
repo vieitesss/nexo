@@ -95,14 +95,12 @@ func TestRemoteOpenHerdrPreservesNativeContainerSpelling(t *testing.T) {
 	}
 }
 
-func TestRemoteOpenHerdrIsUnsupportedFromTmux(t *testing.T) {
-	proxies := &recordingRemoteProxy{}
-	fake := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name != "ssh" {
-			t.Fatalf("command = %q, want listing over ssh", name)
-		}
-		return []byte("__NEXO_REMOTE_KIND__herdr\n{\"result\":{\"type\":\"workspace_list\",\"workspaces\":[]}}\n"), nil
-	})
+func TestRemoteOpenBridgesTmuxToARemoteHerdrWorkspace(t *testing.T) {
+	proxies := &recordingBridgeProxy{}
+	fake := herdrWorkspaceListing(
+		`{"workspace_id":"w1","label":"web"}`,
+		`{"workspace_id":"w2","label":"api"}`,
+	)
 	err := (remoteCommand{}).Run(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"gpu1"}}},
@@ -110,7 +108,74 @@ func TestRemoteOpenHerdrIsUnsupportedFromTmux(t *testing.T) {
 		Runner:    fake,
 		Args:      []string{"open", "gpu1/api"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "unsupported") || proxies.opened != [2]string{} {
-		t.Fatalf("error = %v, proxy = %#v, want unsupported without proxy", err, proxies.opened)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
 	}
+	// The label is a display name; Herdr focuses workspaces by ID.
+	if proxies.bridged != [3]string{"herdr", "gpu1", "w2"} || proxies.opened != [2]string{} {
+		t.Fatalf("bridged = %#v proxy = %#v, want the Herdr proxy for w2", proxies.bridged, proxies.opened)
+	}
+}
+
+func TestRemoteOpenAcceptsAWorkspaceIDAsTheBridgeTarget(t *testing.T) {
+	proxies := &recordingBridgeProxy{}
+	err := (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"gpu1"}}},
+		Adapter:   proxies,
+		Runner:    herdrWorkspaceListing(`{"workspace_id":"w2","label":"api"}`),
+		Args:      []string{"open", "gpu1/w2"},
+	})
+	if err != nil || proxies.bridged != [3]string{"herdr", "gpu1", "w2"} {
+		t.Fatalf("error = %v bridged = %#v, want w2 by ID", err, proxies.bridged)
+	}
+}
+
+func TestRemoteOpenRejectsAnAmbiguousWorkspaceLabelOnTheBridge(t *testing.T) {
+	proxies := &recordingBridgeProxy{}
+	err := (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"gpu1"}}},
+		Adapter:   proxies,
+		Runner: herdrWorkspaceListing(
+			`{"workspace_id":"w1","label":"api"}`,
+			`{"workspace_id":"w2","label":"api"}`,
+		),
+		Args: []string{"open", "gpu1/api"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") || !strings.Contains(err.Error(), "w1, w2") {
+		t.Fatalf("error = %v, want an ambiguity diagnostic naming both workspaces", err)
+	}
+	if proxies.bridged != [3]string{} {
+		t.Fatalf("bridged = %#v, want no proxy for an ambiguous target", proxies.bridged)
+	}
+}
+
+func TestRemoteOpenNeedsTheBridgeCapabilityFromTheLocalBackend(t *testing.T) {
+	proxies := &recordingRemoteProxy{}
+	err := (remoteCommand{}).Run(context.Background(), Invocation{
+		Selection: backend.Selection{Kind: backend.Tmux},
+		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"gpu1"}}},
+		Adapter:   proxies,
+		Runner:    herdrWorkspaceListing(`{"workspace_id":"w2","label":"api"}`),
+		Args:      []string{"open", "gpu1/api"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot attach to a remote Herdr machine") {
+		t.Fatalf("error = %v, want a missing-bridge diagnostic", err)
+	}
+	if proxies.opened != [2]string{} {
+		t.Fatalf("proxy = %#v, want no tmux proxy for a Herdr remote", proxies.opened)
+	}
+}
+
+// herdrWorkspaceListing answers every listing with a Herdr kind probe and the
+// given workspaces.
+func herdrWorkspaceListing(workspaces ...string) funcRunner {
+	listing := `{"result":{"type":"workspace_list","workspaces":[` + strings.Join(workspaces, ",") + `]}}`
+	return funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "ssh" {
+			return nil, nil
+		}
+		return []byte("__NEXO_REMOTE_KIND__herdr\n" + listing + "\n"), nil
+	})
 }

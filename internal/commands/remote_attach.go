@@ -14,9 +14,10 @@ import (
 )
 
 type remoteAttachOptions struct {
-	fromEnv bool
-	initial string
-	machine string
+	fromEnv    bool
+	initial    string
+	machine    string
+	remoteKind string
 }
 
 func parseRemoteAttachOptions(args []string) (remoteAttachOptions, error) {
@@ -24,7 +25,7 @@ func parseRemoteAttachOptions(args []string) (remoteAttachOptions, error) {
 		return remoteAttachOptions{}, errors.New("remote attach requires [--initial C] -- MACHINE or [--initial C] --from-env")
 	}
 	var options remoteAttachOptions
-	seenInitial, seenMachine, seenFromEnv := false, false, false
+	seenInitial, seenMachine, seenFromEnv, seenRemoteKind := false, false, false, false
 	for index := 1; index < len(args); index++ {
 		arg := args[index]
 		switch arg {
@@ -41,6 +42,17 @@ func parseRemoteAttachOptions(args []string) (remoteAttachOptions, error) {
 			}
 			seenFromEnv = true
 			options.fromEnv = true
+		case "--remote-kind":
+			if seenRemoteKind || index+1 >= len(args) {
+				return remoteAttachOptions{}, errors.New("remote attach requires --remote-kind tmux|herdr")
+			}
+			kind := strings.TrimSpace(args[index+1])
+			if kind != proxy.RemoteKindTmux && kind != proxy.RemoteKindHerdr {
+				return remoteAttachOptions{}, errors.New("remote attach requires --remote-kind tmux|herdr")
+			}
+			options.remoteKind = kind
+			seenRemoteKind = true
+			index++
 		case "--":
 			if seenFromEnv || seenMachine || index+1 != len(args)-1 || strings.TrimSpace(args[index+1]) == "" {
 				return remoteAttachOptions{}, errors.New("remote attach requires [--initial C] -- MACHINE or [--initial C] --from-env")
@@ -78,6 +90,14 @@ func runRemoteAttach(ctx context.Context, invocation Invocation) error {
 	if _, ok := invocation.Adapter.(capabilities.RemoteProxy); !ok {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
+	if options.remoteKind == proxy.RemoteKindHerdr {
+		if fromEnv {
+			return errors.New("remote attach --from-env attaches to tmux and cannot name a remote Herdr machine")
+		}
+		if _, ok := invocation.Adapter.(capabilities.RemoteKindProxy); !ok {
+			return fmt.Errorf("backend %q cannot attach to a remote Herdr machine", invocation.Selection.Kind)
+		}
+	}
 	var machine string
 	if fromEnv {
 		machine = os.Getenv("NEXO_PROXY_MACHINE")
@@ -93,7 +113,7 @@ func runRemoteAttach(ctx context.Context, invocation Invocation) error {
 	if invocation.Selection.Kind == backend.Herdr && !invocation.Config.Remote.IsMachineConfigured(machine) {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
-	transport := proxy.NewCommandTransport(invocation.Config.Remote, string(invocation.Selection.Kind))
+	transport := proxy.NewCommandTransport(invocation.Config.Remote, string(invocation.Selection.Kind), options.remoteKind)
 	initial, maximum := invocation.Config.Remote.ReconnectDelays()
 	input := invocation.Stdin
 	if input == nil {

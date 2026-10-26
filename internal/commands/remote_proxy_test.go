@@ -25,6 +25,18 @@ func (p *recordingRemoteProxy) Proxy(_ context.Context, machine, container strin
 	return nil
 }
 
+// recordingBridgeProxy also implements the optional remote-kind proxy, which a
+// backend needs to attach to a remote multiplexer that is not its own.
+type recordingBridgeProxy struct {
+	recordingRemoteProxy
+	bridged [3]string
+}
+
+func (p *recordingBridgeProxy) ProxyRemote(_ context.Context, remoteKind, machine, container string) error {
+	p.bridged = [3]string{remoteKind, machine, container}
+	return nil
+}
+
 func TestRemoteOpenRoutesThroughConfiguredRemoteProxy(t *testing.T) {
 	proxy := &recordingRemoteProxy{}
 	err := (remoteCommand{}).Run(context.Background(), Invocation{
@@ -332,6 +344,8 @@ func TestRemoteAttachAcceptsOnlyMachineAndInitialForms(t *testing.T) {
 		{"attach", "--initial", "container", "machine"},
 		{"attach", "--from-env"},
 		{"attach", "--initial", "container", "--from-env"},
+		{"attach", "--remote-kind", "herdr", "--", "machine"},
+		{"attach", "--remote-kind", "tmux", "--initial", "w2", "machine"},
 	} {
 		if _, err := parseRemoteAttachOptions(args); err != nil {
 			t.Errorf("parseRemoteAttachOptions(%#v) = %v, want success", args, err)
@@ -341,6 +355,9 @@ func TestRemoteAttachAcceptsOnlyMachineAndInitialForms(t *testing.T) {
 		{"attach", "machine", "container"},
 		{"attach", "--initial", "container", "machine", "extra"},
 		{"attach", "--from-env", "machine"},
+		{"attach", "--remote-kind", "--", "machine"},
+		{"attach", "--remote-kind", "zellij", "--", "machine"},
+		{"attach", "--remote-kind", "herdr", "--remote-kind", "herdr", "--", "machine"},
 	} {
 		if _, err := parseRemoteAttachOptions(args); err == nil {
 			t.Errorf("parseRemoteAttachOptions(%#v) succeeded, want rejection", args)
@@ -377,3 +394,88 @@ var _ capabilities.RemoteProxy = (*policyBackedProxy)(nil)
 var _ capabilities.ContainerKiller = (*recordingKiller)(nil)
 var _ capabilities.ContainerKiller = (*policyBackedProxy)(nil)
 var _ proxyidentity.Store = (*memoryProxyStore)(nil)
+
+// bridgeAttachAdapter adds the remote-kind proxy a local backend needs to
+// attach to a remote Herdr machine.
+type bridgeAttachAdapter struct{ attachProxyAdapter }
+
+func (a *bridgeAttachAdapter) ProxyRemote(context.Context, string, string, string) error { return nil }
+
+func TestRemoteAttachBuildsTheHerdrShellForTheBridge(t *testing.T) {
+	for _, transport := range []string{"ssh", "mosh", "et"} {
+		t.Run(transport, func(t *testing.T) {
+			dir := t.TempDir()
+			capture := filepath.Join(dir, "ssh-args")
+			t.Setenv("NEXO_TEST_SSH_ARGS", capture)
+			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$NEXO_TEST_SSH_ARGS\"\nexit 0\n"
+			if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "mosh"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "et"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			adapter := &bridgeAttachAdapter{}
+			err := (remoteCommand{}).Run(context.Background(), Invocation{
+				Selection: backend.Selection{Kind: backend.Tmux},
+				Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"rpi"}, Transport: transport}},
+				Adapter:   adapter,
+				Args:      []string{"attach", "--remote-kind", "herdr", "--initial", "w2", "--", "rpi"},
+				Stdin:     strings.NewReader(""),
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			captured, err := os.ReadFile(capture)
+			if err != nil {
+				t.Fatalf("read captured transport argv: %v", err)
+			}
+			command := string(captured)
+			if !strings.Contains(command, "no Herdr server on") || !strings.Contains(command, "workspace focus") || !strings.Contains(command, "exec herdr") {
+				t.Fatalf("attachment argv = %q, want the herdr attach shell", command)
+			}
+			if strings.Contains(command, "nexo-proxy-") || strings.Contains(command, "attach-session") {
+				t.Fatalf("attachment argv = %q, want no tmux attachment", command)
+			}
+		})
+	}
+}
+
+func TestRemoteAttachRejectsAMisusedRemoteKind(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		selection backend.Selection
+		adapter   capabilities.RemoteProxy
+		args      []string
+		want      string
+	}{
+		{
+			name: "from-env", selection: backend.Selection{Kind: backend.Herdr}, adapter: &attachProxyAdapter{},
+			args: []string{"attach", "--remote-kind", "herdr", "--from-env"}, want: "cannot name a remote Herdr machine",
+		},
+		{
+			name: "no bridge capability", selection: backend.Selection{Kind: backend.Tmux}, adapter: &attachProxyAdapter{},
+			args: []string{"attach", "--remote-kind", "herdr", "--", "rpi"}, want: "cannot attach to a remote Herdr machine",
+		},
+		{
+			name: "unknown kind", selection: backend.Selection{Kind: backend.Tmux}, adapter: &bridgeAttachAdapter{},
+			args: []string{"attach", "--remote-kind", "zellij", "--", "rpi"}, want: "remote-kind tmux|herdr",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := (remoteCommand{}).Run(context.Background(), Invocation{
+				Selection: test.selection,
+				Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"rpi"}}},
+				Adapter:   test.adapter,
+				Args:      test.args,
+				Stdin:     strings.NewReader(""),
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Run() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
