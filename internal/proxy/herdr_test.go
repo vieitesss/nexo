@@ -18,6 +18,7 @@ type fakeHerdrEnv struct {
 	status     string
 	workspaces string
 	focusExit  string
+	listExit   string
 }
 
 func newFakeHerdr(t *testing.T, status, workspaces, focusExit string) fakeHerdrEnv {
@@ -34,7 +35,7 @@ case "$1 $2" in
     ;;
   "workspace list")
     printf '%s' "$HERDR_TEST_WORKSPACES"
-    exit 0
+    exit "${HERDR_TEST_LIST_EXIT:-0}"
     ;;
   "workspace focus")
     exit "$HERDR_TEST_FOCUS_EXIT"
@@ -63,6 +64,7 @@ func (e fakeHerdrEnv) run(t *testing.T, shell, input string) (string, error) {
 		"HERDR_TEST_STATUS="+e.status,
 		"HERDR_TEST_WORKSPACES="+e.workspaces,
 		"HERDR_TEST_FOCUS_EXIT="+e.focusExit,
+		"HERDR_TEST_LIST_EXIT="+e.listExit,
 	)
 	command.Stdin = strings.NewReader(input)
 	output, err := command.CombinedOutput()
@@ -119,6 +121,40 @@ func TestHerdrAttachShellFocusesThePinnedWorkspaceThenAttaches(t *testing.T) {
 		if strings.HasPrefix(call, "workspace create") || strings.HasPrefix(call, "server start") {
 			t.Fatalf("attach shell created remote state: %v", env.calls(t))
 		}
+	}
+}
+
+func TestHerdrAttachShellNeverAttachesWithoutAConfirmedWorkspaceList(t *testing.T) {
+	// Herdr starts a server on attach and an empty server creates a
+	// workspace, so an attach is only safe once a nonempty listing proves
+	// the remote already holds one (D-4). A listing that fails, answers with
+	// nothing, or answers with something unreadable must wait for retry.
+	calls := []struct {
+		name       string
+		workspaces string
+		listExit   string
+	}{
+		{name: "failed listing", workspaces: oneWorkspaceJSON, listExit: "1"},
+		{name: "empty answer", workspaces: "", listExit: "0"},
+		{name: "unreadable answer", workspaces: `{"error":{"code":"server_not_running"}}`, listExit: "0"},
+	}
+	for _, call := range calls {
+		t.Run(call.name, func(t *testing.T) {
+			env := newFakeHerdr(t, runningServerJSON, call.workspaces, "0")
+			env.listExit = call.listExit
+			output, err := env.run(t, HerdrAttachShell("rpi", ""), "q")
+			if err != nil {
+				t.Fatalf("attach shell error = %v (%s)", err, output)
+			}
+			if !strings.Contains(output, "no workspaces on rpi — press r to retry, q to close") {
+				t.Fatalf("attach shell output = %q, want the workspace guard", output)
+			}
+			for _, made := range env.calls(t) {
+				if made == "ATTACH" {
+					t.Fatalf("attach shell attached without a confirmed workspace list: %v", env.calls(t))
+				}
+			}
+		})
 	}
 }
 
