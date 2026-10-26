@@ -389,3 +389,19 @@ func TestOpenProjectRejectsContainerSelectionOnTmux(t *testing.T) {
 		t.Fatalf("error = %v, want workspace-id detail", err)
 	}
 }
+
+func TestReportsNoServerMatchesTmuxConnectionFailures(t *testing.T) {
+	for _, message := range []string{
+		"no server running on /tmp/tmux-1000/default",
+		"failed to connect to server",
+		"error connecting to /tmp/tmux-1000/default (No such file or directory)",
+		"error connecting to /tmp/tmux-1000/default (Connection refused)",
+	} {
+		if !ReportsNoServer(message) {
+			t.Errorf("ReportsNoServer(%q) = false, want true", message)
+		}
+	}
+	if ReportsNoServer("can't find session: api") {
+		t.Error("ReportsNoServer matched a missing session")
+	}
+}

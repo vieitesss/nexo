@@ -354,7 +354,7 @@ func isMissingSession(err error) bool {
 	message := strings.ToLower(tmuxErr.Stderr)
 	return strings.Contains(message, "can't find session") ||
 		strings.Contains(message, "session not found") ||
-		strings.Contains(message, "no server running")
+		ReportsNoServer(message)
 }
 
 // OpenContainer focuses an existing tmux session by stable session ID.

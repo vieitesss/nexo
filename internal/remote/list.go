@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vieitesss/nexo/internal/backend"
+	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 	"github.com/vieitesss/nexo/internal/runner"
@@ -386,12 +387,12 @@ func decodeAgents(output []byte) ([]capabilities.Agent, error) {
 }
 
 func isNoServer(err error, output []byte) bool {
-	message := strings.ToLower(string(output) + " " + err.Error())
+	message := string(output) + " " + err.Error()
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		message += " " + strings.ToLower(string(exitErr.Stderr))
+		message += " " + string(exitErr.Stderr)
 	}
-	return strings.Contains(message, "no server running") || strings.Contains(message, "failed to connect to server")
+	return tmux.ReportsNoServer(message)
 }
 
 // ShellCommand quotes arguments for execution by a remote POSIX shell.

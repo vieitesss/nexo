@@ -222,6 +222,16 @@ func TestListMachineTreatsTmuxNoServerStderrAsEmpty(t *testing.T) {
 	}
 }
 
+func TestListMachineTreatsMissingTmuxSocketAsEmpty(t *testing.T) {
+	orchestrator := newTestOrchestrator(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(remoteKindFrameStart + string(KindTmux) + "\n"), &exec.ExitError{Stderr: []byte("error connecting to /tmp/tmux-1000/default (No such file or directory)\n")}
+	}), backend.Herdr, "")
+	result := listMachine(orchestrator, "rpi")
+	if result.Error != "" || result.Kind != KindTmux || len(result.Containers) != 0 {
+		t.Fatalf("result = %#v, want successful empty tmux listing", result)
+	}
+}
+
 func TestListMachineNormalizesMultilineErrors(t *testing.T) {
 	orchestrator := newTestOrchestrator(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("first reason\nsecond reason\n"), errors.New("command failed")

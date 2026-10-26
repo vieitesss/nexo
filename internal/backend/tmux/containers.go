@@ -3,7 +3,6 @@ package tmux
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -320,8 +319,15 @@ func isNoServer(err error) bool {
 	if !errors.As(err, &tmuxErr) {
 		return false
 	}
-	message := strings.ToLower(fmt.Sprint(tmuxErr.Stderr))
+	return ReportsNoServer(tmuxErr.Stderr)
+}
+
+// ReportsNoServer reports whether tmux output says no server is running.
+// tmux prints "error connecting to <socket> (<reason>)" when the socket is
+// missing or stale, for example after a reboot, so that counts as well.
+func ReportsNoServer(message string) bool {
+	message = strings.ToLower(message)
 	return strings.Contains(message, "no server running") ||
 		strings.Contains(message, "failed to connect to server") ||
-		strings.Contains(message, "no such file or directory")
+		strings.Contains(message, "error connecting to")
 }
