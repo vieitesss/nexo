@@ -168,6 +168,36 @@ func TestCreateCompensatesAFailedAdd(t *testing.T) {
 	}
 }
 
+func TestCreateJoinsEveryCompensationFailure(t *testing.T) {
+	destination := t.TempDir()
+	addErr := errors.New("add failed")
+	removeErr := errors.New("remove failed")
+	branchErr := errors.New("branch failed")
+	commands := &scriptedGit{}
+	commands.fail(showRefCommand("feature"), errors.New("missing branch"))
+	commands.fail(worktreeAddCommand("-b", "feature", destination), addErr)
+	commands.fail(worktreeRemoveCommand(destination), removeErr)
+	commands.ok(showRefCommand("feature"))
+	commands.fail(branchDeleteCommand("feature"), branchErr)
+
+	_, err := NewWorktrees(commands.run).Create(context.Background(), createOptions(destination, true))
+	for _, want := range []error{addErr, removeErr, branchErr} {
+		if !errors.Is(err, want) {
+			t.Fatalf("Create() error = %v, want it to join %v", err, want)
+		}
+	}
+	want := []string{
+		showRefCommand("feature"),
+		worktreeAddCommand("-b", "feature", destination),
+		worktreeRemoveCommand(destination),
+		showRefCommand("feature"),
+		branchDeleteCommand("feature"),
+	}
+	if !reflect.DeepEqual(commands.calls, want) {
+		t.Fatalf("calls = %#v, want best-effort cleanup to continue past the failed remove: %#v", commands.calls, want)
+	}
+}
+
 func TestCreateCompensationNeverDeletesABranchItDoesNotOwn(t *testing.T) {
 	t.Run("existing branch", func(t *testing.T) {
 		destination := t.TempDir()
