@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/config"
+	"github.com/vieitesss/nexo/internal/proxy"
 )
 
 func TestValidateProxyIdentityRejectsHerdrNormalization(t *testing.T) {
@@ -30,7 +31,7 @@ func TestProxyAcceptsLongExplicitContainer(t *testing.T) {
 	runner := &fakeRunner{}
 	backend := New(runner)
 	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "")
-	if err := backend.Proxy(context.Background(), "machine", container); err != nil {
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "machine", container); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
 	for _, current := range runner.calls {
@@ -48,7 +49,7 @@ func TestProxyUsesMetadataTokenIdentityAndFocusesExistingWorkspace(t *testing.T)
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"workspace list": []byte(`{"result":{"type":"workspace_list","workspaces":[{"workspace_id":"w-other","label":"machine/container","tokens":{"nexo-proxy":"machine/other"}},{"workspace_id":"w1","label":"renamed","tokens":{"nexo-proxy":"machine"}}]}}`),
 	}}
-	if err := New(runner).Proxy(context.Background(), "machine", "container"); err != nil {
+	if err := New(runner).Proxy(context.Background(), proxy.RemoteKindTmux, "machine", "container"); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
 	if len(runner.calls) != 3 || runner.calls[2].name != "herdr" || strings.Join(runner.calls[2].args, " ") != "workspace focus w1" {
@@ -62,7 +63,7 @@ func TestProxyReusesTaggedMachineWorkspace(t *testing.T) {
 	}}
 	backend := New(runner)
 	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"machine"}}, "")
-	if err := backend.Proxy(context.Background(), "machine", "container"); err != nil {
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "machine", "container"); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
 	if len(runner.calls) != 3 || strings.Join(runner.calls[2].args, " ") != "workspace focus w1" {
@@ -76,7 +77,7 @@ func TestProxyReusesTaggedBackendWorkspace(t *testing.T) {
 	}}
 	backend := New(runner)
 	backend.ConfigureRemoteConfig(config.RemoteConfig{Backends: map[string]string{" MACHINE ": "herdr"}}, "")
-	if err := backend.Proxy(context.Background(), "machine", "container"); err != nil {
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "machine", "container"); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
 	if len(runner.calls) != 3 || strings.Join(runner.calls[2].args, " ") != "workspace focus w1" {
@@ -115,7 +116,7 @@ func TestProxyFallbackClosesStaleWorkspaceAndCreatesInitialAttach(t *testing.T) 
 	backend := New(runner)
 	backend.usageStateDir = t.TempDir()
 	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"machine"}}, "")
-	if err := backend.Proxy(context.Background(), "machine", "target"); err != nil {
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "machine", "target"); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
 	closeIndex, createIndex, sendIndex := -1, -1, -1
@@ -150,7 +151,7 @@ func TestProxyStoresTokenAndStartsSharedAttachCommand(t *testing.T) {
 	}}
 	backend := New(runner)
 	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "/tmp/nexo config.toml")
-	if err := backend.Proxy(context.Background(), "machine", "container"); err != nil {
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "machine", "container"); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
 	if len(runner.calls) != 6 {
@@ -224,7 +225,7 @@ func TestProxyClosesWorkspaceWhenMetadataFails(t *testing.T) {
 			"workspace report-metadata w1 --source nexo --token nexo-proxy=machine": context.DeadlineExceeded,
 		},
 	}
-	err := New(runner).Proxy(context.Background(), "machine", "container")
+	err := New(runner).Proxy(context.Background(), proxy.RemoteKindTmux, "machine", "container")
 	if err == nil {
 		t.Fatal("Proxy() error = nil, want metadata failure")
 	}

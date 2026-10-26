@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,25 +17,32 @@ import (
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
+// recordingRemoteProxy records the remote kind and target of the one proxy call
+// a test expects. calls proves a path proxied nothing.
 type recordingRemoteProxy struct {
+	kind   string
 	opened [2]string
+	calls  int
 }
 
-func (p *recordingRemoteProxy) Proxy(_ context.Context, machine, container string) error {
+func (p *recordingRemoteProxy) Proxy(_ context.Context, remoteKind, machine, container string) error {
+	p.kind = remoteKind
 	p.opened = [2]string{machine, container}
+	p.calls++
 	return nil
 }
 
-// recordingBridgeProxy also implements the optional remote-kind proxy, which a
-// backend needs to attach to a remote multiplexer that is not its own.
-type recordingBridgeProxy struct {
+// nonBridgingProxy is a backend whose proxy pane reaches its own remote kind
+// only, which is what a backend without a foreign multiplexer's client does.
+type nonBridgingProxy struct {
 	recordingRemoteProxy
-	bridged [3]string
 }
 
-func (p *recordingBridgeProxy) ProxyRemote(_ context.Context, remoteKind, machine, container string) error {
-	p.bridged = [3]string{remoteKind, machine, container}
-	return nil
+func (p *nonBridgingProxy) Proxy(ctx context.Context, remoteKind, machine, container string) error {
+	if remoteKind != proxy.RemoteKindTmux {
+		return errors.New(`backend "rex" cannot attach to a remote Herdr machine`)
+	}
+	return p.recordingRemoteProxy.Proxy(ctx, remoteKind, machine, container)
 }
 
 func TestRemoteOpenRoutesThroughConfiguredRemoteProxy(t *testing.T) {
@@ -132,7 +140,7 @@ type policyBackedProxy struct {
 	killed   []string
 }
 
-func (p *policyBackedProxy) Proxy(ctx context.Context, machine, container string) error {
+func (p *policyBackedProxy) Proxy(ctx context.Context, _, machine, container string) error {
 	id, err := p.ProxySessionID(ctx, machine, container)
 	if err != nil {
 		return err
@@ -166,7 +174,7 @@ func (k *recordingKiller) KillContainer(_ context.Context, id string) error {
 	return nil
 }
 
-func (*recordingKiller) Proxy(context.Context, string, string) error { return nil }
+func (*recordingKiller) Proxy(context.Context, string, string, string) error { return nil }
 
 func (k *recordingKiller) ProxySessionID(_ context.Context, machine, container string) (string, error) {
 	k.proxyTarget = [2]string{machine, container}
@@ -268,7 +276,7 @@ type attachProxyAdapter struct {
 	closed []string
 }
 
-func (a *attachProxyAdapter) Proxy(context.Context, string, string) error { return nil }
+func (a *attachProxyAdapter) Proxy(context.Context, string, string, string) error { return nil }
 
 func (a *attachProxyAdapter) CloseProxyWorkspace(_ context.Context, paneID string) error {
 	a.closed = append(a.closed, paneID)
@@ -390,16 +398,11 @@ func TestRemoteAttachValidatesBackendAndMachine(t *testing.T) {
 }
 
 var _ capabilities.RemoteProxy = (*recordingRemoteProxy)(nil)
+var _ capabilities.RemoteProxy = (*nonBridgingProxy)(nil)
 var _ capabilities.RemoteProxy = (*policyBackedProxy)(nil)
 var _ capabilities.ContainerKiller = (*recordingKiller)(nil)
 var _ capabilities.ContainerKiller = (*policyBackedProxy)(nil)
 var _ proxyidentity.Store = (*memoryProxyStore)(nil)
-
-// bridgeAttachAdapter adds the remote-kind proxy a local backend needs to
-// attach to a remote Herdr machine.
-type bridgeAttachAdapter struct{ attachProxyAdapter }
-
-func (a *bridgeAttachAdapter) ProxyRemote(context.Context, string, string, string) error { return nil }
 
 func TestRemoteAttachBuildsTheHerdrShellForTheBridge(t *testing.T) {
 	for _, transport := range []string{"ssh", "mosh", "et"} {
@@ -418,7 +421,7 @@ func TestRemoteAttachBuildsTheHerdrShellForTheBridge(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-			adapter := &bridgeAttachAdapter{}
+			adapter := &attachProxyAdapter{}
 			err := (remoteCommand{}).Run(context.Background(), Invocation{
 				Selection: backend.Selection{Kind: backend.Tmux},
 				Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"rpi"}, Transport: transport}},
@@ -457,11 +460,7 @@ func TestRemoteAttachRejectsAMisusedRemoteKind(t *testing.T) {
 			args: []string{"attach", "--remote-kind", "herdr", "--from-env"}, want: "cannot name a remote Herdr machine",
 		},
 		{
-			name: "no bridge capability", selection: backend.Selection{Kind: backend.Tmux}, adapter: &attachProxyAdapter{},
-			args: []string{"attach", "--remote-kind", "herdr", "--", "rpi"}, want: "cannot attach to a remote Herdr machine",
-		},
-		{
-			name: "unknown kind", selection: backend.Selection{Kind: backend.Tmux}, adapter: &bridgeAttachAdapter{},
+			name: "unknown kind", selection: backend.Selection{Kind: backend.Tmux}, adapter: &attachProxyAdapter{},
 			args: []string{"attach", "--remote-kind", "zellij", "--", "rpi"}, want: "remote-kind tmux|herdr",
 		},
 	} {

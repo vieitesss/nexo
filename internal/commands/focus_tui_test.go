@@ -12,35 +12,18 @@ import (
 	"github.com/vieitesss/nexo/internal/tui"
 )
 
+// focusTUIAdapter is the smallest adapter shape tuiDependencies needs. proxied
+// records the remote kind the proxy seam was asked for, so a test can tell the
+// bridge from the native path.
 type focusTUIAdapter struct{ focused, proxied string }
 
 func (f *focusTUIAdapter) ConfigureAgents(config.AgentsConfig)          {}
 func (f *focusTUIAdapter) FocusPane(_ context.Context, id string) error { f.focused = id; return nil }
-func (f *focusTUIAdapter) Proxy(_ context.Context, machine, container string) error {
-	f.proxied = machine + "/" + container
+func (f *focusTUIAdapter) Proxy(_ context.Context, remoteKind, machine, container string) error {
+	f.proxied = remoteKind + ":" + machine + "/" + container
 	return nil
 }
 func (f *focusTUIAdapter) ListAgents(context.Context) ([]capabilities.Agent, error) { return nil, nil }
-
-// focusProxyAdapter is the smallest adapter shape tuiDependencies needs.
-type focusProxyAdapter interface {
-	capabilities.RemoteProxy
-	capabilities.AgentSource
-	ConfigureAgents(config.AgentsConfig)
-	FocusPane(context.Context, string) error
-}
-
-// bridgeTUIAdapter adds the optional remote-kind proxy a backend needs to
-// attach to a remote multiplexer that is not its own.
-type bridgeTUIAdapter struct {
-	focusTUIAdapter
-	bridged string
-}
-
-func (b *bridgeTUIAdapter) ProxyRemote(_ context.Context, remoteKind, machine, container string) error {
-	b.bridged = remoteKind + ":" + machine + "/" + container
-	return nil
-}
 
 type focusTUIRunner struct {
 	calls   []string
@@ -78,7 +61,7 @@ func TestTUIFocusRoutesLocalAndRemoteAgentProvenance(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if adapter.proxied != "dev/api" || adapter.focused != "%7" {
+	if adapter.proxied != "tmux:dev/api" || adapter.focused != "%7" {
 		t.Fatalf("remote focus proxy=%q local pane=%q", adapter.proxied, adapter.focused)
 	}
 	if got, want := runner.calls, []string{
@@ -106,7 +89,7 @@ func TestTUIFocusRoutesTwoRemoteTmuxPanesInOneContainer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if adapter.focused != "" || adapter.proxied != "dev/api" {
+	if adapter.focused != "" || adapter.proxied != "tmux:dev/api" {
 		t.Fatalf("remote focus used local pane=%q proxy=%q", adapter.focused, adapter.proxied)
 	}
 	if got, want := runner.calls, []string{
@@ -156,22 +139,21 @@ func TestTUIFocusRoutesTwoRemoteHerdrPanesInOneContainer(t *testing.T) {
 }
 
 func TestTUIRejectsUnsupportedRemoteKindAndBridgesTmuxToHerdr(t *testing.T) {
-	bridging := &bridgeTUIAdapter{}
 	for _, test := range []struct {
-		name          string
-		local         backend.Kind
-		remote        backend.Kind
-		adapter       focusProxyAdapter
-		wantUnsupport bool
+		name           string
+		local          backend.Kind
+		remote         backend.Kind
+		wantProxy      string
+		wantUnsupporte bool
 	}{
-		{name: "tmux-herdr", local: backend.Tmux, remote: backend.Herdr, adapter: bridging},
-		{name: "rex-herdr", local: "rex", remote: backend.Herdr, adapter: &bridgeTUIAdapter{}, wantUnsupport: true},
-		{name: "herdr-tmux", local: backend.Herdr, remote: backend.Tmux, adapter: &focusTUIAdapter{}},
+		{name: "tmux-herdr", local: backend.Tmux, remote: backend.Herdr, wantProxy: "herdr:dev/api"},
+		{name: "rex-herdr", local: "rex", remote: backend.Herdr, wantUnsupporte: true},
+		{name: "herdr-tmux", local: backend.Herdr, remote: backend.Tmux, wantProxy: "tmux:dev/api"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			runner := &focusTUIRunner{}
+			adapter := &focusTUIAdapter{}
 			deps, err := tuiDependencies(context.Background(), Invocation{
-				Selection: backend.Selection{Kind: test.local}, Adapter: test.adapter, Runner: runner,
+				Selection: backend.Selection{Kind: test.local}, Adapter: adapter, Runner: &focusTUIRunner{},
 				Config: config.Config{Remote: config.RemoteConfig{Machines: []string{"dev"}}},
 			})
 			if err != nil {
@@ -181,7 +163,7 @@ func TestTUIRejectsUnsupportedRemoteKindAndBridgesTmuxToHerdr(t *testing.T) {
 				Machine: "dev", Backend: string(test.remote),
 				Agent: capabilities.Agent{PaneID: "%7", Container: "api"},
 			})
-			if test.wantUnsupport {
+			if test.wantUnsupporte {
 				if err == nil || !strings.Contains(err.Error(), "unsupported") {
 					t.Fatalf("error = %v, want unsupported remote kind", err)
 				}
@@ -190,15 +172,8 @@ func TestTUIRejectsUnsupportedRemoteKindAndBridgesTmuxToHerdr(t *testing.T) {
 			if err != nil {
 				t.Fatalf("FocusAgent() error = %v", err)
 			}
-			switch adapter := test.adapter.(type) {
-			case *bridgeTUIAdapter:
-				if adapter.bridged != "herdr:dev/api" {
-					t.Fatalf("bridged = %q, want the herdr proxy for dev/api", adapter.bridged)
-				}
-			case *focusTUIAdapter:
-				if adapter.proxied != "dev/api" {
-					t.Fatalf("proxy = %q, want the tmux proxy for dev/api", adapter.proxied)
-				}
+			if adapter.proxied != test.wantProxy {
+				t.Fatalf("proxy = %q, want %q", adapter.proxied, test.wantProxy)
 			}
 		})
 	}

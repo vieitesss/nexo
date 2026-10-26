@@ -11,6 +11,7 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/containerstate"
 	"github.com/vieitesss/nexo/internal/picker"
+	"github.com/vieitesss/nexo/internal/proxy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
@@ -72,7 +73,9 @@ type remoteContainerActions struct {
 }
 
 func (a remoteContainerActions) OpenContainer(ctx context.Context, id string) error {
-	return a.proxy.Proxy(ctx, a.machine, id)
+	// The picker carries no remote kind, so it keeps opening the tmux container
+	// it always has. A bridged Herdr machine is opened through `remote open`.
+	return a.proxy.Proxy(ctx, proxy.RemoteKindTmux, a.machine, id)
 }
 
 func (a remoteContainerActions) RenameContainer(context.Context, string, string) error {

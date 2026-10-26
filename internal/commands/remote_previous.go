@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/proxy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
 )
 
@@ -13,7 +14,7 @@ func runRemotePrevious(ctx context.Context, invocation Invocation) error {
 	if len(invocation.Args) != 1 {
 		return UsageError{Err: errors.New("remote previous accepts no arguments")}
 	}
-	proxy, ok := invocation.Adapter.(capabilities.RemoteProxy)
+	proxier, ok := invocation.Adapter.(capabilities.RemoteProxy)
 	if !ok {
 		return fmt.Errorf("backend %q does not support remote proxies", invocation.Selection.Kind)
 	}
@@ -59,7 +60,9 @@ func runRemotePrevious(ctx context.Context, invocation Invocation) error {
 		if proxyidentity.NormalizeMachineName(entry.Machine) == current || !configured.IsMachineConfigured(entry.Machine) {
 			continue
 		}
-		return proxy.Proxy(ctx, entry.Machine, "")
+		// M-o never lists remotes, so it cannot know the machine's kind: it keeps
+		// creating the tmux proxy it always has. `remote open` detects the kind.
+		return proxier.Proxy(ctx, proxy.RemoteKindTmux, entry.Machine, "")
 	}
 	return reportNothingEligible(ctx, invocation, "no previous container on another machine")
 }

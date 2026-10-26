@@ -249,7 +249,7 @@ func TestProxyHistorySurvivesReconnectWithChangedNativeID(t *testing.T) {
 	backend := New(runner, true)
 	backend.usageStateDir = stateDir
 	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"devbox"}}, "")
-	if err := backend.Proxy(context.Background(), "devbox", ""); err != nil {
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "devbox", ""); err != nil {
 		t.Fatal(err)
 	}
 	// The reconnect transport loop never touches history; a later focus event
@@ -311,7 +311,7 @@ func TestProxySwitchesExistingSessionWithoutCreatingDuplicate(t *testing.T) {
 	}}
 	backend := New(runner, true)
 	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "")
-	if err := backend.Proxy(context.Background(), "devbox", "$1"); err != nil {
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "devbox", "$1"); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
 	if len(runner.calls) != 7 {
@@ -334,7 +334,7 @@ func TestMOMachineProxyNeverRetargetsExistingRemoteClient(t *testing.T) {
 		"display-message -p -t $1 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}": []byte("$1\tdevbox\tdevbox\t/tmp/tmux-test\n"),
 	}}
 	backend := New(runner, true)
-	if err := backend.Proxy(context.Background(), "devbox", ""); err != nil {
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "devbox", ""); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
 	for _, call := range runner.calls {
@@ -358,7 +358,7 @@ func TestProxyCreatesSessionWithQuotedAttachCommand(t *testing.T) {
 	}
 	backend := New(runner, true)
 	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "/tmp/my config.toml")
-	if err := backend.Proxy(context.Background(), "devbox", "$1"); err != nil {
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindTmux, "devbox", "$1"); err != nil {
 		t.Fatalf("Proxy() error = %v", err)
 	}
 	if got := runner.calls[2].args[1]; got != "new-session" {
@@ -449,7 +449,7 @@ func TestSendPaneTextUsesLiteralAndOptionBoundaries(t *testing.T) {
 	}
 }
 
-func TestProxyRemoteCreatesTheHerdrBridgePaneInTheSameProxySession(t *testing.T) {
+func TestProxyBridgesToHerdrInTheSameMachineProxySession(t *testing.T) {
 	runner := &fakeRunner{
 		outputFunc: func(_ string, args []string) ([]byte, bool) {
 			if len(args) > 1 && args[1] == "new-session" {
@@ -460,8 +460,8 @@ func TestProxyRemoteCreatesTheHerdrBridgePaneInTheSameProxySession(t *testing.T)
 	}
 	backend := New(runner, true)
 	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "")
-	if err := backend.ProxyRemote(context.Background(), proxy.RemoteKindHerdr, "rpi", "w2"); err != nil {
-		t.Fatalf("ProxyRemote() error = %v", err)
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindHerdr, "rpi", "w2"); err != nil {
+		t.Fatalf("Proxy() error = %v", err)
 	}
 	var created string
 	for _, call := range runner.calls {
@@ -469,7 +469,7 @@ func TestProxyRemoteCreatesTheHerdrBridgePaneInTheSameProxySession(t *testing.T)
 			created = call.args[len(call.args)-1]
 		}
 		if call.name == "ssh" {
-			t.Fatalf("ProxyRemote() used ssh to create the local proxy: %#v", runner.calls)
+			t.Fatalf("Proxy() used ssh to create the local proxy: %#v", runner.calls)
 		}
 	}
 	if !strings.Contains(created, "--backend tmux remote attach --remote-kind herdr --initial 'w2' -- 'rpi'") {
@@ -477,7 +477,7 @@ func TestProxyRemoteCreatesTheHerdrBridgePaneInTheSameProxySession(t *testing.T)
 	}
 }
 
-func TestProxyRemoteSwitchesAnExistingBridgeClientWithoutRespawning(t *testing.T) {
+func TestProxySwitchesAnExistingHerdrBridgeClientWithoutRespawning(t *testing.T) {
 	args := proxy.SwitchSSHArgs(config.RemoteConfig{}, "tmux", proxy.RemoteKindHerdr, "rpi", "w3")
 	runner := &fakeRunner{
 		sequences: map[string][][]byte{
@@ -486,8 +486,8 @@ func TestProxyRemoteSwitchesAnExistingBridgeClientWithoutRespawning(t *testing.T
 	}
 	backend := New(runner, true)
 	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "")
-	if err := backend.ProxyRemote(context.Background(), proxy.RemoteKindHerdr, "rpi", "w3"); err != nil {
-		t.Fatalf("ProxyRemote() error = %v", err)
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindHerdr, "rpi", "w3"); err != nil {
+		t.Fatalf("Proxy() error = %v", err)
 	}
 	var switched []string
 	for _, call := range runner.calls {
@@ -495,7 +495,7 @@ func TestProxyRemoteSwitchesAnExistingBridgeClientWithoutRespawning(t *testing.T
 			switched = append(switched, strings.Join(call.args, " "))
 		}
 		if len(call.args) > 1 && call.args[1] == "respawn-pane" {
-			t.Fatalf("ProxyRemote() respawned the bridge pane: %#v", runner.calls)
+			t.Fatalf("Proxy() respawned the bridge pane: %#v", runner.calls)
 		}
 	}
 	if len(switched) != 1 || switched[0] != strings.Join(args, " ") || !strings.Contains(switched[0], "workspace focus") {
@@ -506,7 +506,7 @@ func TestProxyRemoteSwitchesAnExistingBridgeClientWithoutRespawning(t *testing.T
 	}
 }
 
-func TestProxyRemoteReportsAMissingWorkspaceInsteadOfStartingOne(t *testing.T) {
+func TestProxyReportsAMissingHerdrWorkspaceInsteadOfStartingOne(t *testing.T) {
 	exitTwo := exec.Command("sh", "-c", "exit 2").Run()
 	if exitTwo == nil {
 		t.Fatal("expected a non-zero exit from the helper shell")
@@ -520,9 +520,9 @@ func TestProxyRemoteReportsAMissingWorkspaceInsteadOfStartingOne(t *testing.T) {
 	}
 	backend := New(runner, true)
 	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "")
-	err := backend.ProxyRemote(context.Background(), proxy.RemoteKindHerdr, "rpi", "w9")
+	err := backend.Proxy(context.Background(), proxy.RemoteKindHerdr, "rpi", "w9")
 	if err == nil || err.Error() != "no workspace w9 on rpi" {
-		t.Fatalf("ProxyRemote() error = %v, want the missing-workspace diagnostic", err)
+		t.Fatalf("Proxy() error = %v, want the missing-workspace diagnostic", err)
 	}
 	for _, call := range runner.calls {
 		if len(call.args) > 1 && (call.args[1] == "respawn-pane" || call.args[1] == "new-session") {
@@ -534,11 +534,11 @@ func TestProxyRemoteReportsAMissingWorkspaceInsteadOfStartingOne(t *testing.T) {
 	}
 }
 
-func TestProxyRemoteRejectsAnUnsupportedRemoteKind(t *testing.T) {
+func TestProxyRejectsAnUnsupportedRemoteKind(t *testing.T) {
 	runner := &fakeRunner{}
 	backend := New(runner, true)
-	if err := backend.ProxyRemote(context.Background(), "zellij", "rpi", "w2"); err == nil {
-		t.Fatal("ProxyRemote() accepted an unsupported remote kind")
+	if err := backend.Proxy(context.Background(), "zellij", "rpi", "w2"); err == nil {
+		t.Fatal("Proxy() accepted an unsupported remote kind")
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("calls = %#v, want none before validation", runner.calls)

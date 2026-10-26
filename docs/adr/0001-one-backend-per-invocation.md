@@ -20,9 +20,12 @@ own client over the same SSH transport. nexo never drives Herdr with tmux
 commands or the reverse, and needs neither a local Herdr install nor a nested
 client.
 
-The capability stays optional and separate
-(`capabilities.RemoteKindProxy.ProxyRemote`), so a backend only gains the
-bridge by declaring it and the native pairs keep their existing paths:
+The proxy seam carries the remote kind
+(`capabilities.RemoteProxy.Proxy(ctx, remoteKind, machine, container)`), so one
+method covers both pairs: a backend attaches to its own kind natively and runs
+the other kind's client in the pane it already owns. A backend that cannot
+bridge a kind rejects it instead of guessing, and the native pairs keep their
+existing paths:
 
 | Local backend | Remote kind | Path |
 | --- | --- | --- |

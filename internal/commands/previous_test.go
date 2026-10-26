@@ -45,7 +45,7 @@ func (a *historyAdapter) OpenContainer(_ context.Context, id string) error {
 	return nil
 }
 
-func (a *historyAdapter) Proxy(_ context.Context, machine, container string) error {
+func (a *historyAdapter) Proxy(_ context.Context, _, machine, container string) error {
 	a.proxied = [2]string{machine, container}
 	return nil
 }
@@ -242,7 +242,7 @@ var errTemporaryConnection = errors.New("connection timed out")
 
 type failingProxyHistory struct{ historyAdapter }
 
-func (a *failingProxyHistory) Proxy(context.Context, string, string) error {
+func (a *failingProxyHistory) Proxy(context.Context, string, string, string) error {
 	return errTemporaryConnection
 }
 
@@ -377,7 +377,7 @@ func (a *closeMachineProxyAdapter) ProxyTarget(context.Context, string) (string,
 }
 func (a *closeMachineProxyAdapter) SendPaneKeys(context.Context, string, []string) error { return nil }
 func (a *closeMachineProxyAdapter) SendPaneText(context.Context, string, string) error   { return nil }
-func (a *closeMachineProxyAdapter) Proxy(context.Context, string, string) error          { return nil }
+func (a *closeMachineProxyAdapter) Proxy(context.Context, string, string, string) error  { return nil }
 func (a *closeMachineProxyAdapter) KillContainer(_ context.Context, id string) error {
 	a.killed = id
 	return nil

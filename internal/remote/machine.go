@@ -210,21 +210,18 @@ func (p OperationPolicy) openValidated(ctx context.Context, commandRunner runner
 	if p.Proxy == nil {
 		return fmt.Errorf("backend %q does not support remote proxies", local)
 	}
-	return p.Proxy.Proxy(ctx, machine, container)
+	return p.Proxy.Proxy(ctx, string(KindTmux), machine, container)
 }
 
 // openBridgedHerdr opens a remote Herdr workspace through a local proxy whose
 // pane attaches to the remote Herdr client. The local backend still owns the
-// proxy container, so nexo never controls Herdr from another multiplexer.
+// proxy container, so nexo never controls Herdr from another multiplexer; a
+// backend that cannot run a Herdr client rejects the kind itself.
 func (p OperationPolicy) openBridgedHerdr(ctx context.Context, local backend.Kind, machine, container string) error {
 	if p.Proxy == nil {
 		return fmt.Errorf("backend %q does not support remote proxies", local)
 	}
-	bridged, ok := p.Proxy.(capabilities.RemoteKindProxy)
-	if !ok {
-		return fmt.Errorf("backend %q cannot attach to a remote Herdr machine", local)
-	}
-	return bridged.ProxyRemote(ctx, string(KindHerdr), machine, container)
+	return p.Proxy.Proxy(ctx, string(KindHerdr), machine, container)
 }
 
 func (p OperationPolicy) create(ctx context.Context, commandRunner runner.CommandRunner, local backend.Kind, sshConfig string, result MachineResult, name string) error {

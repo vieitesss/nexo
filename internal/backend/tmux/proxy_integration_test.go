@@ -114,7 +114,7 @@ func TestMachineProxyDoesNotAdoptLegacyOrLocalNameOnThrowawayTmux(t *testing.T) 
 	if local.ID == "" {
 		t.Fatalf("containers = %#v, want local same-name session", containers)
 	}
-	if err := backend.Proxy(ctx, "vieitesrpi", "foo"); err != nil {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "vieitesrpi", "foo"); err != nil {
 		t.Fatalf("create machine proxy: %v", err)
 	}
 	output, err := r.Run(ctx, "tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{@nexo-proxy}")
@@ -147,7 +147,7 @@ func TestMachineProxySuffixesCanonicalNameCollisionsOnThrowawayTmux(t *testing.T
 	}
 	backend := New(r, false)
 	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"review.box"}}, "")
-	if err := backend.Proxy(ctx, "review.box", ""); err != nil {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "review.box", ""); err != nil {
 		t.Fatalf("create proxy over canonical name collision: %v", err)
 	}
 	output, err := r.Run(ctx, "tmux", "list-sessions", "-F", "#{session_name}\t#{@nexo-proxy}")
@@ -462,7 +462,7 @@ func TestMachineProxyRealTransportSwitchesWithoutRespawnAndReconnects(t *testing
 	backend.usageStateDir = t.TempDir()
 	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"fake-machine"}, Transport: "ssh"}, configPath)
 	ctx := context.Background()
-	if err := backend.Proxy(ctx, "fake-machine", "first"); err != nil {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "fake-machine", "first"); err != nil {
 		t.Fatalf("initial explicit proxy: %v", err)
 	}
 	waitForProxyValue(t, 3*time.Second, func() string { return remoteClientSession(tmuxPath, remoteSocket) }, "first")
@@ -476,23 +476,23 @@ func TestMachineProxyRealTransportSwitchesWithoutRespawnAndReconnects(t *testing
 	}
 	initialPID := waitForProxyPID(t, 3*time.Second, panePID)
 
-	if err := backend.Proxy(ctx, "fake-machine", "second"); err != nil {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "fake-machine", "second"); err != nil {
 		t.Fatalf("explicit open on existing proxy: %v", err)
 	}
 	waitForProxyValue(t, 3*time.Second, func() string { return remoteClientSession(tmuxPath, remoteSocket) }, "second")
 	if got := panePID(); got != initialPID {
 		t.Fatalf("pane pid after client switch = %q, want unchanged %q", got, initialPID)
 	}
-	if err := backend.Proxy(ctx, "fake-machine", ""); err != nil {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "fake-machine", ""); err != nil {
 		t.Fatalf("M-o first reuse: %v", err)
 	}
-	if err := backend.Proxy(ctx, "fake-machine", ""); err != nil {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "fake-machine", ""); err != nil {
 		t.Fatalf("M-o second reuse: %v", err)
 	}
 	if got := remoteClientSession(tmuxPath, remoteSocket); got != "second" {
 		t.Fatalf("remote session after repeated M-o = %q, want second", got)
 	}
-	if err := backend.Proxy(ctx, "fake-machine", "missing"); err == nil || !strings.Contains(err.Error(), "no session missing on fake-machine") {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "fake-machine", "missing"); err == nil || !strings.Contains(err.Error(), "no session missing on fake-machine") {
 		t.Fatalf("explicit missing open error = %v, want clear missing-session error", err)
 	}
 	if got := panePID(); got != initialPID {
@@ -503,7 +503,7 @@ func TestMachineProxyRealTransportSwitchesWithoutRespawnAndReconnects(t *testing
 	if err := os.Remove(pidPath); err != nil {
 		t.Fatalf("remove stale proxy pid: %v", err)
 	}
-	if err := backend.Proxy(ctx, "fake-machine", "first"); err != nil {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "fake-machine", "first"); err != nil {
 		t.Fatalf("explicit open fallback: %v", err)
 	}
 	waitForProxyValue(t, 3*time.Second, func() string { return remoteClientSession(tmuxPath, remoteSocket) }, "first")
@@ -570,16 +570,16 @@ func TestProxyUsesOneMachineMetadataOnThrowawayTmux(t *testing.T) {
 
 	backend := New(r, false)
 	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "")
-	if err := backend.Proxy(ctx, "devbox", "prod"); err != nil {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "devbox", "prod"); err != nil {
 		t.Fatalf("create machine proxy: %v", err)
 	}
-	if err := backend.Proxy(ctx, "devbox", ""); err != nil {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "devbox", ""); err != nil {
 		t.Fatalf("reopen machine proxy: %v", err)
 	}
 	if _, err := backend.ProxySessionID(ctx, "devbox", ""); err != nil {
 		t.Fatalf("find machine proxy: %v", err)
 	}
-	if err := backend.Proxy(ctx, "devbox", "unsafe;"); err == nil {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "devbox", "unsafe;"); err == nil {
 		t.Fatal("Proxy() accepted a trailing semicolon")
 	}
 
@@ -619,7 +619,7 @@ func TestMachineProxyRemoteSessionRemovalKeepsPaneAndResolvesNextOrPrompt(t *tes
 	backend.usageStateDir = t.TempDir()
 	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"fake-machine"}, Transport: "ssh"}, configPath)
 	ctx := context.Background()
-	if err := backend.Proxy(ctx, "fake-machine", "first"); err != nil {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "fake-machine", "first"); err != nil {
 		t.Fatalf("initial explicit proxy: %v", err)
 	}
 	waitForProxyValue(t, 3*time.Second, func() string { return remoteClientSession(tmuxPath, remoteSocket) }, "first")
@@ -632,7 +632,7 @@ func TestMachineProxyRemoteSessionRemovalKeepsPaneAndResolvesNextOrPrompt(t *tes
 		return strings.TrimSpace(string(output))
 	}
 	initialPID := waitForProxyPID(t, 3*time.Second, panePID)
-	if err := backend.Proxy(ctx, "fake-machine", "second"); err != nil {
+	if err := backend.Proxy(ctx, proxy.RemoteKindTmux, "fake-machine", "second"); err != nil {
 		t.Fatalf("switch to second: %v", err)
 	}
 	waitForProxyValue(t, 3*time.Second, func() string { return remoteClientSession(tmuxPath, remoteSocket) }, "second")
