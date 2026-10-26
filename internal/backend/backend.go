@@ -126,33 +126,100 @@ func detect(ctx context.Context, env Environment, tty string, commandRunner runn
 	tmuxMarker, tmuxReason := tmuxEnvironment(env)
 	rexMarker, rexReason := rexEnvironment(env)
 
-	rexLive := false
-	var rexErr error
-	if rexMarker {
-		rexLive, rexErr = rexSessionLive(ctx, env, commandRunner)
+	// A lone tmux or Herdr marker is uncontradicted, so it keeps the fast path
+	// and no process probe runs.
+	if !rexMarker {
+		switch {
+		case !herdrMarker && !tmuxMarker:
+			return None, "no supported multiplexer detected", nil
+		case !herdrMarker:
+			return Tmux, tmuxReason, nil
+		case !tmuxMarker:
+			return Herdr, herdrReason, nil
+		default:
+			return innerMultiplexer(ctx, tty, commandRunner, true, true, herdrReason, tmuxReason)
+		}
 	}
 
-	kind, reason, err := innerMultiplexer(ctx, tty, commandRunner, herdrMarker, tmuxMarker, herdrReason, tmuxReason)
-	if err != nil {
-		return "", "", err
-	}
-	if kind != None {
-		// A multiplexer running inside the Rex block owns the panes the user is
-		// typing in, so it is the inner one.
-		if rexLive {
-			reason = reason + " inside a Rex block"
+	rexLive, rexErr := rexSessionLive(ctx, env, commandRunner)
+	if !rexLive {
+		// A stale or unreadable marker is not a claim to Rex, so the tmux and
+		// Herdr precedence stands.
+		kind, reason, err := innerMultiplexer(ctx, tty, commandRunner, herdrMarker, tmuxMarker, herdrReason, tmuxReason)
+		if err != nil || kind != None {
+			return kind, reason, err
 		}
-		return kind, reason, nil
-	}
-	switch {
-	case rexLive:
-		return Rex, rexReason, nil
-	case rexMarker && rexErr != nil:
-		return None, fmt.Sprintf("REX_SESSION is set but could not be verified against the Rex server: %v", rexErr), nil
-	case rexMarker:
+		if rexErr != nil {
+			return None, fmt.Sprintf("REX_SESSION is set but could not be verified against the Rex server: %v", rexErr), nil
+		}
 		return None, "REX_SESSION is stale: the Rex server does not own that session", nil
+	}
+
+	// The marker is live, so the multiplexer that owns the invocation's
+	// controlling TTY is the inner one. A marker can be inherited from an
+	// outer terminal, which is exactly why ownership is compared at all.
+	control := controlTTY(ctx, tty, commandRunner)
+	if !tmuxMarker && !herdrMarker {
+		return rexByTTY(ctx, env, control, rexReason, commandRunner)
+	}
+	if control == "" {
+		// Cron jobs and pipes own no terminal: keep today's precedence and say
+		// why nothing could be compared.
+		kind, reason, err := innerMultiplexer(ctx, control, commandRunner, herdrMarker, tmuxMarker, herdrReason, tmuxReason)
+		if err != nil {
+			return "", "", err
+		}
+		return kind, reason + " inside a Rex block (no controlling TTY to compare ownership)", nil
+	}
+	owns, err := rexOwnsTTY(ctx, env, control, commandRunner)
+	if err != nil {
+		return None, fmt.Sprintf("cannot tell whether Rex owns the controlling TTY: %v; pass --backend rex or --backend tmux", err), nil
+	}
+	if owns {
+		return Rex, fmt.Sprintf("%s; the block owns the controlling TTY, so the %s marker is inherited", rexReason, outerMarkers(herdrMarker, tmuxMarker)), nil
+	}
+	if tmuxMarker {
+		owned, err := tmuxOwnsTTY(ctx, control, commandRunner)
+		if err != nil {
+			return None, fmt.Sprintf("cannot tell whether tmux owns the controlling TTY: %v; pass --backend tmux or --backend rex", err), nil
+		}
+		if owned {
+			return Tmux, tmuxReason + " inside a Rex block (the tmux pane owns the controlling TTY)", nil
+		}
+	}
+	if herdrMarker {
+		return Herdr, herdrReason + " inside a Rex block (the Rex block does not own the controlling TTY)", nil
+	}
+	return None, "TMUX and REX_SESSION disagree and neither owns the controlling TTY; pass --backend tmux or --backend rex", nil
+}
+
+// rexByTTY confirms that a lone Rex marker really is the inner multiplexer. A
+// live REX_SESSION can be inherited outside Rex, where whoami echoes the id
+// without Rex owning the caller's terminal, so the marker alone is not proof.
+func rexByTTY(ctx context.Context, env Environment, tty, rexReason string, commandRunner runner.CommandRunner) (Kind, string, error) {
+	if tty == "" {
+		return Rex, rexReason + "; no controlling TTY to compare, so the marker stands", nil
+	}
+	owns, err := rexOwnsTTY(ctx, env, tty, commandRunner)
+	switch {
+	case err != nil:
+		return None, fmt.Sprintf("REX_SESSION is live but its block's terminal cannot be compared with the controlling TTY: %v; pass --backend rex to force Rex", err), nil
+	case owns:
+		return Rex, rexReason + "; the block owns the controlling TTY", nil
 	default:
-		return None, "no supported multiplexer detected", nil
+		return None, "REX_SESSION is live but no Rex block process owns the controlling TTY: the id is inherited from outside Rex; pass --backend rex to force Rex", nil
+	}
+}
+
+// outerMarkers names the non-Rex markers that lost the ownership comparison.
+func outerMarkers(herdrMarker, tmuxMarker bool) string {
+	switch {
+	case herdrMarker && tmuxMarker:
+		return "Herdr and tmux"
+	case herdrMarker:
+		return "Herdr"
+	default:
+		return "tmux"
 	}
 }
 
@@ -224,6 +291,47 @@ func rexSessionLive(ctx context.Context, env Environment, commandRunner runner.C
 		return false, fmt.Errorf("decode rex whoami: %w", err)
 	}
 	return strings.TrimSpace(whoami.SessionID) == session, nil
+}
+
+// rexOwnsTTY reports whether the block named by the Rex markers owns tty. Rex
+// exposes no terminal path, so the block's own processes are resolved through
+// ps. Inconclusive evidence (no block id, no running process, an unreadable
+// ps) is an error, never permission to trust the environment marker.
+func rexOwnsTTY(ctx context.Context, env Environment, tty string, commandRunner runner.CommandRunner) (bool, error) {
+	session, block := rexBlockContext(env)
+	if session == "" || block == "" {
+		return false, errors.New("REX_BLOCK is not set")
+	}
+	want, ok := normalizeTTY(tty)
+	if !ok {
+		return false, fmt.Errorf("controlling TTY %q is not a terminal path", tty)
+	}
+	pids, err := rex.BlockProcessPIDs(ctx, commandRunner, session, block)
+	if err != nil {
+		return false, err
+	}
+	inspected := false
+	for _, pid := range pids {
+		got, ok := processTTY(ctx, commandRunner, pid)
+		if !ok {
+			continue
+		}
+		inspected = true
+		if got == want {
+			return true, nil
+		}
+	}
+	if !inspected {
+		return false, errors.New("no block process has a readable controlling terminal")
+	}
+	return false, nil
+}
+
+// rexBlockContext returns the native location the Rex environment names.
+func rexBlockContext(env Environment) (session, block string) {
+	session, _ = env.LookupEnv("REX_SESSION")
+	block, _ = env.LookupEnv("REX_BLOCK")
+	return strings.TrimSpace(session), strings.TrimSpace(block)
 }
 
 func tmuxEnvironment(env Environment) (bool, string) {

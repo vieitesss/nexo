@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/vieitesss/nexo/internal/runner"
 )
 
 type processInfo struct {
@@ -98,6 +100,31 @@ func (b *Backend) blockMethod(ctx context.Context, sessionID, blockID, method st
 		Method:    method,
 		Args:      map[string]any{},
 	})
+}
+
+// BlockProcessPIDs reports the pids of one block's child and foreground
+// programs. Detection compares their controlling terminal with the
+// invocation's own, because the terminal API exposes no tty field.
+func BlockProcessPIDs(ctx context.Context, commandRunner runner.CommandRunner, sessionID, blockID string) ([]int, error) {
+	probe := New(commandRunner, nil)
+	output, err := probe.blockMethod(ctx, sessionID, blockID, "process")
+	if err != nil {
+		return nil, err
+	}
+	var live processResult
+	if err := json.Unmarshal(output, &live); err != nil {
+		return nil, fmt.Errorf("decode rex block %q process: %w", blockID, err)
+	}
+	var pids []int
+	for _, process := range []*processInfo{live.Child, live.Foreground} {
+		if process != nil && process.PID > 0 {
+			pids = append(pids, process.PID)
+		}
+	}
+	if len(pids) == 0 {
+		return nil, fmt.Errorf("rex block %q reports no running process", blockID)
+	}
+	return pids, nil
 }
 
 // decodePwd accepts a plain path or a percent-encoded file URL. A URL naming
