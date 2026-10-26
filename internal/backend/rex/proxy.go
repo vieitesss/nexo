@@ -151,7 +151,7 @@ func (b *Backend) openProxy(ctx context.Context, remoteKind, machine, container 
 		return err
 	}
 	if err := store.recordProxy(sessionID, proxyRecord{Machine: machine, RemoteKind: remoteKind}); err != nil {
-		return errors.Join(err, b.destroyProxySession(ctx, sessionID))
+		return errors.Join(err, b.KillContainer(ctx, sessionID))
 	}
 	return b.focusAndRecord(ctx, sessionInfo{ID: sessionID}, false)
 }
@@ -229,10 +229,6 @@ func (b *Backend) createProxySession(ctx context.Context, remoteKind, machine, c
 func (b *Backend) switchRemoteProxy(ctx context.Context, remoteKind, machine, container string) error {
 	_, err := b.Runner.Run(ctx, "ssh", proxy.SwitchSSHArgs(b.proxyConfig, "rex", remoteKind, machine, container)...)
 	return err
-}
-
-func (b *Backend) destroyProxySession(ctx context.Context, sessionID string) error {
-	return b.KillContainer(ctx, sessionID)
 }
 
 // rexProxyStore serves proxy lookup from the sidecar document, filtered to the
