@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -20,6 +21,8 @@ func (c call) key() string { return strings.Join(c.args, " ") }
 // request whose payload a test cannot spell in advance, such as a session
 // creation carrying the resolved nexo binary; fail injects a request error.
 type fakeRunner struct {
+	// mu guards calls: a test may drive one backend from several goroutines.
+	mu      sync.Mutex
 	calls   []call
 	outputs map[string]string
 	errors  map[string]error
@@ -29,7 +32,9 @@ type fakeRunner struct {
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	request := call{name: name, args: append([]string(nil), args...)}
+	f.mu.Lock()
 	f.calls = append(f.calls, request)
+	f.mu.Unlock()
 	key := request.key()
 	if f.fail != nil {
 		if err := f.fail(request); err != nil {
@@ -51,6 +56,8 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 }
 
 func (f *fakeRunner) keys() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	keys := make([]string, 0, len(f.calls))
 	for _, request := range f.calls {
 		keys = append(keys, request.key())
@@ -68,10 +75,9 @@ func newTestBackend(t *testing.T, runner *fakeRunner, messages *strings.Builder)
 	return backend
 }
 
-// useIdentity skips the whoami request for tests that are not about identity.
+// useIdentity seeds the resolved identity so the test skips the whoami request.
 func useIdentity(backend *Backend, server identity) {
-	backend.identity = server
-	backend.identified = true
+	backend.identityOnce.Do(func() { backend.identity = server })
 }
 
 func TestCurrentContainerIDReportsTheCallersSession(t *testing.T) {

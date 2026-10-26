@@ -51,9 +51,9 @@ type Backend struct {
 	agentsMu sync.Mutex
 	agents   config.AgentsConfig
 
-	identity    identity
-	identified  bool
-	identityErr error
+	identityOnce sync.Once
+	identity     identity
+	identityErr  error
 
 	// proxyConfig and proxyConfigPath apply to machine proxies: the attachment
 	// transport, SSH settings, and the optional config file the child nexo
@@ -208,29 +208,29 @@ func (i identity) namespace() string {
 	}
 }
 
-// server resolves and caches this invocation's server identity. Rex only
+// server resolves and caches this invocation's server identity. One whoami
+// completes the identity for every caller: concurrent cold callers wait for it
+// and share its result or error, which is cached once per backend. Rex only
 // reports location fields for ids that resolve on the live server, so a stale
 // REX_SESSION cannot claim a session it does not name.
 func (b *Backend) server(ctx context.Context) (identity, error) {
 	if b == nil || b.Runner == nil {
 		return identity{}, errors.New("rex backend requires a command runner")
 	}
-	if b.identified {
-		return b.identity, b.identityErr
-	}
-	b.identified = true
-	output, err := b.exec(ctx, "whoami", "whoami", "--json")
-	if err != nil {
-		b.identityErr = err
-		return identity{}, err
-	}
-	var resolved identity
-	if err := json.Unmarshal(output, &resolved); err != nil {
-		b.identityErr = fmt.Errorf("decode rex whoami: %w", err)
-		return identity{}, b.identityErr
-	}
-	b.identity = resolved
-	return resolved, nil
+	b.identityOnce.Do(func() {
+		output, err := b.exec(ctx, "whoami", "whoami", "--json")
+		if err != nil {
+			b.identityErr = err
+			return
+		}
+		var resolved identity
+		if err := json.Unmarshal(output, &resolved); err != nil {
+			b.identityErr = fmt.Errorf("decode rex whoami: %w", err)
+			return
+		}
+		b.identity = resolved
+	})
+	return b.identity, b.identityErr
 }
 
 // CurrentContainerID reports the session that owns the calling block.
