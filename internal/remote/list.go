@@ -87,7 +87,7 @@ func (l machineListing) listMachine(ctx context.Context, machine string, withAge
 		result.Error = "remote listing requires a command runner"
 		return result
 	}
-	if l.config.Backend != backend.Tmux && l.config.Backend != backend.Herdr {
+	if !ownsTerminalPane(l.config.Backend) {
 		result.Error = fmt.Sprintf("backend %q does not support remote listing", l.config.Backend)
 		return result
 	}

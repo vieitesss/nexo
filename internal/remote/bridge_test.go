@@ -9,7 +9,7 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 )
 
-func TestValidateKindAllowsTheTmuxToHerdrBridgeOnly(t *testing.T) {
+func TestValidateKindAllowsEveryLocalBackendThatOwnsAPane(t *testing.T) {
 	cases := []struct {
 		local     backend.Kind
 		remote    Kind
@@ -19,8 +19,9 @@ func TestValidateKindAllowsTheTmuxToHerdrBridgeOnly(t *testing.T) {
 		{local: backend.Tmux, remote: KindHerdr},
 		{local: backend.Herdr, remote: KindTmux},
 		{local: backend.Herdr, remote: KindHerdr},
-		{local: "rex", remote: KindTmux, wantError: true},
-		{local: "rex", remote: KindHerdr, wantError: true},
+		{local: backend.Rex, remote: KindTmux},
+		{local: backend.Rex, remote: KindHerdr},
+		{local: backend.None, remote: KindTmux, wantError: true},
 		{local: backend.Tmux, remote: "unknown", wantError: true},
 	}
 	policy := OperationPolicy{}

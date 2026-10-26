@@ -80,13 +80,12 @@ func runRemoteAttach(ctx context.Context, invocation Invocation) error {
 	if err != nil {
 		return UsageError{Err: err}
 	}
-	if fromEnv {
-		if invocation.Selection.Kind != backend.Herdr {
-			return errors.New("remote attach --from-env requires the Herdr backend")
-		}
-	} else if invocation.Selection.Kind != backend.Tmux {
-		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
+	if fromEnv && invocation.Selection.Kind != backend.Herdr {
+		return errors.New("remote attach --from-env requires the Herdr backend")
 	}
+	// The attach command runs in the pane of a proxy nexo opened, so the local
+	// backend must be one nexo creates proxies with. Every such backend owns a
+	// terminal that can host the remote client.
 	if _, ok := invocation.Adapter.(capabilities.RemoteProxy); !ok {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}

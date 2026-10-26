@@ -138,7 +138,7 @@ func TestTUIFocusRoutesTwoRemoteHerdrPanesInOneContainer(t *testing.T) {
 	}
 }
 
-func TestTUIRejectsUnsupportedRemoteKindAndBridgesTmuxToHerdr(t *testing.T) {
+func TestTUIRejectsUnsupportedRemoteKindAndBridgesToHerdr(t *testing.T) {
 	for _, test := range []struct {
 		name           string
 		local          backend.Kind
@@ -147,7 +147,8 @@ func TestTUIRejectsUnsupportedRemoteKindAndBridgesTmuxToHerdr(t *testing.T) {
 		wantUnsupporte bool
 	}{
 		{name: "tmux-herdr", local: backend.Tmux, remote: backend.Herdr, wantProxy: "herdr:dev/api"},
-		{name: "rex-herdr", local: "rex", remote: backend.Herdr, wantUnsupporte: true},
+		{name: "rex-herdr", local: backend.Rex, remote: backend.Herdr, wantProxy: "herdr:dev/api"},
+		{name: "none-herdr", local: backend.None, remote: backend.Herdr, wantUnsupporte: true},
 		{name: "herdr-tmux", local: backend.Herdr, remote: backend.Tmux, wantProxy: "tmux:dev/api"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

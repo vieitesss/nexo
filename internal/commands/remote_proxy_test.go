@@ -378,16 +378,21 @@ func TestRemoteAttachValidatesBackendAndMachine(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		selection backend.Selection
+		adapter   any
 		want      string
 	}{
 		{name: "unconfigured machine", selection: backend.Selection{Kind: backend.Tmux}, want: "not configured"},
-		{name: "non tmux backend", selection: backend.Selection{Kind: backend.Herdr}, want: "does not support"},
+		{name: "backend without proxies", selection: backend.Selection{Kind: backend.Tmux}, adapter: struct{}{}, want: "does not support"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			adapter := test.adapter
+			if adapter == nil {
+				adapter = proxy
+			}
 			err := (remoteCommand{}).Run(context.Background(), Invocation{
 				Selection: test.selection,
 				Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"devbox"}}},
-				Adapter:   proxy,
+				Adapter:   adapter,
 				Args:      []string{"attach", "--", "other"},
 			})
 			if err == nil || !strings.Contains(err.Error(), test.want) {

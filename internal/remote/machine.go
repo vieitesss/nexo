@@ -147,13 +147,22 @@ func (p OperationPolicy) validateKind(local backend.Kind, machine string, kind K
 	default:
 		return fmt.Errorf("remote machine %q has an unknown multiplexer kind", machine)
 	}
-	// tmux and Herdr are the local backends nexo can drive. A Herdr remote
-	// opens natively from Herdr and through a local proxy from tmux; any other
-	// local backend has no seam to reach either kind.
-	if local != backend.Tmux && local != backend.Herdr {
-		return fmt.Errorf("unsupported: %s runs %s; use tmux or Herdr to %s it", machine, display, operation)
+	if !ownsTerminalPane(local) {
+		return fmt.Errorf("unsupported: %s runs %s; use tmux, Herdr, or Rex to %s it", machine, display, operation)
 	}
 	return nil
+}
+
+// ownsTerminalPane reports the local backends nexo can drive in a terminal and
+// therefore run a remote client in. A Herdr remote opens natively from Herdr
+// and through a proxy pane from the others.
+func ownsTerminalPane(local backend.Kind) bool {
+	switch local {
+	case backend.Tmux, backend.Herdr, backend.Rex:
+		return true
+	default:
+		return false
+	}
 }
 
 // resolveRemoteTarget maps a requested container to the identity the selected
