@@ -148,7 +148,7 @@ func (s *Source) listAgents(ctx context.Context, highlight bool) ([]capabilities
 		}
 		observed = append(observed, observedPane{
 			pane:    p,
-			working: MatchesWorkingIndicator(p.harness, string(screens[index]), cfg.WorkingPattern),
+			working: agentdetect.Working(p.harness, string(screens[index]), cfg.WorkingPattern),
 		})
 	}
 
@@ -223,10 +223,7 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		}
 		return nil, fmt.Errorf("list tmux panes: %w", err)
 	}
-	allow := make(map[string]struct{}, len(cfg.Processes))
-	for _, process := range cfg.Processes {
-		allow[strings.ToLower(filepath.Base(strings.TrimSpace(process)))] = struct{}{}
-	}
+	allow := agentdetect.AllowList(cfg.Processes)
 	var result []pane
 	var tree processTree
 	haveTree := false
@@ -246,7 +243,7 @@ func (s *Source) agentPanes(ctx context.Context, cfg config.AgentsConfig) ([]pan
 		focusedField := 9
 		pathField := 10
 		current := strings.TrimSpace(fields[2])
-		harness := findHarness(current, allow)
+		harness := agentdetect.Harness(current, allow)
 		if harness == "" {
 			// macOS reports a foreground comm such as "node" or a version
 			// string, and pane_pid is the pane's shell. The agent is usually a
@@ -301,13 +298,6 @@ func forEachPane(count int, fn func(index int)) {
 		}()
 	}
 	wg.Wait()
-}
-
-// findHarness returns the allowed harness named by a process's command line.
-// Only the process identity counts: the basename of argv[0], or, when argv[0]
-// is an interpreter, the basename of the script it runs.
-func findHarness(args string, allow map[string]struct{}) string {
-	return agentdetect.Harness(args, allow)
 }
 
 // processTree is one point-in-time view of the process table. Both BSD/macOS
@@ -372,7 +362,7 @@ func findPaneHarness(panePID string, tree processTree, allow map[string]struct{}
 		bestPID := -1
 		bestHarness := ""
 		for _, pid := range frontier {
-			harness := findHarness(tree.args[pid], allow)
+			harness := agentdetect.Harness(tree.args[pid], allow)
 			if harness == "" {
 				continue
 			}

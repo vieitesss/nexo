@@ -15,37 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vieitesss/nexo/internal/agentdetect"
 	"github.com/vieitesss/nexo/internal/agentstate"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 )
 
-func TestFindHarnessMatchesProcessArgs(t *testing.T) {
-	allow := map[string]struct{}{"pi": {}, "claude": {}}
-	for _, test := range []struct {
-		name string
-		args string
-		want string
-	}{
-		{name: "node script", args: "node /opt/homebrew/bin/pi", want: "pi"},
-		{name: "node flags", args: "node --no-warnings /x/pi", want: "pi"},
-		{name: "claude resume", args: "/Users/x/.local/bin/claude --resume", want: "claude"},
-		{name: "vim pi", args: "vim pi", want: ""},
-		{name: "bash command string", args: `bash -c "claude --resume"`, want: ""},
-		{name: "markdown file", args: "vim notes/claude.md", want: ""},
-		{name: "bare interpreter", args: "node", want: ""},
-		{name: "login shell", args: "-zsh", want: ""},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := findHarness(test.args, allow); got != test.want {
-				t.Fatalf("findHarness(%q) = %q, want %q", test.args, got, test.want)
-			}
-		})
-	}
-}
-
 func TestFindPaneHarnessIsDepthFirstAndLowestPID(t *testing.T) {
-	allow := map[string]struct{}{"pi": {}, "claude": {}}
+	allow := agentdetect.AllowList([]string{"pi", "claude"})
 	t.Run("bash child matches", func(t *testing.T) {
 		tree := parseProcessTree([]byte(
 			"  100     1 -zsh\n" +

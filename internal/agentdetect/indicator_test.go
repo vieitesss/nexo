@@ -1,8 +1,8 @@
-package tmux
+package agentdetect
 
 import "testing"
 
-func TestMatchesWorkingIndicator(t *testing.T) {
+func TestWorkingReadsTheHarnessMarker(t *testing.T) {
 	tests := []struct {
 		name       string
 		harness    string
@@ -25,8 +25,8 @@ func TestMatchesWorkingIndicator(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := MatchesWorkingIndicator(test.harness, test.screen, test.configured); got != test.want {
-				t.Fatalf("MatchesWorkingIndicator() = %v, want %v", got, test.want)
+			if got := Working(test.harness, test.screen, test.configured); got != test.want {
+				t.Fatalf("Working() = %v, want %v", got, test.want)
 			}
 		})
 	}

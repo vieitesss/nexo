@@ -15,6 +15,19 @@ var interpreters = map[string]struct{}{
 	"python3": {},
 }
 
+// AllowList turns the configured harness list into the lookup set the rules in
+// this package take. Names are normalized the same way they are compared, so a
+// configured path and a bare program name are equivalent.
+func AllowList(processes []string) map[string]struct{} {
+	allow := make(map[string]struct{}, len(processes))
+	for _, process := range processes {
+		if name := base(process); name != "" {
+			allow[name] = struct{}{}
+		}
+	}
+	return allow
+}
+
 // Harness returns the allowed harness named by a process's command line. Only
 // the process identity counts: the basename of argv[0], or, when argv[0] is an
 // interpreter, the basename of the script it runs.
