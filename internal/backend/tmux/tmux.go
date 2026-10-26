@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
@@ -90,7 +89,7 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 		return capabilities.Worktree{}, errors.New("tmux worktree creator requires a command runner")
 	}
 	return lifecycle.CreateWorktree(ctx, options, lifecycle.WorktreeAdapter{
-		Create:   b.createWorktree,
+		Create:   b.worktrees().Create,
 		Open:     b.openProjectNative,
 		Rollback: b.rollbackCreatedWorktree,
 	})
@@ -102,7 +101,7 @@ func (b *Backend) ExtractWorktree(ctx context.Context, options capabilities.Work
 	}
 	return lifecycle.ExtractWorktree(ctx, options, lifecycle.ExtractAdapter{
 		WorktreeAdapter: lifecycle.WorktreeAdapter{
-			Create:   b.createWorktree,
+			Create:   b.worktrees().Create,
 			Open:     b.openProjectNative,
 			Rollback: b.rollbackCreatedWorktree,
 		},
@@ -110,34 +109,12 @@ func (b *Backend) ExtractWorktree(ctx context.Context, options capabilities.Work
 	})
 }
 
-func (b *Backend) createWorktree(ctx context.Context, options capabilities.WorktreeCreateOptions) (capabilities.Worktree, error) {
-	branchExisted := false
-	if options.NewBranch {
-		branchExisted = b.branchExists(ctx, options.Repo, options.Branch)
-		if branchExisted {
-			return capabilities.Worktree{}, fmt.Errorf("branch %q already exists", options.Branch)
-		}
-	}
-	args := []string{"-C", options.Repo, "worktree", "add"}
-	if options.NewBranch {
-		args = append(args, "-b", options.Branch, options.Destination)
-	} else {
-		args = append(args, options.Destination, options.Branch)
-	}
-	if _, err := b.runGit(ctx, args...); err != nil {
-		cleanupCtx, cancel := lifecycle.CleanupContext(ctx)
-		defer cancel()
-		rollbackErr := b.rollbackWorktree(cleanupCtx, options.Repo, options.Destination, options.NewBranch, options.Branch, branchExisted)
-		if rollbackErr != nil {
-			return capabilities.Worktree{}, errors.Join(err, rollbackErr)
-		}
-		return capabilities.Worktree{}, err
-	}
-	return capabilities.Worktree{Path: options.Destination, Branch: options.Branch, Repo: options.Repo, NewBranch: options.NewBranch}, nil
+func (b *Backend) worktrees() *git.Worktrees {
+	return git.NewWorktrees(b.runGit)
 }
 
 func (b *Backend) rollbackCreatedWorktree(ctx context.Context, worktree capabilities.Worktree) error {
-	rollbackErr := b.rollbackWorktree(ctx, worktree.Repo, worktree.Path, worktree.NewBranch, worktree.Branch, false)
+	rollbackErr := b.worktrees().Rollback(ctx, worktree)
 	if worktree.Container.Created && worktree.SessionName != "" {
 		if _, killErr := b.run(ctx, "kill-session", "-t", "="+worktree.SessionName); killErr != nil {
 			rollbackErr = errors.Join(rollbackErr, killErr)
@@ -172,38 +149,8 @@ func (b *Backend) RemoveWorktree(ctx context.Context, worktree capabilities.Work
 			failures = append(failures, err)
 		}
 	}
-	path, err := filepath.Abs(worktree.Path)
-	if err != nil {
-		failures = append(failures, fmt.Errorf("resolve worktree destination: %w", err))
-	} else if _, err := b.runGit(ctx, "-C", worktree.Repo, "worktree", "remove", "--force", path); err != nil {
-		failures = append(failures, err)
-	}
-	if worktree.NewBranch {
-		if _, err := b.runGit(ctx, "-C", worktree.Repo, "branch", "-D", worktree.Branch); err != nil {
-			failures = append(failures, err)
-		}
-	}
+	failures = append(failures, b.worktrees().Remove(ctx, worktree))
 	return errors.Join(failures...)
-}
-
-func (b *Backend) rollbackWorktree(ctx context.Context, repo, path string, newBranch bool, branch string, branchExisted bool) error {
-	var failures []error
-	if _, err := os.Lstat(path); err == nil {
-		if _, removeErr := b.runGit(ctx, "-C", repo, "worktree", "remove", "--force", path); removeErr != nil {
-			failures = append(failures, removeErr)
-		}
-	}
-	if newBranch && !branchExisted && b.branchExists(ctx, repo, branch) {
-		if _, err := b.runGit(ctx, "-C", repo, "branch", "-D", branch); err != nil {
-			failures = append(failures, err)
-		}
-	}
-	return errors.Join(failures...)
-}
-
-func (b *Backend) branchExists(ctx context.Context, repo, branch string) bool {
-	_, err := b.runGit(ctx, "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
-	return err == nil
 }
 
 func (b *Backend) runGit(ctx context.Context, args ...string) ([]byte, error) {

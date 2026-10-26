@@ -6,15 +6,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"reflect"
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
+	"github.com/vieitesss/nexo/internal/projects"
 )
 
+// realGitTmuxRunner runs Git for real and fakes the tmux commands, so the
+// adapter is proven against repositories instead of a canned Git script.
 type realGitTmuxRunner struct {
-	failSwitch bool
-	calls      []call
+	calls []call
 }
 
 func (r *realGitTmuxRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -29,10 +31,6 @@ func (r *realGitTmuxRunner) Run(ctx context.Context, name string, args ...string
 	switch operation {
 	case "has-session":
 		return []byte("can't find session"), errors.New("can't find session")
-	case "switch-client":
-		if r.failSwitch {
-			return []byte("switch failed"), errors.New("switch failed")
-		}
 	case "new-session", "kill-session":
 		return nil, nil
 	}
@@ -65,76 +63,27 @@ func runTestGit(t *testing.T, repo string, args ...string) {
 	}
 }
 
-func TestCreateWorktreeWithNewBranchUsesRealGit(t *testing.T) {
+func TestCreateWorktreeWithRealGitOpensTheBackgroundSession(t *testing.T) {
 	repo := testGitRepo(t)
 	destination := filepath.Join(t.TempDir(), "new")
 	runner := &realGitTmuxRunner{}
-	if _, err := New(runner, true).CreateWorktree(context.Background(), capabilities.WorktreeCreateOptions{
+	got, err := New(runner, true).CreateWorktree(context.Background(), capabilities.WorktreeCreateOptions{
 		Repo: repo, Branch: "feature", Destination: destination, NewBranch: true,
-	}); err != nil {
-		t.Fatalf("CreateWorktree() error = %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(destination, "README")); err != nil {
-		t.Fatalf("worktree files: %v", err)
-	}
-	runTestGit(t, repo, "show-ref", "--verify", "refs/heads/feature")
-}
-
-func TestCreateWorktreeWithExistingBranchUsesRealGit(t *testing.T) {
-	repo := testGitRepo(t)
-	runTestGit(t, repo, "branch", "existing")
-	destination := filepath.Join(t.TempDir(), "existing")
-	if _, err := New(&realGitTmuxRunner{}, true).CreateWorktree(context.Background(), capabilities.WorktreeCreateOptions{
-		Repo: repo, Branch: "existing", Destination: destination,
-	}); err != nil {
-		t.Fatalf("CreateWorktree() error = %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(destination, "README")); err != nil {
-		t.Fatalf("worktree files: %v", err)
-	}
-}
-
-func TestCreateWorktreeRollbackRemovesRealGitStateAndSession(t *testing.T) {
-	repo := testGitRepo(t)
-	destination := filepath.Join(t.TempDir(), "rollback")
-	runner := &realGitTmuxRunner{failSwitch: true}
-	_, err := New(runner, true).CreateWorktree(context.Background(), capabilities.WorktreeCreateOptions{
-		Repo: repo, Branch: "rollback", Destination: destination, NewBranch: true,
 	})
-	if err == nil || !strings.Contains(err.Error(), "switch failed") {
-		t.Fatalf("CreateWorktree() error = %v, want switch failure", err)
+	if err != nil {
+		t.Fatalf("CreateWorktree() error = %v", err)
 	}
-	if _, statErr := os.Stat(destination); !os.IsNotExist(statErr) {
-		t.Fatalf("destination stat error = %v, want absent", statErr)
+	if !got.Container.Created || got.Container.Name != projects.TargetName(destination) {
+		t.Fatalf("container = %#v, want the session created for the worktree", got.Container)
 	}
-	if output, gitErr := exec.Command("git", "-C", repo, "show-ref", "--verify", "refs/heads/rollback").CombinedOutput(); gitErr == nil {
-		t.Fatalf("rollback branch still exists: %s", output)
-	}
-	foundKill := false
-	for _, command := range runner.calls {
-		if command.name == "tmux" && len(command.args) > 1 && command.args[1] == "kill-session" {
-			foundKill = true
+	want := call{name: "tmux", args: []string{"-u", "new-session", "-d", "-s", projects.TargetName(destination), "-c", destination}}
+	found := false
+	for _, command := range nativeCalls(runner.calls) {
+		if reflect.DeepEqual(command, want) {
+			found = true
 		}
 	}
-	if !foundKill {
-		t.Fatalf("calls = %#v, want kill-session rollback", runner.calls)
-	}
-}
-
-func TestCreateWorktreeExistingDestinationDoesNotTouchGit(t *testing.T) {
-	repo := testGitRepo(t)
-	destination := filepath.Join(t.TempDir(), "existing")
-	if err := os.Mkdir(destination, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	runner := &realGitTmuxRunner{}
-	_, err := New(runner, true).CreateWorktree(context.Background(), capabilities.WorktreeCreateOptions{
-		Repo: repo, Branch: "feature", Destination: destination, NewBranch: true,
-	})
-	if err == nil || !strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("CreateWorktree() error = %v", err)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("calls = %#v, want none", runner.calls)
+	if !found {
+		t.Fatalf("calls = %#v, want %#v", nativeCalls(runner.calls), want)
 	}
 }
