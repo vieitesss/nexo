@@ -260,6 +260,8 @@ func (l machineListing) runCommand(ctx context.Context, machine, command string)
 			}
 			return []byte{}, nil
 		}
+		// The kind frame is probe control data, not a diagnostic.
+		_, output = splitRemoteKind(output, l.config.Backend)
 		if text := strings.TrimSpace(string(output)); text != "" {
 			return nil, fmt.Errorf("ssh %s: %s", machine, text)
 		}

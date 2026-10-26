@@ -232,6 +232,16 @@ func TestListMachineTreatsMissingTmuxSocketAsEmpty(t *testing.T) {
 	}
 }
 
+func TestListMachineErrorOmitsKindFrame(t *testing.T) {
+	orchestrator := newTestOrchestrator(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(remoteKindFrameStart + string(KindTmux) + "\n"), &exec.ExitError{Stderr: []byte("tmux: command not found\n")}
+	}), backend.Herdr, "")
+	result := listMachine(orchestrator, "rpi")
+	if result.Error != "ssh rpi: tmux: command not found" {
+		t.Fatalf("error = %q, want remote stderr without the kind frame", result.Error)
+	}
+}
+
 func TestListMachineNormalizesMultilineErrors(t *testing.T) {
 	orchestrator := newTestOrchestrator(fakeRunner(func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("first reason\nsecond reason\n"), errors.New("command failed")
