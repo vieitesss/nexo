@@ -28,10 +28,10 @@ type State struct {
 }
 
 // Observation is one normalized backend observation. The observation itself
-// selects its transition policy: a native adapter sets Status and Sequence and
-// leaves WorkingIndicator semantics to the native status mapping; a screen
-// adapter sets Working and leaves Status empty. An adapter only emits a native
-// observation after normalizing a non-empty native status.
+// selects its transition policy: a native observation carries a non-empty
+// Status and the Working derived from it, while a screen observation carries
+// only Working. An adapter only emits a native observation after normalizing a
+// non-empty native status.
 type Observation struct {
 	ID         string
 	Working    bool
