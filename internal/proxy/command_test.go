@@ -89,7 +89,7 @@ func TestBackendRendezvousIsSharedByAttachAndSwitch(t *testing.T) {
 		if !strings.Contains(attach, "nexo-proxy-"+key+".tty") {
 			t.Fatalf("%s attach = %q, want rendezvous %q", backend, attach, key)
 		}
-		switchArgs := RemoteSwitchSSHArgs(config.RemoteConfig{}, backend, "reviewbox", "second")
+		switchArgs := SwitchSSHArgs(config.RemoteConfig{}, backend, RemoteKindTmux, "reviewbox", "second")
 		if command := switchArgs[len(switchArgs)-1]; !strings.Contains(command, "nexo-proxy-"+key+".tty") {
 			t.Fatalf("%s switch = %q, want rendezvous %q", backend, command, key)
 		}
