@@ -337,6 +337,26 @@ func TestProxySessionIDIgnoresALabelThatLooksLikeAMachine(t *testing.T) {
 	}
 }
 
+// TestProxySessionIDResolvesTheMachineProxyForAnExplicitContainer pins that a
+// container-qualified target still finds the machine-only proxy identity, so
+// `remote close MACHINE/CONTAINER` works as documented.
+func TestProxySessionIDResolvesTheMachineProxyForAnExplicitContainer(t *testing.T) {
+	runner := machineProxyRunner(t, "session:proxy", map[string]string{
+		api("session.list", ""): `{"sessions":[{"session_id":"session:proxy","label":"devbox"}]}`,
+	})
+	backend := newProxyBackend(t, runner)
+	useIdentity(backend, identity{HostID: "host-1", InstanceID: "instance-1"})
+	seedProxySession(t, backend)
+
+	sessionID, err := backend.ProxySessionID(context.Background(), "devbox", "api")
+	if err != nil {
+		t.Fatalf("ProxySessionID() error = %v", err)
+	}
+	if sessionID != "session:proxy" {
+		t.Fatalf("ProxySessionID(devbox, api) = %q, want the devbox proxy", sessionID)
+	}
+}
+
 // TestProxySessionIDIgnoresAStaleRecord pins that a proxy record for a session
 // the server no longer has resolves to nothing, so close and previous never
 // target a dead native id.

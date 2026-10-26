@@ -56,7 +56,8 @@ func (b *Backend) ConfigureRemoteConfig(remote config.RemoteConfig, configPath s
 // ProxySessionID resolves the one machine proxy through nexo's sidecar
 // metadata. A session label that happens to spell a machine never establishes
 // identity, and a record for a session the server no longer has resolves to
-// nothing.
+// nothing. Proxy identity is machine-only, so a MACHINE/CONTAINER target (the
+// documented spelling for close) still resolves that machine's proxy.
 func (b *Backend) ProxySessionID(ctx context.Context, machine, container string) (string, error) {
 	if b == nil || b.Runner == nil {
 		return "", errors.New("rex remote proxy requires a command runner")
@@ -64,7 +65,7 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 	if err := validateProxyIdentity(machine); err != nil {
 		return "", err
 	}
-	return proxyidentity.Resolve(ctx, proxyidentity.NewIdentity(machine, container), rexProxyStore{backend: b})
+	return proxyidentity.Resolve(ctx, proxyidentity.NewIdentity(machine, ""), rexProxyStore{backend: b})
 }
 
 // CurrentProxyMachine reports the machine the calling session's proxy attaches
