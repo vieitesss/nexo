@@ -12,6 +12,13 @@ import (
 	"github.com/vieitesss/nexo/internal/lifecycle"
 )
 
+var (
+	_ capabilities.WorktreeCreator            = (*Backend)(nil)
+	_ capabilities.WorktreeExtractor          = (*Backend)(nil)
+	_ capabilities.WorktreeExtractionRollback = (*Backend)(nil)
+	_ capabilities.WorktreeRemover            = (*Backend)(nil)
+)
+
 // CreateWorktree creates the worktree with Git and opens it in a session. The
 // shared lifecycle owns destination preflight and cleanup sequencing; only the
 // native worktree and session work lives here.

@@ -145,11 +145,11 @@ func TestRenameContainerUsesSessionSetLabel(t *testing.T) {
 	}}
 	backend := newTestBackend(t, runner, nil)
 
-	if err := backend.RenameContainer(context.Background(), "session:1", "renamed"); err != nil {
+	if err := backend.RenameContainer(context.Background(), "session:1", "  renamed  "); err != nil {
 		t.Fatalf("RenameContainer() error = %v", err)
 	}
-	if runner.keys()[0] != api("session.set_label", `{"session_id":"session:1","label":"renamed"}`) {
-		t.Fatalf("commands = %#v, want one set_label call", runner.keys())
+	if len(runner.calls) != 1 || runner.keys()[0] != api("session.set_label", `{"session_id":"session:1","label":"renamed"}`) {
+		t.Fatalf("commands = %#v, want one set_label call with the trimmed label", runner.keys())
 	}
 	if err := backend.RenameContainer(context.Background(), "session:1", "  "); err == nil {
 		t.Fatal("RenameContainer() error = nil, want an empty-name rejection")

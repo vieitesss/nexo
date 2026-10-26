@@ -232,7 +232,8 @@ func (b *Backend) RenameContainer(ctx context.Context, id, name string) error {
 	if strings.TrimSpace(id) == "" {
 		return errors.New("rex container renamer requires an id")
 	}
-	if strings.TrimSpace(name) == "" {
+	name = strings.TrimSpace(name)
+	if name == "" {
 		return errors.New("rex container renamer requires a name")
 	}
 	_, err := b.api(ctx, "session.set_label", labelInput{SessionID: id, Label: name})
