@@ -19,6 +19,7 @@ type historyAdapter struct {
 	current        string
 	currentMachine string
 	opened         string
+	kind           string
 	proxied        [2]string
 	onOpen         func(id string)
 }
@@ -45,7 +46,8 @@ func (a *historyAdapter) OpenContainer(_ context.Context, id string) error {
 	return nil
 }
 
-func (a *historyAdapter) Proxy(_ context.Context, _, machine, container string) error {
+func (a *historyAdapter) Proxy(_ context.Context, kind, machine, container string) error {
+	a.kind = kind
 	a.proxied = [2]string{machine, container}
 	return nil
 }
@@ -142,6 +144,32 @@ func TestPreviousNeverSelectsAProxy(t *testing.T) {
 	}
 	if adapter.opened != "" {
 		t.Fatalf("opened = %q, want no local fallback", adapter.opened)
+	}
+}
+
+// TestRemotePreviousRecreatesTheRecordedRemoteKind pins that M-o after
+// detaching a Herdr bridge recreates the Herdr bridge: the proxy history
+// records which remote multiplexer the pane attaches to, and an entry written
+// before that field existed still reads as a tmux remote.
+func TestRemotePreviousRecreatesTheRecordedRemoteKind(t *testing.T) {
+	bridged := &historyAdapter{
+		entries: []containerstate.Entry{{ID: "w1", Machine: "rpi", Proxy: true, RemoteKind: "herdr"}},
+	}
+	if err := runRemotePreviousCommand(t, bridged, "rpi"); err != nil {
+		t.Fatal(err)
+	}
+	if bridged.kind != "herdr" || bridged.proxied != [2]string{"rpi", ""} {
+		t.Fatalf("proxy kind = %q target = %#v, want the rpi Herdr bridge", bridged.kind, bridged.proxied)
+	}
+
+	legacy := &historyAdapter{
+		entries: []containerstate.Entry{{ID: "$2", Machine: "devbox", Proxy: true}},
+	}
+	if err := runRemotePreviousCommand(t, legacy, "devbox"); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.kind != "tmux" || legacy.proxied != [2]string{"devbox", ""} {
+		t.Fatalf("proxy kind = %q target = %#v, want the tmux proxy an old entry names", legacy.kind, legacy.proxied)
 	}
 }
 

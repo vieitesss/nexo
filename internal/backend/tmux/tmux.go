@@ -228,7 +228,7 @@ func (b *Backend) OpenProject(ctx context.Context, path string, options capabili
 	if options.NoFocus || container.ID == "" {
 		return container, nil
 	}
-	if err := b.recordTarget(ctx, container.ID); err != nil {
+	if err := b.recordTarget(ctx, container.ID, ""); err != nil {
 		return container, err
 	}
 	return container, nil
@@ -374,7 +374,7 @@ func (b *Backend) OpenContainer(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	return b.recordTarget(ctx, id)
+	return b.recordTarget(ctx, id, "")
 }
 
 func (b *Backend) usageStore(ctx context.Context) containerstate.Store {
@@ -454,15 +454,17 @@ func (b *Backend) RecordFocusEvent(ctx context.Context, _ []byte) error {
 	if paneID == "" {
 		return nil
 	}
-	historyErr := b.recordTarget(ctx, paneID)
+	historyErr := b.recordTarget(ctx, paneID, "")
 	seenErr := b.MarkAgentSeen(ctx, paneID)
 	return errors.Join(historyErr, seenErr)
 }
 
 // recordTarget classifies one tmux target from authoritative session metadata
 // and records it. Failed lookups are silent: a vanished pane or session is not
-// a focus transition.
-func (b *Backend) recordTarget(ctx context.Context, target string) error {
+// a focus transition. remoteKind is the multiplexer a machine proxy's pane
+// attaches to; session metadata cannot say it, so callers that do not create
+// the proxy pass an empty kind and the recorded one is kept.
+func (b *Backend) recordTarget(ctx context.Context, target, remoteKind string) error {
 	output, err := b.run(ctx, "display-message", "-p", "-t", target, "#{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}")
 	if err != nil {
 		return nil
@@ -478,7 +480,7 @@ func (b *Backend) recordTarget(ctx context.Context, target string) error {
 	}
 	if len(fields) >= 3 {
 		if machine, _, ok := b.proxyTarget(fields[2]); ok {
-			return b.recordContainer(ctx, containerstate.Entry{ID: strings.TrimSpace(fields[0]), Machine: machine, Proxy: true})
+			return b.recordContainer(ctx, containerstate.Entry{ID: strings.TrimSpace(fields[0]), Machine: machine, Proxy: true, RemoteKind: remoteKind})
 		}
 	}
 	id := strings.TrimSpace(fields[0])

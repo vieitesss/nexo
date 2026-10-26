@@ -271,7 +271,7 @@ func (b *Backend) openProxy(ctx context.Context, remoteKind, machine, container 
 	if err != nil {
 		return err
 	}
-	return b.recordTarget(ctx, sessionID)
+	return b.recordTarget(ctx, sessionID, remoteKind)
 }
 
 func (b *Backend) proxySessionName(ctx context.Context, machine string) (string, error) {
