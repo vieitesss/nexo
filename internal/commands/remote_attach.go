@@ -90,13 +90,8 @@ func runRemoteAttach(ctx context.Context, invocation Invocation) error {
 	if _, ok := invocation.Adapter.(capabilities.RemoteProxy); !ok {
 		return fmt.Errorf("backend %q does not support remote proxy attachment", invocation.Selection.Kind)
 	}
-	if options.remoteKind == proxy.RemoteKindHerdr {
-		if fromEnv {
-			return errors.New("remote attach --from-env attaches to tmux and cannot name a remote Herdr machine")
-		}
-		if _, ok := invocation.Adapter.(capabilities.RemoteKindProxy); !ok {
-			return fmt.Errorf("backend %q cannot attach to a remote Herdr machine", invocation.Selection.Kind)
-		}
+	if options.remoteKind == proxy.RemoteKindHerdr && fromEnv {
+		return errors.New("remote attach --from-env attaches to tmux and cannot name a remote Herdr machine")
 	}
 	var machine string
 	if fromEnv {

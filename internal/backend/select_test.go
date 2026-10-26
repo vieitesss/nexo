@@ -80,7 +80,7 @@ func TestResolveReportsCompleteBackendCapabilityLists(t *testing.T) {
 		{name: "tmux", want: []string{
 			"AgentSource", "ContainerHistory", "ContainerKiller", "ContainerLister", "ContainerOpener", "ContainerRenamer",
 			"CurrentContainer", "CurrentProxyMachine", "FocusEventRecorder", "MessageDisplayer", "Notifier", "PaneFocuser",
-			"ProjectOpener", "ProjectUseChecker", "RemoteKindProxy", "RemotePaste", "RemoteProxy", "ScreenReader", "WorktreeCreator", "WorktreeExtractor",
+			"ProjectOpener", "ProjectUseChecker", "RemotePaste", "RemoteProxy", "ScreenReader", "WorktreeCreator", "WorktreeExtractor",
 		}},
 		{name: "herdr", want: []string{
 			"AgentSource", "ContainerHistory", "ContainerKiller", "ContainerLister", "ContainerOpener", "ContainerRenamer",

@@ -85,7 +85,15 @@ func (b *Backend) ProxySessionID(ctx context.Context, machine, container string)
 
 // Proxy opens or focuses a local Herdr workspace whose pane runs the shared
 // hidden attachment command. The metadata token is the stable identity.
-func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
+//
+// The only remote kind this pane can reach is tmux. A remote Herdr machine is
+// reached through Herdr's own machine list (openHerdr), not through a proxy
+// pane, so it is refused here rather than silently attaching to a tmux server
+// that is not running.
+func (b *Backend) Proxy(ctx context.Context, remoteKind, machine, container string) error {
+	if remoteKind != proxy.RemoteKindTmux {
+		return fmt.Errorf("backend %q cannot attach to a remote Herdr machine", "herdr")
+	}
 	if b == nil || b.Runner == nil {
 		return errors.New("herdr remote proxy requires a command runner")
 	}

@@ -9,18 +9,6 @@ import (
 	"github.com/vieitesss/nexo/internal/capabilities"
 )
 
-// recordingKindProxy records the bridged open without taking over the plain
-// tmux proxy path, so a test can prove which one ran.
-type recordingKindProxy struct {
-	recordingMachineProxy
-	bridged [3]string
-}
-
-func (p *recordingKindProxy) ProxyRemote(_ context.Context, remoteKind, machine, container string) error {
-	p.bridged = [3]string{remoteKind, machine, container}
-	return nil
-}
-
 func TestValidateKindAllowsTheTmuxToHerdrBridgeOnly(t *testing.T) {
 	cases := []struct {
 		local     backend.Kind
@@ -53,17 +41,17 @@ func TestValidateKindAllowsTheTmuxToHerdrBridgeOnly(t *testing.T) {
 }
 
 func TestOrchestratorOpenBridgesToHerdrAndKeepsHerdrNativeFromHerdr(t *testing.T) {
-	bridged := &recordingKindProxy{}
+	bridged := &recordingMachineProxy{}
 	orchestrator := NewOrchestrator(nil, ListingConfig{Backend: backend.Tmux}, OperationPolicy{Proxy: bridged})
 	result := MachineResult{Machine: "dev", Kind: KindHerdr, Containers: []capabilities.Container{{ID: "w2", Name: "api"}}}
 	if err := orchestrator.Open(context.Background(), result, "api"); err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if bridged.bridged != [3]string{"herdr", "dev", "w2"} || bridged.opened != [2]string{} {
-		t.Fatalf("bridged = %#v proxy = %#v, want the Herdr proxy only", bridged.bridged, bridged.opened)
+	if bridged.kind != string(KindHerdr) || bridged.opened != [2]string{"dev", "w2"} {
+		t.Fatalf("proxy kind = %q opened = %#v, want the Herdr workspace w2", bridged.kind, bridged.opened)
 	}
 
-	native := &recordingKindProxy{}
+	native := &recordingMachineProxy{}
 	savedRunner := machineRunnerFunc(func(_ context.Context, name string, _ ...string) ([]byte, error) {
 		if name == "herdr" {
 			return []byte(`[{"target":"dev","enabled":true}]`), nil
@@ -74,8 +62,8 @@ func TestOrchestratorOpenBridgesToHerdrAndKeepsHerdrNativeFromHerdr(t *testing.T
 	if err := nativeOrchestrator.Open(context.Background(), result, "api"); err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if native.bridged != [3]string{} {
-		t.Fatalf("bridged = %#v, want Herdr to keep its native machine path", native.bridged)
+	if native.calls != 0 {
+		t.Fatalf("proxy = %#v, want Herdr to keep its native machine path", native.opened)
 	}
 }
 
@@ -123,7 +111,7 @@ func TestResolveRemoteTargetRejectsAnAmbiguousWorkspaceLabel(t *testing.T) {
 }
 
 func TestOrchestratorNewOpensTheWorkspaceIDTheRemoteCreateReported(t *testing.T) {
-	proxy := &recordingKindProxy{}
+	proxy := &recordingMachineProxy{}
 	runner := machineRunnerFunc(func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name == "ssh" {
 			return []byte(`{"result":{"type":"workspace_created","workspace":{"workspace_id":"w7"}}}`), nil
@@ -134,33 +122,33 @@ func TestOrchestratorNewOpensTheWorkspaceIDTheRemoteCreateReported(t *testing.T)
 	if err := orchestrator.New(context.Background(), MachineResult{Machine: "dev", Kind: KindHerdr}, "api"); err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if proxy.bridged != [3]string{"herdr", "dev", "w7"} {
-		t.Fatalf("bridged = %#v, want the created workspace ID", proxy.bridged)
+	if proxy.kind != string(KindHerdr) || proxy.opened != [2]string{"dev", "w7"} {
+		t.Fatalf("proxy kind = %q opened = %#v, want the created workspace ID", proxy.kind, proxy.opened)
 	}
 }
 
 func TestOrchestratorNewFallsBackToTheLabelWhenCreateReportsNoID(t *testing.T) {
-	proxy := &recordingKindProxy{}
+	proxy := &recordingMachineProxy{}
 	runner := machineRunnerFunc(func(context.Context, string, ...string) ([]byte, error) { return nil, nil })
 	orchestrator := NewOrchestrator(runner, ListingConfig{Backend: backend.Tmux}, OperationPolicy{Proxy: proxy})
 	if err := orchestrator.New(context.Background(), MachineResult{Machine: "dev", Kind: KindHerdr}, "api"); err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if proxy.bridged != [3]string{"herdr", "dev", "api"} {
-		t.Fatalf("bridged = %#v, want the requested label as the fallback target", proxy.bridged)
+	if proxy.kind != string(KindHerdr) || proxy.opened != [2]string{"dev", "api"} {
+		t.Fatalf("proxy kind = %q opened = %#v, want the requested label as the fallback target", proxy.kind, proxy.opened)
 	}
 }
 
 func TestOrchestratorFocusAgentBridgesToTheWorkspaceID(t *testing.T) {
 	runner := &machineRunner{}
-	proxy := &recordingKindProxy{}
+	proxy := &recordingMachineProxy{}
 	orchestrator := NewOrchestrator(runner, ListingConfig{Backend: backend.Tmux}, OperationPolicy{Proxy: proxy})
 	agent := capabilities.Agent{PaneID: "w2:api", Container: "api", ContainerID: "w2"}
 	if err := orchestrator.FocusAgent(context.Background(), MachineResult{Machine: "dev", Kind: KindHerdr}, agent); err != nil {
 		t.Fatalf("FocusAgent() error = %v", err)
 	}
-	if proxy.bridged != [3]string{"herdr", "dev", "w2"} {
-		t.Fatalf("bridged = %#v, want the workspace ID rather than its label", proxy.bridged)
+	if proxy.kind != string(KindHerdr) || proxy.opened != [2]string{"dev", "w2"} {
+		t.Fatalf("proxy kind = %q opened = %#v, want the workspace ID rather than its label", proxy.kind, proxy.opened)
 	}
 	if len(runner.commands) != 1 || !strings.Contains(runner.commands[0], "'agent' 'focus'") {
 		t.Fatalf("commands = %#v, want the remote pane focus before the bridge", runner.commands)

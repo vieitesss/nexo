@@ -60,9 +60,6 @@ func Names(backend any) []string {
 	if _, ok := backend.(RemoteProxy); ok {
 		names = append(names, "RemoteProxy")
 	}
-	if _, ok := backend.(RemoteKindProxy); ok {
-		names = append(names, "RemoteKindProxy")
-	}
 	if _, ok := backend.(RemotePaste); ok {
 		names = append(names, "RemotePaste")
 	}

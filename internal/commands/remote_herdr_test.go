@@ -96,7 +96,7 @@ func TestRemoteOpenHerdrPreservesNativeContainerSpelling(t *testing.T) {
 }
 
 func TestRemoteOpenBridgesTmuxToARemoteHerdrWorkspace(t *testing.T) {
-	proxies := &recordingBridgeProxy{}
+	proxies := &recordingRemoteProxy{}
 	fake := herdrWorkspaceListing(
 		`{"workspace_id":"w1","label":"web"}`,
 		`{"workspace_id":"w2","label":"api"}`,
@@ -112,13 +112,13 @@ func TestRemoteOpenBridgesTmuxToARemoteHerdrWorkspace(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	// The label is a display name; Herdr focuses workspaces by ID.
-	if proxies.bridged != [3]string{"herdr", "gpu1", "w2"} || proxies.opened != [2]string{} {
-		t.Fatalf("bridged = %#v proxy = %#v, want the Herdr proxy for w2", proxies.bridged, proxies.opened)
+	if proxies.kind != "herdr" || proxies.opened != [2]string{"gpu1", "w2"} || proxies.calls != 1 {
+		t.Fatalf("proxy kind = %q target = %#v calls = %d, want the Herdr proxy for w2", proxies.kind, proxies.opened, proxies.calls)
 	}
 }
 
 func TestRemoteOpenAcceptsAWorkspaceIDAsTheBridgeTarget(t *testing.T) {
-	proxies := &recordingBridgeProxy{}
+	proxies := &recordingRemoteProxy{}
 	err := (remoteCommand{}).Run(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"gpu1"}}},
@@ -126,13 +126,13 @@ func TestRemoteOpenAcceptsAWorkspaceIDAsTheBridgeTarget(t *testing.T) {
 		Runner:    herdrWorkspaceListing(`{"workspace_id":"w2","label":"api"}`),
 		Args:      []string{"open", "gpu1/w2"},
 	})
-	if err != nil || proxies.bridged != [3]string{"herdr", "gpu1", "w2"} {
-		t.Fatalf("error = %v bridged = %#v, want w2 by ID", err, proxies.bridged)
+	if err != nil || proxies.kind != "herdr" || proxies.opened != [2]string{"gpu1", "w2"} {
+		t.Fatalf("error = %v proxy kind = %q target = %#v, want w2 by ID", err, proxies.kind, proxies.opened)
 	}
 }
 
 func TestRemoteOpenRejectsAnAmbiguousWorkspaceLabelOnTheBridge(t *testing.T) {
-	proxies := &recordingBridgeProxy{}
+	proxies := &recordingRemoteProxy{}
 	err := (remoteCommand{}).Run(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"gpu1"}}},
@@ -146,13 +146,13 @@ func TestRemoteOpenRejectsAnAmbiguousWorkspaceLabelOnTheBridge(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "ambiguous") || !strings.Contains(err.Error(), "w1, w2") {
 		t.Fatalf("error = %v, want an ambiguity diagnostic naming both workspaces", err)
 	}
-	if proxies.bridged != [3]string{} {
-		t.Fatalf("bridged = %#v, want no proxy for an ambiguous target", proxies.bridged)
+	if proxies.calls != 0 {
+		t.Fatalf("proxy = %#v, want no proxy for an ambiguous target", proxies.opened)
 	}
 }
 
-func TestRemoteOpenNeedsTheBridgeCapabilityFromTheLocalBackend(t *testing.T) {
-	proxies := &recordingRemoteProxy{}
+func TestRemoteOpenReportsABackendThatCannotBridgeHerdr(t *testing.T) {
+	proxies := &nonBridgingProxy{}
 	err := (remoteCommand{}).Run(context.Background(), Invocation{
 		Selection: backend.Selection{Kind: backend.Tmux},
 		Config:    config.Config{Remote: config.RemoteConfig{Machines: []string{"gpu1"}}},
@@ -161,9 +161,9 @@ func TestRemoteOpenNeedsTheBridgeCapabilityFromTheLocalBackend(t *testing.T) {
 		Args:      []string{"open", "gpu1/api"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot attach to a remote Herdr machine") {
-		t.Fatalf("error = %v, want a missing-bridge diagnostic", err)
+		t.Fatalf("error = %v, want the backend's own rejection", err)
 	}
-	if proxies.opened != [2]string{} {
+	if proxies.calls != 0 {
 		t.Fatalf("proxy = %#v, want no tmux proxy for a Herdr remote", proxies.opened)
 	}
 }

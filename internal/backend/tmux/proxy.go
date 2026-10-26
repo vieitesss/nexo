@@ -171,19 +171,18 @@ func (s tmuxProxyStore) ListProxyCandidates(ctx context.Context) ([]proxyidentit
 // Proxy opens or switches to a local proxy container. The remote attachment
 // is the only process in its pane; closing this local session cannot close the
 // remote container.
-func (b *Backend) Proxy(ctx context.Context, machine, container string) error {
-	return b.openProxy(ctx, proxy.RemoteKindTmux, machine, container)
-}
-
-// ProxyRemote opens or switches the machine proxy for a remote machine whose
-// multiplexer is not tmux. The local container is an ordinary tmux proxy
-// session; only its pane attaches to the remote Herdr client, so nexo never
-// drives Herdr from tmux and needs no local Herdr install.
-func (b *Backend) ProxyRemote(ctx context.Context, remoteKind, machine, container string) error {
-	if remoteKind != proxy.RemoteKindHerdr {
-		return fmt.Errorf("tmux remote proxy cannot attach to a %q remote", remoteKind)
+//
+// A remote tmux uses the attach shell nexo has always built. A remote Herdr
+// runs its own client in the same pane, so nexo never drives Herdr from tmux
+// and needs no local Herdr install. Any other remote kind is refused: the local
+// container exists, but nothing nexo can run in it would reach that remote.
+func (b *Backend) Proxy(ctx context.Context, remoteKind, machine, container string) error {
+	switch remoteKind {
+	case proxy.RemoteKindTmux, proxy.RemoteKindHerdr:
+		return b.openProxy(ctx, remoteKind, machine, container)
+	default:
+		return fmt.Errorf("backend %q cannot attach to a remote %q machine", "tmux", remoteKind)
 	}
-	return b.openProxy(ctx, remoteKind, machine, container)
 }
 
 func (b *Backend) openProxy(ctx context.Context, remoteKind, machine, container string) error {
@@ -327,7 +326,6 @@ func proxyBinary() string {
 }
 
 var _ capabilities.RemoteProxy = (*Backend)(nil)
-var _ capabilities.RemoteKindProxy = (*Backend)(nil)
 var _ capabilities.RemotePaste = (*Backend)(nil)
 var _ capabilities.RemoteConfigurator = (*Backend)(nil)
 var _ capabilities.ProxySessionResolver = (*Backend)(nil)

@@ -93,12 +93,18 @@ func TestOrchestratorFocusAgentUsesRemotePaneAndThenOpenPolicy(t *testing.T) {
 	}
 }
 
+// recordingMachineProxy records the machine, container, and remote kind of the
+// one proxy call a test expects. calls proves a path proxied nothing.
 type recordingMachineProxy struct {
+	kind   string
 	opened [2]string
+	calls  int
 }
 
-func (p *recordingMachineProxy) Proxy(_ context.Context, machine, container string) error {
+func (p *recordingMachineProxy) Proxy(_ context.Context, remoteKind, machine, container string) error {
+	p.kind = remoteKind
 	p.opened = [2]string{machine, container}
+	p.calls++
 	return nil
 }
 
