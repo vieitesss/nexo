@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vieitesss/nexo/internal/agentdetect"
 	"github.com/vieitesss/nexo/internal/agentstate"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
@@ -302,56 +303,11 @@ func forEachPane(count int, fn func(index int)) {
 	wg.Wait()
 }
 
-// interpreters are runtimes whose own name never identifies an agent; the
-// harness is the script they execute instead.
-var interpreters = map[string]struct{}{
-	"node":    {},
-	"bun":     {},
-	"deno":    {},
-	"python":  {},
-	"python3": {},
-}
-
 // findHarness returns the allowed harness named by a process's command line.
 // Only the process identity counts: the basename of argv[0], or, when argv[0]
 // is an interpreter, the basename of the script it runs.
 func findHarness(args string, allow map[string]struct{}) string {
-	fields := strings.Fields(args)
-	if len(fields) == 0 {
-		return ""
-	}
-	name := commandBase(fields[0])
-	if _, ok := interpreters[name]; ok {
-		name = scriptBase(fields[1:])
-	}
-	if name == "" {
-		return ""
-	}
-	if _, ok := allow[name]; ok {
-		return name
-	}
-	return ""
-}
-
-func commandBase(field string) string {
-	field = strings.Trim(field, "\"'(),[]{}")
-	if field == "" {
-		return ""
-	}
-	return strings.ToLower(filepath.Base(field))
-}
-
-// scriptBase returns the basename of the first non-flag argument, the script
-// passed to an interpreter.
-func scriptBase(args []string) string {
-	for _, field := range args {
-		field = strings.Trim(field, "\"'(),[]{}")
-		if field == "" || strings.HasPrefix(field, "-") {
-			continue
-		}
-		return strings.ToLower(filepath.Base(field))
-	}
-	return ""
+	return agentdetect.Harness(args, allow)
 }
 
 // processTree is one point-in-time view of the process table. Both BSD/macOS
