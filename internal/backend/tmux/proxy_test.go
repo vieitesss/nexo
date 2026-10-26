@@ -236,6 +236,44 @@ func (c *blockingProxyClock) Sleep(ctx context.Context, _ time.Duration) error {
 	}
 }
 
+// TestBridgeProxyHistoryRemembersTheRemoteKind pins that the machine proxy
+// records which remote multiplexer its pane attaches to, and that a later
+// focus event, which can only see tmux session metadata, does not erase it.
+// M-o needs that kind to recreate a Herdr bridge instead of a tmux proxy.
+func TestBridgeProxyHistoryRemembersTheRemoteKind(t *testing.T) {
+	t.Setenv("TMUX_PANE", "%2")
+	stateDir := t.TempDir()
+	socket := "/tmp/tmux-1000/default"
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"list-sessions -F #{session_id}\t#{@nexo-proxy}":                                          []byte("$1\trpi\n"),
+		"display-message -p #{socket_path}":                                                       []byte(socket + "\n"),
+		"display-message -p -t $1 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}": []byte("$1\trpi\trpi\t" + socket + "\n"),
+		"display-message -p -t %2 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}": []byte("$1\trpi\trpi\t" + socket + "\n"),
+	}}
+	backend := New(runner, true)
+	backend.usageStateDir = stateDir
+	backend.ConfigureRemoteConfig(config.RemoteConfig{Machines: []string{"rpi"}}, "")
+	if err := backend.Proxy(context.Background(), proxy.RemoteKindHerdr, "rpi", ""); err != nil {
+		t.Fatalf("Proxy() error = %v", err)
+	}
+	// Focusing the proxy pane re-records the identity from session metadata.
+	if err := backend.RecordFocusEvent(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	fresh := New(runner, true)
+	fresh.usageStateDir = stateDir
+	entries, err := fresh.RecentContainers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %#v, want one proxy identity", entries)
+	}
+	if entry := entries[0]; !entry.Proxy || entry.Machine != "rpi" || entry.RemoteKind != "herdr" {
+		t.Fatalf("proxy history = %#v, want rpi proxy with the herdr remote kind", entry)
+	}
+}
+
 func TestProxyHistorySurvivesReconnectWithChangedNativeID(t *testing.T) {
 	t.Setenv("TMUX_PANE", "%2")
 	stateDir := t.TempDir()

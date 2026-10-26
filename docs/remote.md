@@ -182,13 +182,15 @@ When the remote server is not running, or has no workspaces, the pane prints
 on MACHINE — …`) and creates nothing. Detaching with `prefix+q` closes only
 the local proxy, exactly as for a tmux remote.
 
-`nexo remote previous`/M-o never lists remotes, so it cannot tell a Herdr
-machine from a tmux one: for a machine without a proxy yet it creates a
-tmux-mode proxy, whose pane then reports that the machine has no tmux
-sessions. Open the machine once with `nexo remote open MACHINE/WORKSPACE`
-before relying on M-o. For the same reason a proxy keeps the mode it was
-created with: if a machine starts running a Herdr server later, close its
-proxy with `nexo remote close MACHINE` and open it again.
+`nexo remote previous`/M-o never lists remotes, so it recreates the machine
+proxy with the mode recorded for it when it was opened: after detaching from a
+Herdr bridge, M-o reopens the Herdr bridge. A machine with no proxy history
+yet still gets a tmux-mode proxy, whose pane reports that the machine has no
+tmux sessions; open it once with `nexo remote open MACHINE/WORKSPACE` after
+the machine switches to Herdr. A proxy also keeps the mode it was created
+with: if a machine starts running a Herdr server later, close its proxy with
+`nexo remote close MACHINE` and open it again. History entries written before
+nexo recorded the mode read as tmux.
 
 ## tmux remotes from Herdr
 

@@ -25,6 +25,10 @@ type Entry struct {
 	Name    string `json:"name,omitempty"`
 	Machine string `json:"machine"`
 	Proxy   bool   `json:"proxy,omitempty"`
+	// RemoteKind is the multiplexer a machine proxy's pane attaches to. It is
+	// empty for local entries and for entries written before nexo recorded it;
+	// readers treat an empty kind as tmux.
+	RemoteKind string `json:"remote_kind,omitempty"`
 }
 
 type document struct {
@@ -99,6 +103,7 @@ func (s Store) Record(entry Entry) error {
 	if err != nil {
 		return err
 	}
+	entry = keepKnownRemoteKind(entry, doc.Entries)
 	if len(doc.Entries) > 0 && doc.Entries[0] == entry {
 		return nil
 	}
@@ -121,6 +126,23 @@ func (s Store) Entries() ([]Entry, error) {
 		return nil, err
 	}
 	return append([]Entry(nil), doc.Entries...), nil
+}
+
+// keepKnownRemoteKind keeps the kind of a machine proxy that is recorded
+// again without one. Focus events re-record proxies from multiplexer metadata,
+// which cannot say which remote multiplexer the pane attaches to, and a proxy
+// cannot change its kind without being recreated.
+func keepKnownRemoteKind(entry Entry, entries []Entry) Entry {
+	if !entry.Proxy || entry.RemoteKind != "" {
+		return entry
+	}
+	for _, current := range entries {
+		if sameContainer(current, entry) && current.RemoteKind != "" {
+			entry.RemoteKind = current.RemoteKind
+			return entry
+		}
+	}
+	return entry
 }
 
 func sameContainer(a, b Entry) bool {

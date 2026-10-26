@@ -60,9 +60,14 @@ func runRemotePrevious(ctx context.Context, invocation Invocation) error {
 		if proxyidentity.NormalizeMachineName(entry.Machine) == current || !configured.IsMachineConfigured(entry.Machine) {
 			continue
 		}
-		// M-o never lists remotes, so it cannot know the machine's kind: it keeps
-		// creating the tmux proxy it always has. `remote open` detects the kind.
-		return proxier.Proxy(ctx, proxy.RemoteKindTmux, entry.Machine, "")
+		// M-o never lists remotes, so it recreates the proxy with the kind the
+		// history recorded. Entries written before that field existed were all
+		// tmux proxies.
+		remoteKind := entry.RemoteKind
+		if remoteKind == "" {
+			remoteKind = proxy.RemoteKindTmux
+		}
+		return proxier.Proxy(ctx, remoteKind, entry.Machine, "")
 	}
 	return reportNothingEligible(ctx, invocation, "no previous container on another machine")
 }
