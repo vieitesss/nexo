@@ -52,6 +52,31 @@ func TestOpenCommandOpensOnlyCurrentCandidate(t *testing.T) {
 	}
 }
 
+func TestParseOpenArgsAcceptsTheNeutralContainerIDAndItsAlias(t *testing.T) {
+	for _, args := range [][]string{
+		{"/tmp/app", "--container-id", "session:1"},
+		{"/tmp/app", "--container-id=session:1"},
+		{"/tmp/app", "--workspace-id=session:1"},
+		{"/tmp/app", "--workspace-id", "session:1"},
+	} {
+		parsed, err := parseOpenArgs(args)
+		if err != nil {
+			t.Fatalf("parseOpenArgs(%v) error = %v", args, err)
+		}
+		if parsed.Options.ContainerID != "session:1" {
+			t.Fatalf("parseOpenArgs(%v) container = %q, want session:1", args, parsed.Options.ContainerID)
+		}
+	}
+	for _, args := range [][]string{
+		{"/tmp/app", "--container-id", "a", "--workspace-id", "b"},
+		{"/tmp/app", "--container-id="},
+	} {
+		if _, err := parseOpenArgs(args); err == nil {
+			t.Fatalf("parseOpenArgs(%v) error = nil", args)
+		}
+	}
+}
+
 func TestOpenCommandRejectsNonCandidate(t *testing.T) {
 	root := t.TempDir()
 	candidate := filepath.Join(root, "app")

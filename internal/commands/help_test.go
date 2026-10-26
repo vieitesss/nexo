@@ -61,6 +61,10 @@ func TestEveryParsedFlagIsDocumented(t *testing.T) {
 			_, err := parseOpenArgs([]string{"--no-focus", "path"})
 			return err
 		}},
+		{path: "open", flag: "--container-id", parse: func() error {
+			_, err := parseOpenArgs([]string{"--container-id", "id", "path"})
+			return err
+		}},
 		{path: "open", flag: "--workspace-id", parse: func() error {
 			_, err := parseOpenArgs([]string{"--workspace-id", "id", "path"})
 			return err

@@ -27,7 +27,7 @@ func init() {
 
 func (openCommand) Name() string { return "open" }
 func (openCommand) Help() Help {
-	return Help{Summary: "Open a discovered project candidate.", Usage: "nexo open [flags] PATH", Flags: []FlagHelp{{Long: "--no-focus", Description: "Create or reuse the container without switching to it."}, {Long: "--workspace-id", Value: "ID", Description: "Use a specific Herdr workspace."}}, Examples: []string{"nexo open ~/src/api", "nexo open --no-focus ~/src/api"}}
+	return Help{Summary: "Open a discovered project candidate.", Usage: "nexo open [flags] PATH", Flags: []FlagHelp{{Long: "--no-focus", Description: "Create or reuse the container without switching to it."}, {Long: "--container-id", Value: "ID", Description: "Use a specific backend container: ReX session or Herdr workspace."}, {Long: "--workspace-id", Value: "ID", Description: "Alias of --container-id."}}, Examples: []string{"nexo open ~/src/api", "nexo open --no-focus ~/src/api"}}
 }
 
 func (openCommand) Run(ctx context.Context, invocation Invocation) error {
@@ -103,25 +103,47 @@ func writeOpenedContainer(invocation Invocation, container capabilities.OpenedCo
 	return err
 }
 
+// containerIDFlags name the backend-neutral container selector and its
+// historical workspace alias.
+var containerIDFlags = []string{"--container-id", "--workspace-id"}
+
+func isContainerIDFlag(arg string) bool {
+	for _, flag := range containerIDFlags {
+		if arg == flag || strings.HasPrefix(arg, flag+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+// flagValue returns the inline value of --flag=value, or arg itself when the
+// value is a separate argument.
+func flagValue(arg string) string {
+	if _, value, ok := strings.Cut(arg, "="); ok {
+		return value
+	}
+	return arg
+}
+
 func parseOpenArgs(args []string) (openArgs, error) {
 	var parsed openArgs
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
-		case arg == "--workspace-id" || strings.HasPrefix(arg, "--workspace-id="):
+		case isContainerIDFlag(arg):
 			if parsed.Options.ContainerID != "" {
-				return openArgs{}, errors.New("--workspace-id may be provided only once")
+				return openArgs{}, errors.New("--container-id may be provided only once")
 			}
-			value := strings.TrimPrefix(arg, "--workspace-id=")
+			value := flagValue(arg)
 			if value == arg {
 				if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
-					return openArgs{}, errors.New("--workspace-id requires a value")
+					return openArgs{}, errors.New("--container-id requires a value")
 				}
 				i++
 				value = args[i]
 			}
 			if value == "" {
-				return openArgs{}, errors.New("--workspace-id requires a value")
+				return openArgs{}, errors.New("--container-id requires a value")
 			}
 			parsed.Options.ContainerID = value
 		case arg == "--no-focus":

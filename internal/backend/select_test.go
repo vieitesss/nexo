@@ -105,6 +105,10 @@ func TestResolveReportsCompleteBackendCapabilityLists(t *testing.T) {
 			"CurrentContainer", "CurrentProxyMachine", "FocusEventRecorder", "MessageDisplayer", "Notifier", "PaneFocuser",
 			"ProjectOpener", "ProjectUseChecker", "RemotePaste", "RemoteProxy", "ScreenReader", "WorktreeCreator", "WorktreeExtractor",
 		}},
+		{name: "rex", want: []string{
+			"ContainerHistory", "ContainerKiller", "ContainerLister", "ContainerOpener", "ContainerRenamer",
+			"CurrentContainer", "ProjectOpener", "ProjectUseChecker", "WorktreeCreator", "WorktreeExtractor",
+		}},
 		{name: "herdr", want: []string{
 			"AgentSource", "ContainerHistory", "ContainerKiller", "ContainerLister", "ContainerOpener", "ContainerRenamer",
 			"CurrentContainer", "CurrentProxyMachine", "FocusEventRecorder", "PaneFocuser", "ProjectOpener", "ProjectUseChecker",
