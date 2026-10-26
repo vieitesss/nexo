@@ -25,7 +25,7 @@ func (setupCommand) Help() Help {
 		Usage:       "nexo setup [flags]",
 		Description: "Probes the local machine and selected SSH remotes, prints one complete plan, and applies it after confirmation. Use --check to inspect readiness without changing anything.",
 		Flags: []FlagHelp{
-			{Long: "--backend", Value: "auto|tmux|herdr", Description: "Choose the multiplexer backend."},
+			{Long: "--backend", Value: "auto|tmux|herdr|rex", Description: "Choose the multiplexer backend."},
 			{Long: "--check", Description: "Print local and remote readiness checks without changing anything."},
 			{Long: "--dry-run", Description: "Print the setup plan without changing anything."},
 			{Long: "--fix-locale", Description: "Repair a remote non-UTF-8 locale when a UTF-8 locale is available."},

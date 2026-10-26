@@ -234,6 +234,122 @@ func HerdrBlock(tuiKey, agentsKey string) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// RexBlock defines the two nexo actions and only the bindings the user chose.
+// The actions are always defined so a blank choice stays opt-in without
+// forcing the user to write Lua. Each action launches the same binary in a
+// floating layer and passes the originating client through REX_CLIENT, so a
+// project picked in the popup focuses the app the action came from.
+func RexBlock(nexoPath, tuiKey, agentsKey string) string {
+	var bindings strings.Builder
+	if strings.TrimSpace(tuiKey) != "" {
+		fmt.Fprintf(&bindings, "rex.bind(%s, \"nexo_tui\")\n", strconv.Quote(strings.TrimSpace(tuiKey)))
+	}
+	if strings.TrimSpace(agentsKey) != "" {
+		fmt.Fprintf(&bindings, "rex.bind(%s, \"nexo_agents\")\n", strconv.Quote(strings.TrimSpace(agentsKey)))
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `local nexo_bin = %s
+local nexo_terminal = "com.superlogical.terminal"
+
+-- nexo runs in a floating layer and closes it when the TUI exits.
+local function nexo_launch(ctx, args, bounds)
+  local argv = { "/usr/bin/env", "REX_CLIENT=" .. tostring(ctx.client_id or ""), nexo_bin, "--backend=rex", "tui" }
+  for _, arg in ipairs(args) do
+    table.insert(argv, arg)
+  end
+  local window_id
+  if ctx.block_id then
+    local described = rex.session.describe_block{ block_id = ctx.block_id }
+    window_id = described and described.block and described.block.window_id
+  end
+  local request = {
+    bounds = bounds,
+    focus = true,
+    layout = rex.layout.block{
+      flavor = nexo_terminal .. ".shell",
+      options = {
+        command = argv,
+        login = false,
+        shell = "none",
+        exit = { on_completion = true, quick_exit_threshold_ms = 0 },
+      },
+    },
+  }
+  if window_id then
+    request.window_id = window_id
+  else
+    request.session_id = ctx.session_id
+  end
+  local layer, err = rex.session.new_layer(request)
+  if err ~= nil then error(err, 0) end
+  -- Floating layers have no background of their own, so give this one the
+  -- app background instead of letting the panes behind show through.
+  local style = rex.exec({ "defaults", "read", "-g", "AppleInterfaceStyle" })
+  local dark = style and style.stdout and style.stdout:find("Dark") ~= nil
+  rex.block.call(nexo_terminal, "set_theme", {
+    block_id = layer.block_ids[1],
+    background = dark and "#0d1117" or "#ffffff",
+    foreground = dark and "#e6edf3" or "#1f2328",
+  })
+  return layer
+end
+
+rex.action({
+  name = "nexo_tui",
+  title = "nexo TUI",
+  run = function(ctx)
+    return nexo_launch(ctx, {}, { 0, 0, 1, 1 })
+  end,
+})
+
+rex.action({
+  name = "nexo_agents",
+  title = "nexo agents",
+  run = function(ctx)
+    return nexo_launch(ctx, { "agents" }, { 0.25, 0.25, 0.5, 0.5 })
+  end,
+})
+`, strconv.Quote(nexoPath))
+	if bindings.Len() > 0 {
+		b.WriteString("\n")
+		b.WriteString(bindings.String())
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// rexConfigPath is Rex's init.lua: $XDG_CONFIG_HOME/rex/init.lua when set,
+// else ~/.config/rex/init.lua.
+func rexConfigPath(home string) string {
+	if dir := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); dir != "" {
+		return filepath.Join(dir, "rex", "init.lua")
+	}
+	return filepath.Join(home, ".config", "rex", "init.lua")
+}
+
+// nexoPath is the absolute binary the Rex action launches, so the popup does
+// not depend on the app's PATH.
+func nexoPath() string {
+	path, err := os.Executable()
+	if err != nil || strings.TrimSpace(path) == "" {
+		return "nexo"
+	}
+	return path
+}
+
+// validateRexConfig asks Rex's own parser to load the init.lua that setup just
+// wrote. It runs after ApplyChange, so a rejected block still leaves the
+// user's backup and the original file is not silently rewritten.
+func validateRexConfig(ctx context.Context, commandRunner runner.CommandRunner, path string) error {
+	out, err := commandRunner.Run(ctx, "rex", "--autostart=false", "config", "check", path)
+	if err == nil {
+		return nil
+	}
+	if detail := strings.TrimSpace(string(out)); detail != "" {
+		return fmt.Errorf("validate Rex config %s: %w\n%s", path, runner.Detail(err), detail)
+	}
+	return fmt.Errorf("validate Rex config %s: %w", path, runner.Detail(err))
+}
+
 const tmuxReadinessScript = `printf 'watcher=%s\n' "$(pgrep -f '[n]exo.*agents.*watch' >/dev/null 2>&1 && echo yes || echo no)"
 printf 'tmux_running=%s\n' "$(tmux list-sessions >/dev/null 2>&1 && echo yes || echo no)"
 printf 'tmux_focus=%s\n' "$(tmux show-options -gv focus-events 2>/dev/null)"
@@ -360,10 +476,7 @@ func chooseBackend(ctx context.Context, in Input, options Options) (string, stri
 			reason = "detected in this terminal"
 		}
 	}
-	if selected == "rex" {
-		return "", "", errors.New("nexo setup does not integrate the rex backend yet: set backend = \"rex\" in the config file yourself and check it with nexo backend")
-	}
-	if selected == "tmux" || selected == "herdr" {
+	if selected == "tmux" || selected == "herdr" || selected == "rex" {
 		return selected, reason, nil
 	}
 	var tmuxOK, herdrOK bool
@@ -387,7 +500,7 @@ func chooseBackend(ctx context.Context, in Input, options Options) (string, stri
 	case options.Check:
 		return "none", "", nil
 	default:
-		return "", "", errors.New("no tmux or Herdr installation found; install one or pass --backend")
+		return "", "", errors.New("no tmux or Herdr installation found; install one, or pass --backend tmux|herdr|rex")
 	}
 }
 
@@ -845,8 +958,8 @@ func Run(ctx context.Context, in Input, options Options) error {
 		if len(options.Machines) > 0 {
 			hosts = append([]string(nil), machines...)
 		}
-		bindings := make(map[string]tui.SetupBindings, 2)
-		for _, name := range []string{"tmux", "herdr"} {
+		bindings := make(map[string]tui.SetupBindings, 3)
+		for _, name := range []string{"tmux", "herdr", "rex"} {
 			tuiKey, agentsKey := existingBindings(in.Home, name)
 			bindings[name] = tui.SetupBindings{TUIKey: tuiKey, AgentsKey: agentsKey}
 		}
@@ -865,7 +978,7 @@ func Run(ctx context.Context, in Input, options Options) error {
 	if err := validateBindings(backendName, tuiKey, agentsKey); err != nil {
 		return err
 	}
-	if backendName != "tmux" && backendName != "herdr" {
+	if backendName != "tmux" && backendName != "herdr" && backendName != "rex" {
 		return fmt.Errorf("invalid setup backend %q", backendName)
 	}
 	if backendName == "herdr" {
@@ -893,7 +1006,9 @@ func Run(ctx context.Context, in Input, options Options) error {
 		return fmt.Errorf("plan config: %w", err)
 	}
 	changes := []Change{}
-	if backendName == "tmux" {
+	rexChanged := false
+	switch backendName {
+	case "tmux":
 		tpm := false
 		if _, statErr := os.Stat(filepath.Join(in.Home, ".tmux", "plugins", "tpm")); statErr == nil {
 			tpm = true
@@ -905,7 +1020,16 @@ func Run(ctx context.Context, in Input, options Options) error {
 		if tmuxChange.Changed() {
 			changes = append(changes, tmuxChange)
 		}
-	} else {
+	case "rex":
+		rexChange, changeErr := ReadChangeBetween("local", rexConfigPath(in.Home), RexBlock(nexoPath(), tuiKey, agentsKey), LuaManagedStart, LuaManagedEnd)
+		if changeErr != nil {
+			return changeErr
+		}
+		if rexChange.Changed() {
+			changes = append(changes, rexChange)
+			rexChanged = true
+		}
+	default:
 		herdrPath := filepath.Join(in.Home, ".config", "herdr", "config.toml")
 		herdrChange, changeErr := ReadChange("local", herdrPath, HerdrBlock(tuiKey, agentsKey))
 		if changeErr != nil {
@@ -973,9 +1097,14 @@ func Run(ctx context.Context, in Input, options Options) error {
 	}
 	localRepair := localRepairNeeded(ctx, in, backendName)
 	if len(changes) > 0 || localRepair {
-		if backendName == "tmux" {
+		switch backendName {
+		case "tmux":
 			writeLine(in.Stdout, "local: action reload tmux and initialize watcher\n")
-		} else {
+		case "rex":
+			if len(changes) > 0 {
+				writeLine(in.Stdout, "local: action run `rex config reload`\n")
+			}
+		default:
 			if localRepair {
 				writeLine(in.Stdout, "local: action install Herdr plugin\n")
 			}
@@ -1012,6 +1141,11 @@ func Run(ctx context.Context, in Input, options Options) error {
 	if !localChanged {
 		writeLine(in.Stdout, "local: ok (no changes)\n")
 	}
+	if rexChanged {
+		if err := validateRexConfig(ctx, in.Runner, rexConfigPath(in.Home)); err != nil {
+			return err
+		}
+	}
 	if localChanged && backendName == "tmux" {
 		if in.LocalTmuxInit != nil {
 			if err := in.LocalTmuxInit(ctx); err != nil {
@@ -1021,7 +1155,7 @@ func Run(ctx context.Context, in Input, options Options) error {
 		if _, err := in.Runner.Run(ctx, "tmux", "source-file", filepath.Join(in.Home, ".tmux.conf")); err != nil {
 			return fmt.Errorf("reload tmux: %w", err)
 		}
-	} else if localChanged {
+	} else if localChanged && backendName == "herdr" {
 		pluginOutput, pluginErr := in.Runner.Run(ctx, "herdr", "plugin", "list")
 		if pluginErr != nil || !pluginInstalled(string(pluginOutput)) {
 			if _, err := in.Runner.Run(ctx, "herdr", "plugin", "install", "vieitesss/nexo"); err != nil {
@@ -1305,6 +1439,11 @@ func pathsOrDefaults(paths, configured []string, home string) []string {
 }
 
 func localRepairNeeded(ctx context.Context, in Input, backendName string) bool {
+	if backendName == "rex" {
+		// Rex has no watcher or plugin to repair; its focus history is
+		// recorded by nexo itself.
+		return false
+	}
 	if backendName == "herdr" {
 		out, err := in.Runner.Run(ctx, "herdr", "plugin", "list")
 		return err != nil || !pluginInstalled(string(out))
@@ -1357,11 +1496,25 @@ func bindingConflicts(ctx context.Context, in Input, home, backendName, tuiKey, 
 		}
 		return tmuxBindingConflicts(string(out), keys)
 	}
-	out, err := os.ReadFile(filepath.Join(home, ".config", "herdr", "config.toml"))
+	path := filepath.Join(home, ".config", "herdr", "config.toml")
+	if backendName == "rex" {
+		path = rexConfigPath(home)
+	}
+	out, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
 	text := string(out)
+	if backendName == "rex" {
+		text = strings.ReplaceAll(text, managedBodyBetween(text, LuaManagedStart, LuaManagedEnd), "")
+		conflicts := []string{}
+		for _, key := range keys {
+			if rexBindingConflict(text, key) {
+				conflicts = append(conflicts, key)
+			}
+		}
+		return conflicts
+	}
 	text = strings.ReplaceAll(text, managedBody(text), "")
 	conflicts := []string{}
 	for _, key := range keys {
@@ -1370,6 +1523,20 @@ func bindingConflicts(ctx context.Context, in Input, home, backendName, tuiKey, 
 		}
 	}
 	return conflicts
+}
+
+var rexBindPattern = regexp.MustCompile(`rex\.bind\(\s*["']([^"']+)["']`)
+
+// rexBindingConflict finds literal rex.bind calls so a re-run warns before it
+// installs a second binding for a key the user already owns. Bindings built
+// through a helper cannot be resolved statically and are left to Rex.
+func rexBindingConflict(contents, key string) bool {
+	for _, match := range rexBindPattern.FindAllStringSubmatch(contents, -1) {
+		if strings.EqualFold(strings.TrimSpace(match[1]), key) {
+			return true
+		}
+	}
+	return false
 }
 
 // tmuxBindingConflicts reports keys that tmux list-keys already binds in the
@@ -1392,8 +1559,11 @@ func tmuxBindingConflicts(listKeys string, keys []string) []string {
 
 func existingBindings(home, backendName string) (string, string) {
 	path := filepath.Join(home, ".config", "herdr", "config.toml")
-	if backendName == "tmux" {
+	switch backendName {
+	case "tmux":
 		path = filepath.Join(home, ".tmux.conf")
+	case "rex":
+		path = rexConfigPath(home)
 	}
 	contents, err := os.ReadFile(path)
 	if err != nil {
@@ -1405,6 +1575,9 @@ func existingBindings(home, backendName string) (string, string) {
 // bindingsFromContents identifies bindings by their nexo action, not by their
 // position. This preserves an agents-only block and both bindings on reruns.
 func bindingsFromContents(contents, backendName string) (string, string) {
+	if backendName == "rex" {
+		return rexBindingsFromContents(contents)
+	}
 	body := managedBody(contents)
 	if backendName == "tmux" {
 		var tuiKey, agentsKey string
@@ -1460,13 +1633,35 @@ func validateBindings(backendName, tuiKey, agentsKey string) error {
 	return nil
 }
 
+// rexBindingsFromContents reads the two action names back out of the Rex
+// managed block, so a partial block keeps its chosen key on a re-run.
+func rexBindingsFromContents(contents string) (string, string) {
+	body := managedBodyBetween(contents, LuaManagedStart, LuaManagedEnd)
+	tuiKey, agentsKey := "", ""
+	for _, match := range rexBindActionPattern.FindAllStringSubmatch(body, -1) {
+		switch match[2] {
+		case "nexo_agents":
+			agentsKey = match[1]
+		case "nexo_tui":
+			tuiKey = match[1]
+		}
+	}
+	return tuiKey, agentsKey
+}
+
+var rexBindActionPattern = regexp.MustCompile(`rex\.bind\(\s*["']([^"']+)["']\s*,\s*["'](nexo_tui|nexo_agents)["']\s*\)`)
+
 func managedBody(contents string) string {
-	start := strings.Index(contents, ManagedStart)
+	return managedBodyBetween(contents, ManagedStart, ManagedEnd)
+}
+
+func managedBodyBetween(contents, startMarker, endMarker string) string {
+	start := strings.Index(contents, startMarker)
 	if start < 0 {
 		return ""
 	}
-	start += len(ManagedStart)
-	end := strings.Index(contents[start:], ManagedEnd)
+	start += len(startMarker)
+	end := strings.Index(contents[start:], endMarker)
 	if end < 0 {
 		return ""
 	}
@@ -1511,14 +1706,27 @@ func runCheck(ctx context.Context, in Input, options Options, backendName string
 	localeOut, localeErr := in.Runner.Run(ctx, "sh", "-c", "locale charmap")
 	localeOK := localeErr == nil && isUTF8Locale(string(localeOut))
 	focusOK, initOK, watcherOK := false, false, false
-	if backendName == "tmux" {
+	switch backendName {
+	case "tmux":
 		readiness, readinessErr := probeTmuxReadiness(ctx, in.Runner, "", "")
 		focusOK = readinessErr == nil && readiness.TmuxFocusOK
 		contents, err := os.ReadFile(filepath.Join(in.Home, ".tmux.conf"))
 		configLineOK := err == nil && (activeTmuxConfigLine(string(contents), "nexo tmux init") || activeTmuxConfigLine(string(contents), "@plugin 'vieitesss/nexo'") || activeTmuxConfigLine(string(contents), `@plugin "vieitesss/nexo"`))
 		initOK = readinessErr == nil && configLineOK && readiness.TmuxHooksOK
 		watcherOK = readinessErr == nil && readiness.WatcherRunning
-	} else {
+	case "rex":
+		rexPath := rexConfigPath(in.Home)
+		contents, err := os.ReadFile(rexPath)
+		initOK = err == nil && managedBodyBetween(string(contents), LuaManagedStart, LuaManagedEnd) != ""
+		if initOK {
+			initOK = validateRexConfig(ctx, in.Runner, rexPath) == nil
+		}
+		if _, err := in.Runner.Run(ctx, "rex", "--autostart=false", "client", "list", "--json"); err == nil {
+			focusOK = true
+		}
+		// Rex records focus history itself; there is no watcher to check.
+		watcherOK = true
+	default:
 		pluginOut, pluginErr := in.Runner.Run(ctx, "herdr", "plugin", "list")
 		statusOut, statusErr := in.Runner.Run(ctx, "herdr", "status", "server", "--json")
 		initOK = pluginErr == nil && pluginInstalled(string(pluginOut))

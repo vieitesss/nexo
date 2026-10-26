@@ -85,7 +85,7 @@ func PromptSetup(ctx context.Context, input io.Reader, output io.Writer, default
 			{Input: "~/work/*", Meaning: "one level deeper: ~/work/acme/api, ~/work/acme/web"},
 		}, Fields: []formField{{ID: "paths", Default: abbreviatePathList(strings.Join(defaults.Paths, ", ")), Kind: formText, Placeholder: "~/src, ~/work", AbbreviateHome: true}}},
 		{ID: "notify", Title: "Agents", Prompt: "Send a desktop notification when an agent stops?", Fields: []formField{{ID: "notify", Default: boolLabel(defaults.Notify), Kind: formToggle}}},
-		{ID: "bindings", Title: "Key bindings", Prompt: bindingPrompt(), Examples: bindingExamples(defaults.Backend), Fields: []formField{{ID: "tui-key", Label: "TUI key", Default: initialBindings.TUIKey, Kind: formText, Placeholder: tuiPlaceholder, Validate: setupBindingValidator(defaults.Backend)}, {ID: "agents-key", Label: "agents key", Default: initialBindings.AgentsKey, Kind: formText, Placeholder: agentsPlaceholder, Validate: setupBindingValidator(defaults.Backend)}}},
+		{ID: "bindings", Title: "Key bindings", Prompt: bindingPrompt(defaults.Backend), Examples: bindingExamples(defaults.Backend), Fields: []formField{{ID: "tui-key", Label: "TUI key", Default: initialBindings.TUIKey, Kind: formText, Placeholder: tuiPlaceholder, Validate: setupBindingValidator(defaults.Backend)}, {ID: "agents-key", Label: "agents key", Default: initialBindings.AgentsKey, Kind: formText, Placeholder: agentsPlaceholder, Validate: setupBindingValidator(defaults.Backend)}}},
 	}
 	if !defaults.LocalOnly {
 		selected := make([]string, 0, len(defaults.SelectedHosts))
@@ -248,8 +248,8 @@ func validateSetupForm(f *stagedForm, defaultBackend string) formValidation {
 			// A choice has nothing to edit, so its problem is reported once as
 			// the stage error rather than under the control as well.
 			case field.ID == "backend":
-				if (backend != "tmux" && backend != "herdr") && result.Error == "" {
-					result.Error = "choose tmux or herdr"
+				if (backend != "tmux" && backend != "herdr" && backend != "rex") && result.Error == "" {
+					result.Error = "choose tmux, herdr or rex"
 				}
 			case field.ID == "tui-key" || field.ID == "agents-key":
 				// A backend change does not edit the input, so revalidate here and
@@ -283,13 +283,22 @@ func appendUnique(values []string, value string) []string {
 	return append(values, value)
 }
 
-func bindingPrompt() string {
+func bindingPrompt(backend string) string {
+	if strings.EqualFold(strings.TrimSpace(backend), "rex") {
+		return "Optional. A Rex binding is a key sequence such as ctrl+space>o. Leave a key blank to bind it yourself."
+	}
 	return "Optional. Either key can be pressed directly or after the prefix. Leave a key blank to bind it yourself."
 }
 
 // bindingExamples spell both kinds of binding the way the backend names keys.
 // prefix+ means the same thing for tmux and Herdr.
 func bindingExamples(backend string) []formExample {
+	if strings.EqualFold(strings.TrimSpace(backend), "rex") {
+		return []formExample{
+			{Input: "ctrl+space>o", Meaning: "Ctrl-Space, then o"},
+			{Input: "ctrl+alt+g", Meaning: "Ctrl-Alt-g, no sequence"},
+		}
+	}
 	if strings.EqualFold(strings.TrimSpace(backend), "tmux") {
 		return []formExample{
 			{Input: "C-s", Meaning: "Ctrl-s, no prefix (bare keys need C- or M-)"},
@@ -303,10 +312,14 @@ func bindingExamples(backend string) []formExample {
 }
 
 func bindingPlaceholders(backend string) (tuiKey, agentsKey string) {
-	if strings.EqualFold(strings.TrimSpace(backend), "tmux") {
+	switch strings.ToLower(strings.TrimSpace(backend)) {
+	case "tmux":
 		return "C-s", "prefix+a"
+	case "rex":
+		return "ctrl+space>o", "ctrl+space>a"
+	default:
+		return "ctrl+s", "prefix+a"
 	}
-	return "ctrl+s", "prefix+a"
 }
 
 func (m setupPromptModel) refreshBindingPresentation() {

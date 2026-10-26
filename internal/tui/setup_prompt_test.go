@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/shell"
 )
 
@@ -256,5 +257,37 @@ func TestBindingSwitchKeepsATypedKey(t *testing.T) {
 	}
 	if got := values.String("agents-key"); got != "" {
 		t.Fatalf("agents key = %q, want herdr's (unset)", got)
+	}
+}
+
+func TestRexSetupPromptUsesRexKeyGrammar(t *testing.T) {
+	tuiKey, agentsKey := bindingPlaceholders("rex")
+	for _, key := range []string{tuiKey, agentsKey} {
+		if err := config.ValidateBindingKeyForBackend("rex", key); err != nil {
+			t.Fatalf("Rex placeholder %q is invalid: %v", key, err)
+		}
+	}
+	for _, example := range bindingExamples("rex") {
+		if strings.Contains(example.Input, "prefix+") {
+			t.Fatalf("Rex example uses a Herdr binding: %+v", example)
+		}
+	}
+	if !strings.Contains(bindingPrompt("rex"), "ctrl+space>") {
+		t.Fatalf("Rex binding prompt = %q", bindingPrompt("rex"))
+	}
+	form := newStagedForm(context.Background(), []formStage{
+		{ID: "backend", Fields: []formField{{ID: "backend", Kind: formChoice, Options: []string{"tmux", "herdr"}, Default: "rex"}}},
+		{ID: "bindings", Fields: []formField{{ID: "tui-key", Kind: formText, Default: "ctrl+space>o"}, {ID: "agents-key", Kind: formText, Default: "ctrl+space>a"}}},
+	}, nil, nil)
+	if got := validateSetupForm(form, "rex"); got.Error != "" {
+		t.Fatalf("Rex setup form error = %q", got.Error)
+	}
+	bad := newStagedForm(context.Background(), []formStage{
+		{ID: "backend", Fields: []formField{{ID: "backend", Kind: formChoice, Options: []string{"tmux", "herdr"}, Default: "rex"}}},
+		{ID: "bindings", Fields: []formField{{ID: "tui-key", Kind: formText, Default: "prefix+a"}}},
+	}, nil, nil)
+	bad.stage = 1
+	if got := validateSetupForm(bad, "rex"); got.Error == "" {
+		t.Fatal("Rex setup form accepted a Herdr binding")
 	}
 }

@@ -42,19 +42,20 @@ func TestChooseBackendAsksOnlyWhenNothingDecides(t *testing.T) {
 	}
 }
 
-func TestChooseBackendDoesNotSilentlyReplaceRex(t *testing.T) {
+func TestChooseBackendDoesNotReplaceRex(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		in      Input
-		options Options
+		name, reason string
+		in           Input
+		options      Options
 	}{
-		{"config", Input{Runner: installedRunner{"tmux": true}, SelectedBackend: "rex", SelectedSource: "config"}, Options{}},
-		{"flag", Input{Runner: installedRunner{"tmux": true}}, Options{Backend: "rex"}},
+		{"config", "set in config", Input{Runner: installedRunner{"tmux": true}, SelectedBackend: "rex", SelectedSource: "config"}, Options{}},
+		{"flag", "set by --backend", Input{Runner: installedRunner{"tmux": true}}, Options{Backend: "rex"}},
+		{"detected", "detected in this terminal", Input{Runner: installedRunner{"tmux": true}, SelectedBackend: "rex", SelectedSource: "auto-detect"}, Options{}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			backend, _, err := chooseBackend(context.Background(), test.in, test.options)
-			if err == nil || !strings.Contains(err.Error(), "rex") {
-				t.Fatalf("chooseBackend() = %q, %v; want an explicit rex limitation", backend, err)
+			backend, reason, err := chooseBackend(context.Background(), test.in, test.options)
+			if err != nil || backend != "rex" || reason != test.reason {
+				t.Fatalf("chooseBackend() = %q, %q, %v; want rex, %q", backend, reason, err, test.reason)
 			}
 		})
 	}

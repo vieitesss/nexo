@@ -19,11 +19,23 @@ import (
 const (
 	ManagedStart = "# >>> nexo >>>"
 	ManagedEnd   = "# <<< nexo <<<"
+
+	// LuaManagedStart and LuaManagedEnd delimit the same block in Lua files
+	// such as Rex's init.lua, where # is not a comment leader.
+	LuaManagedStart = "-- >>> nexo >>>"
+	LuaManagedEnd   = "-- <<< nexo <<<"
 )
 
 // ReplaceManagedBlock replaces the first nexo block in place and removes later
 // duplicates. Bytes outside marker lines are not normalized or moved.
 func ReplaceManagedBlock(contents, body string) (string, bool, error) {
+	return ReplaceManagedBlockBetween(contents, body, ManagedStart, ManagedEnd)
+}
+
+// ReplaceManagedBlockBetween is ReplaceManagedBlock with explicit comment
+// markers. Rex hands back the same in-place, duplicate-repairing behavior in
+// Lua comment syntax.
+func ReplaceManagedBlockBetween(contents, body, startMarker, endMarker string) (string, bool, error) {
 	body = strings.Trim(body, "\r\n")
 	type block struct{ start, end int }
 	blocks := []block{}
@@ -32,14 +44,14 @@ func ReplaceManagedBlock(contents, body string) (string, bool, error) {
 	offset := 0
 	for _, line := range strings.SplitAfter(contents, "\n") {
 		text := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"))
-		if text == ManagedStart {
+		if text == startMarker {
 			if inside {
 				return "", false, errors.New("nested nexo managed block")
 			}
 			inside = true
 			start = offset
 		}
-		if text == ManagedEnd {
+		if text == endMarker {
 			if !inside {
 				return "", false, errors.New("nexo managed block has an end without a start")
 			}
@@ -60,18 +72,18 @@ func ReplaceManagedBlock(contents, body string) (string, bool, error) {
 		if len(contents) > 0 && contents[len(contents)-1] != '\n' {
 			separator = "\n"
 		}
-		return contents + separator + ManagedStart + "\n" + body + "\n" + ManagedEnd + "\n", true, nil
+		return contents + separator + startMarker + "\n" + body + "\n" + endMarker + "\n", true, nil
 	}
 	var out strings.Builder
 	cursor := 0
 	for index, current := range blocks {
 		out.WriteString(contents[cursor:current.start])
 		if index == 0 && body != "" {
-			out.WriteString(ManagedStart)
+			out.WriteString(startMarker)
 			out.WriteByte('\n')
 			out.WriteString(body)
 			out.WriteByte('\n')
-			out.WriteString(ManagedEnd)
+			out.WriteString(endMarker)
 			// Preserve the newline convention of the original end marker.
 			if current.end > current.start && contents[current.end-1] == '\n' {
 				out.WriteByte('\n')
@@ -100,12 +112,17 @@ func (c Change) Changed() bool { return !bytes.Equal(c.Before, c.After) }
 
 // ReadChange reads a local file and applies one managed block without writing.
 func ReadChange(machine, path, body string) (Change, error) {
+	return ReadChangeBetween(machine, path, body, ManagedStart, ManagedEnd)
+}
+
+// ReadChangeBetween is ReadChange for a file whose block uses custom markers.
+func ReadChangeBetween(machine, path, body, startMarker, endMarker string) (Change, error) {
 	before, err := os.ReadFile(path)
 	existed := err == nil
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Change{}, fmt.Errorf("read %s: %w", path, err)
 	}
-	after, _, err := ReplaceManagedBlock(string(before), body)
+	after, _, err := ReplaceManagedBlockBetween(string(before), body, startMarker, endMarker)
 	if err != nil {
 		return Change{}, fmt.Errorf("prepare %s: %w", path, err)
 	}
