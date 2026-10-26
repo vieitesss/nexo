@@ -219,6 +219,12 @@ func (b *Backend) openProxy(ctx context.Context, remoteKind, machine, container 
 					}
 					return fmt.Errorf("no session %s on %s", container, machine)
 				}
+				if remoteKind == proxy.RemoteKindHerdr {
+					// The Herdr switch runs on the server and the pane's own
+					// reconnect loop owns liveness, so a failed connection is
+					// only reported: respawning would kill a healthy client.
+					return switchErr
+				}
 				command, commandErr := attachCommand()
 				if commandErr != nil {
 					return commandErr
@@ -270,6 +276,12 @@ func (b *Backend) openProxy(ctx context.Context, remoteKind, machine, container 
 	}
 	if err != nil {
 		return err
+	}
+	// Record the remote kind so M-o can recreate this proxy the same way. Only
+	// a non-default kind is written: an absent kind already reads as tmux, and
+	// a tmux-only setup keeps its history entry byte-identical.
+	if remoteKind == proxy.RemoteKindTmux {
+		remoteKind = ""
 	}
 	return b.recordTarget(ctx, sessionID, remoteKind)
 }
