@@ -133,11 +133,11 @@ func TestOpenProjectAdoptsTheSessionAlreadyInTheProject(t *testing.T) {
 	if opened.ID != "session:1" || opened.Created || opened.Name != "handmade" {
 		t.Fatalf("opened = %#v, want the adopted session with its native label", opened)
 	}
-	index, err := backend.projectIndex(context.Background())
+	index, err := backend.metadata(context.Background())
 	if err != nil {
-		t.Fatalf("projectIndex() error = %v", err)
+		t.Fatalf("metadata() error = %v", err)
 	}
-	recorded, ok, err := index.lookup(filepath.Clean(project))
+	recorded, ok, err := index.lookupRoot(filepath.Clean(project))
 	if err != nil || !ok || recorded != "session:1" {
 		t.Fatalf("recorded = %q, %v, %v; want the adopted session in metadata", recorded, ok, err)
 	}
@@ -450,11 +450,11 @@ func TestOpenProjectKeepsTheCreatedSessionWhenFocusFails(t *testing.T) {
 			t.Fatalf("commands = %#v, want a plain open to keep the usable session", runner.keys())
 		}
 	}
-	index, err := backend.projectIndex(context.Background())
+	index, err := backend.metadata(context.Background())
 	if err != nil {
-		t.Fatalf("projectIndex() error = %v", err)
+		t.Fatalf("metadata() error = %v", err)
 	}
-	if recorded, ok, err := index.lookup(filepath.Clean(project)); ok || err != nil {
+	if recorded, ok, err := index.lookupRoot(filepath.Clean(project)); ok || err != nil {
 		t.Fatalf("sidecar entry %q points at a session the open did not finish: %v", recorded, err)
 	}
 }

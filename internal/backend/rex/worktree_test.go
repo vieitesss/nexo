@@ -239,11 +239,11 @@ func TestCreateWorktreeRollsBackTheSessionWhenFocusFailsAfterCreation(t *testing
 	if _, gitErr := (runner.ExecRunner{}).Run(context.Background(), "git", "-C", repo, "rev-parse", "--verify", "feature"); gitErr == nil {
 		t.Fatal("branch feature survived rollback, want it deleted")
 	}
-	index, err := backend.projectIndex(context.Background())
+	index, err := backend.metadata(context.Background())
 	if err != nil {
-		t.Fatalf("projectIndex() error = %v", err)
+		t.Fatalf("metadata() error = %v", err)
 	}
-	if recorded, ok, err := index.lookup(filepath.Clean(destination)); ok || err != nil {
+	if recorded, ok, err := index.lookupRoot(filepath.Clean(destination)); ok || err != nil {
 		t.Fatalf("sidecar entry %q survived rollback: %v", recorded, err)
 	}
 }

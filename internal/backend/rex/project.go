@@ -55,7 +55,7 @@ func (b *Backend) openProjectNative(ctx context.Context, path string, options ca
 	if err != nil {
 		return capabilities.OpenedContainer{}, err
 	}
-	index, err := b.projectIndex(ctx)
+	index, err := b.metadata(ctx)
 	if err != nil {
 		return capabilities.OpenedContainer{}, err
 	}
@@ -72,14 +72,14 @@ func (b *Backend) openProjectNative(ctx context.Context, path string, options ca
 	if session, ok, err := b.recentCandidate(ctx, candidates); err != nil {
 		return capabilities.OpenedContainer{}, err
 	} else if ok {
-		return b.finishOpen(ctx, session, path, false, options, func() error { return index.record(root, session.ID) })
+		return b.finishOpen(ctx, session, path, false, options, func() error { return index.recordRoot(root, session.ID) })
 	}
 
 	created, err := b.createSession(ctx, path)
 	if err != nil {
 		return capabilities.OpenedContainer{}, err
 	}
-	return b.finishOpen(ctx, created, path, true, options, func() error { return index.record(root, created.ID) })
+	return b.finishOpen(ctx, created, path, true, options, func() error { return index.recordRoot(root, created.ID) })
 }
 
 // finishOpen focuses a resolved session and then applies its durable project
@@ -102,8 +102,8 @@ func (b *Backend) finishOpen(ctx context.Context, session sessionInfo, path stri
 
 // recordedSession reuses a recorded session only while it still exists. A dead
 // record is stale state, not a reason to fail the open.
-func (b *Backend) recordedSession(index projectIndex, sessions []sessionInfo, root string) (sessionInfo, bool, error) {
-	sessionID, ok, err := index.lookup(root)
+func (b *Backend) recordedSession(index metadataIndex, sessions []sessionInfo, root string) (sessionInfo, bool, error) {
+	sessionID, ok, err := index.lookupRoot(root)
 	if err != nil || !ok {
 		return sessionInfo{}, false, err
 	}
