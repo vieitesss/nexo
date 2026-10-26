@@ -127,15 +127,18 @@ func TestOrchestratorNewOpensTheWorkspaceIDTheRemoteCreateReported(t *testing.T)
 	}
 }
 
-func TestOrchestratorNewFallsBackToTheLabelWhenCreateReportsNoID(t *testing.T) {
+func TestOrchestratorNewRejectsACreateResponseWithoutAWorkspaceID(t *testing.T) {
+	// Herdr focuses workspaces by ID and never accepts a label, so a create
+	// response without one is a dead end rather than a label fallback.
 	proxy := &recordingMachineProxy{}
 	runner := machineRunnerFunc(func(context.Context, string, ...string) ([]byte, error) { return nil, nil })
 	orchestrator := NewOrchestrator(runner, ListingConfig{Backend: backend.Tmux}, OperationPolicy{Proxy: proxy})
-	if err := orchestrator.New(context.Background(), MachineResult{Machine: "dev", Kind: KindHerdr}, "api"); err != nil {
-		t.Fatalf("New() error = %v", err)
+	err := orchestrator.New(context.Background(), MachineResult{Machine: "dev", Kind: KindHerdr}, "api")
+	if err == nil || !strings.Contains(err.Error(), "reported no workspace ID") {
+		t.Fatalf("New() error = %v, want a missing-workspace-ID diagnostic", err)
 	}
-	if proxy.kind != string(KindHerdr) || proxy.opened != [2]string{"dev", "api"} {
-		t.Fatalf("proxy kind = %q opened = %#v, want the requested label as the fallback target", proxy.kind, proxy.opened)
+	if proxy.calls != 0 {
+		t.Fatalf("proxy = %#v, want no proxy for a workspace with no known ID", proxy.opened)
 	}
 }
 
