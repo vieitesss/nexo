@@ -193,3 +193,57 @@ func TestRemoveWorktreeDestroysOnlySessionsNexoCreated(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateWorktreeRollsBackTheSessionWhenFocusFailsAfterCreation(t *testing.T) {
+	repo := initRepository(t)
+	destination := filepath.Join(t.TempDir(), "feature")
+	target := truncateLabel(projects.TargetName(destination))
+	perform := `{"client_id":"client:1","action":"session.select","args":{"session_id":"session:new"},"origin":"cli","timeout_ms":3000}`
+	rex := &fakeRunner{
+		outputs: map[string]string{
+			api("session.list", ""): sessionsJSON(),
+			whoamiKey:               `{"host_id":"host-1","instance_id":"instance-1"}`,
+			api("session.create", createPayload(target, destination)): createdSession,
+			api("client.list", ""):                                 oneApp,
+			api("session.destroy", `{"session_id":"session:new"}`): `{}`,
+		},
+		errors: map[string]error{
+			api("client.perform", perform): errors.New("rex client.perform: the app refused the action"),
+		},
+	}
+	backend := New(realGit{rex: rex, t: t}, nil)
+	backend.binary = "rex"
+	backend.stateDir = t.TempDir()
+
+	_, err := backend.CreateWorktree(context.Background(), capabilities.WorktreeCreateOptions{
+		Repo:        repo,
+		Branch:      "feature",
+		Destination: destination,
+		NewBranch:   true,
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree() error = nil, want the refused focus")
+	}
+	destroyed := false
+	for _, key := range rex.keys() {
+		if strings.Contains(key, "session.destroy") {
+			destroyed = true
+		}
+	}
+	if !destroyed {
+		t.Fatalf("commands = %#v, want the session created by this transaction destroyed", rex.keys())
+	}
+	if _, statErr := os.Stat(destination); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("destination still exists after rollback: %v", statErr)
+	}
+	if _, gitErr := (runner.ExecRunner{}).Run(context.Background(), "git", "-C", repo, "rev-parse", "--verify", "feature"); gitErr == nil {
+		t.Fatal("branch feature survived rollback, want it deleted")
+	}
+	index, err := backend.projectIndex(context.Background())
+	if err != nil {
+		t.Fatalf("projectIndex() error = %v", err)
+	}
+	if recorded, ok, err := index.lookup(filepath.Clean(destination)); ok || err != nil {
+		t.Fatalf("sidecar entry %q survived rollback: %v", recorded, err)
+	}
+}

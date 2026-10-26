@@ -47,10 +47,7 @@ func (b *Backend) openProjectNative(ctx context.Context, path string, options ca
 		if err != nil {
 			return capabilities.OpenedContainer{}, err
 		}
-		if err := b.focusAndRecord(ctx, session, options.NoFocus); err != nil {
-			return capabilities.OpenedContainer{}, err
-		}
-		return capabilities.OpenedContainer{ID: session.ID, Name: session.Label, Path: path}, nil
+		return b.finishOpen(ctx, session, path, false, options, nil)
 	}
 
 	sessions, err := b.sessions(ctx)
@@ -64,10 +61,7 @@ func (b *Backend) openProjectNative(ctx context.Context, path string, options ca
 	if session, ok, err := b.recordedSession(index, sessions, root); err != nil {
 		return capabilities.OpenedContainer{}, err
 	} else if ok {
-		if err := b.focusAndRecord(ctx, session, options.NoFocus); err != nil {
-			return capabilities.OpenedContainer{}, err
-		}
-		return capabilities.OpenedContainer{ID: session.ID, Name: session.Label, Path: path}, nil
+		return b.finishOpen(ctx, session, path, false, options, nil)
 	}
 
 	candidates, err := b.sessionsUsing(ctx, path, sessions)
@@ -77,26 +71,32 @@ func (b *Backend) openProjectNative(ctx context.Context, path string, options ca
 	if session, ok, err := b.recentCandidate(ctx, candidates); err != nil {
 		return capabilities.OpenedContainer{}, err
 	} else if ok {
-		if err := index.record(root, session.ID); err != nil {
-			return capabilities.OpenedContainer{}, err
-		}
-		if err := b.focusAndRecord(ctx, session, options.NoFocus); err != nil {
-			return capabilities.OpenedContainer{}, err
-		}
-		return capabilities.OpenedContainer{ID: session.ID, Name: session.Label, Path: path}, nil
+		return b.finishOpen(ctx, session, path, false, options, func() error { return index.record(root, session.ID) })
 	}
 
 	created, err := b.createSession(ctx, path)
 	if err != nil {
 		return capabilities.OpenedContainer{}, err
 	}
-	if err := index.record(root, created.ID); err != nil {
-		return capabilities.OpenedContainer{}, err
+	return b.finishOpen(ctx, created, path, true, options, func() error { return index.record(root, created.ID) })
+}
+
+// finishOpen focuses a resolved session and then applies its durable project
+// record. The container is built from the native identity before either step,
+// so a failure still carries the session the shared lifecycle must destroy; the
+// record is written last, so it never points at a session the open did not
+// finish.
+func (b *Backend) finishOpen(ctx context.Context, session sessionInfo, path string, created bool, options capabilities.OpenOptions, record func() error) (capabilities.OpenedContainer, error) {
+	container := capabilities.OpenedContainer{ID: session.ID, Name: session.Label, Path: path, Created: created}
+	if err := b.focusAndRecord(ctx, session, options.NoFocus); err != nil {
+		return container, err
 	}
-	if err := b.focusAndRecord(ctx, created, options.NoFocus); err != nil {
-		return capabilities.OpenedContainer{}, err
+	if record != nil {
+		if err := record(); err != nil {
+			return container, err
+		}
 	}
-	return capabilities.OpenedContainer{ID: created.ID, Name: created.Label, Path: path, Created: true}, nil
+	return container, nil
 }
 
 // recordedSession reuses a recorded session only while it still exists. A dead

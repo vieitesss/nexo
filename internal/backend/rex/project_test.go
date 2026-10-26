@@ -2,6 +2,7 @@ package rex
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -416,5 +417,43 @@ func TestTruncateLabelKeepsRexLimit(t *testing.T) {
 	long := strings.Repeat("a", labelLimit+5)
 	if got := truncateLabel(long); got != strings.Repeat("a", labelLimit) {
 		t.Fatalf("truncateLabel() = %q, want the stored limit", got)
+	}
+}
+
+func TestOpenProjectKeepsTheCreatedSessionWhenFocusFails(t *testing.T) {
+	project := t.TempDir()
+	target := truncateLabel(projects.TargetName(project))
+	perform := `{"client_id":"client:1","action":"session.select","args":{"session_id":"session:new"},"origin":"cli","timeout_ms":3000}`
+	runner := &fakeRunner{
+		outputs: map[string]string{
+			api("session.list", ""): sessionsJSON(),
+			whoamiKey:               `{"host_id":"host-1","instance_id":"instance-1"}`,
+			api("session.create", createPayload(target, project)): createdSession,
+			api("client.list", ""):                                oneApp,
+		},
+		errors: map[string]error{
+			api("client.perform", perform): errors.New("rex client.perform: the app refused the action"),
+		},
+	}
+	backend := newTestBackend(t, runner, nil)
+
+	opened, err := backend.OpenProject(context.Background(), project, capabilities.OpenOptions{})
+	if err == nil {
+		t.Fatal("OpenProject() error = nil, want the refused focus")
+	}
+	if opened.ID != "session:new" || !opened.Created || opened.Path != project {
+		t.Fatalf("opened = %#v, want the created session carried with the error", opened)
+	}
+	for _, key := range runner.keys() {
+		if strings.Contains(key, "session.destroy") {
+			t.Fatalf("commands = %#v, want a plain open to keep the usable session", runner.keys())
+		}
+	}
+	index, err := backend.projectIndex(context.Background())
+	if err != nil {
+		t.Fatalf("projectIndex() error = %v", err)
+	}
+	if recorded, ok, err := index.lookup(filepath.Clean(project)); ok || err != nil {
+		t.Fatalf("sidecar entry %q points at a session the open did not finish: %v", recorded, err)
 	}
 }
