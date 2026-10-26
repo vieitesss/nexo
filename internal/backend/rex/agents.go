@@ -141,8 +141,8 @@ func (b *Backend) ListAgents(ctx context.Context) ([]capabilities.Agent, error) 
 
 // observeAgent reports the agent evidence for one terminal block. Native
 // status wins; otherwise the block's processes and screen decide. A block whose
-// status, process or screen cannot be read produces no observation, but its
-// presence is already recorded, so its durable state survives.
+// status, process, size or screen cannot be read produces no observation, but
+// its presence is already recorded, so its durable state survives.
 func (b *Backend) observeAgent(ctx context.Context, session sessionInfo, current block, cfg config.AgentsConfig, allow map[string]struct{}) (agentSnapshot, bool) {
 	records, err := b.programStatus(ctx, session.ID, current.ID)
 	if err != nil {
@@ -171,11 +171,17 @@ func (b *Backend) observeAgent(ctx context.Context, session sessionInfo, current
 	if err != nil {
 		return agentSnapshot{}, false
 	}
+	rows, err := b.blockRows(ctx, session.ID, current.ID)
+	if err != nil {
+		return agentSnapshot{}, false
+	}
 	return agentSnapshot{
 		session: session,
 		block:   current,
 		harness: harness,
-		working: agentdetect.Working(harness, screen, cfg.WorkingPattern),
+		// Only the screen the user sees can prove live work: an old marker in
+		// the scrollback is history, not an agent that is running.
+		working: agentdetect.Working(harness, viewport(screen, rows), cfg.WorkingPattern),
 		path:    path,
 	}, true
 }

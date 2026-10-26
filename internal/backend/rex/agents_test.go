@@ -2,6 +2,7 @@ package rex
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +18,9 @@ type agentFixture struct {
 	records string
 	process string
 	screen  string
+	// size is the block's terminal size. A fixture with a screen reports a
+	// 24-row terminal unless it says otherwise.
+	size string
 }
 
 // agentBackend builds a backend with one session holding one terminal block.
@@ -35,6 +39,11 @@ func agentBackend(t *testing.T, fixture agentFixture) (*Backend, *fakeRunner) {
 	}
 	if fixture.screen != "" {
 		outputs[api("block.method", blockCallPayload("session:1", "block:1", "format", `{"format":"text","trim":true}`))] = fixture.screen
+		size := fixture.size
+		if size == "" {
+			size = `{"rows":24}`
+		}
+		outputs[api("block.method", blockMethodPayload("session:1", "block:1", "size"))] = size
 	}
 	runner := &fakeRunner{outputs: outputs}
 	return newTestBackend(t, runner, nil), runner
@@ -509,5 +518,39 @@ func TestListAgentsResetsAcknowledgementForANewOwner(t *testing.T) {
 	}
 	if renamed[0].StoppedSince == nil || !renamed[0].StoppedSince.Equal(now) {
 		t.Fatalf("StoppedSince = %v, want a fresh stop at %v", renamed[0].StoppedSince, now)
+	}
+}
+
+func TestListAgentsIgnoresWorkingMarkersInTheScrollback(t *testing.T) {
+	// A long transcript pushed the live spinner off the screen; the block now
+	// sits at a clean prompt.
+	lines := []string{"⠋ Working… (esc to interrupt)"}
+	for i := 1; i <= 30; i++ {
+		lines = append(lines, fmt.Sprintf("assistant output %d", i))
+	}
+	lines = append(lines, "$ git status", "nothing to commit, working tree clean", "$")
+
+	now := time.Date(2026, time.October, 22, 9, 48, 0, 0, time.UTC)
+	backend := clockedBackend(t, agentFixture{
+		records: `{"records":[]}`,
+		process: agentProcess,
+		screen:  `{"content":` + strconv.Quote(strings.Join(lines, "\n")) + `}`,
+		size:    `{"rows":24}`,
+	}, &now)
+
+	listOnce(t, backend, 1)
+	now = now.Add(4 * time.Second)
+	idle := listOnce(t, backend, 1)
+	if idle[0].State != "stopped" {
+		t.Fatalf("agent = %#v, want a stop once only the scrollback holds the marker", idle[0])
+	}
+
+	// The preview still shows the whole terminal, scrollback included.
+	content, err := backend.ReadScreen(context.Background(), "block:1")
+	if err != nil {
+		t.Fatalf("ReadScreen() error = %v", err)
+	}
+	if !strings.Contains(content, "⠋ Working…") || !strings.Contains(content, "working tree clean") {
+		t.Fatalf("ReadScreen() = %q, want the full screen and scrollback", content)
 	}
 }

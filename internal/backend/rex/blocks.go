@@ -58,6 +58,10 @@ type screenResult struct {
 	Content string `json:"content"`
 }
 
+type sizeResult struct {
+	Rows int `json:"rows"`
+}
+
 type blockMethodInput struct {
 	SessionID string         `json:"session_id"`
 	BlockID   string         `json:"block_id"`
@@ -167,6 +171,35 @@ func (b *Backend) screen(ctx context.Context, sessionID, blockID string) (string
 		return "", fmt.Errorf("decode rex block %q format: %w", blockID, err)
 	}
 	return decoded.Content, nil
+}
+
+// blockRows reports the terminal's height, the boundary between the screen and
+// its scrollback.
+func (b *Backend) blockRows(ctx context.Context, sessionID, blockID string) (int, error) {
+	output, err := b.blockMethod(ctx, sessionID, blockID, "size")
+	if err != nil {
+		return 0, err
+	}
+	var decoded sizeResult
+	if err := json.Unmarshal(output, &decoded); err != nil {
+		return 0, fmt.Errorf("decode rex block %q size: %w", blockID, err)
+	}
+	return decoded.Rows, nil
+}
+
+// viewport returns the part of a screen capture the terminal is currently
+// showing. Rex returns the screen and its scrollback as one text block, so the
+// newest rows lines are the screen whenever it is full, and a capture shorter
+// than the screen has not scrolled at all.
+func viewport(content string, rows int) string {
+	if rows <= 0 {
+		return content
+	}
+	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+	if len(lines) <= rows {
+		return content
+	}
+	return strings.Join(lines[len(lines)-rows:], "\n")
 }
 
 // BlockProcessPIDs reports the pids of one block's child and foreground
