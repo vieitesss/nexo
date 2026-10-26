@@ -346,7 +346,7 @@ func TestUnpinnedTransportUsesMostRecentlyAttachedRemoteSession(t *testing.T) {
 	wrapperDir := writeRealTransportWrappers(t, tmuxPath, socket)
 	t.Setenv("PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	args := proxy.TransportArgs(config.RemoteConfig{Transport: "ssh"}, "tmux", "fake-machine", "")
+	args := proxy.TransportArgs(config.RemoteConfig{Transport: "ssh"}, "tmux", proxy.RemoteKindTmux, "fake-machine", "")
 	runTransportAndDetach(t, args, tmuxPath, socket)
 	after := sessionLastAttached(t, tmuxPath, socket)
 	if after["first"] <= after["second"] {
@@ -361,7 +361,7 @@ func TestEmptyRemoteTransportWaitsForQuit(t *testing.T) {
 	wrapperDir := writeRealTransportWrappers(t, tmuxPath, socket)
 	t.Setenv("PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	args := proxy.TransportArgs(config.RemoteConfig{Transport: "ssh"}, "tmux", "fake-machine", "")
+	args := proxy.TransportArgs(config.RemoteConfig{Transport: "ssh"}, "tmux", proxy.RemoteKindTmux, "fake-machine", "")
 	started := time.Now()
 	command := scriptCommand(args)
 	input, inputWriter, pipeErr := os.Pipe()

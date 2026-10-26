@@ -381,16 +381,16 @@ func TestTransportArgsHonorSSHConfigOnlyForSSH(t *testing.T) {
 	remote := config.RemoteConfig{SSHConfig: "/tmp/ssh config", Transport: "ssh"}
 	sshWant := append([]string{"ssh", "-t"}, keepalive...)
 	sshWant = append(sshWant, "-F", "/tmp/ssh config", "devbox")
-	got := proxy.TransportArgs(remote, "tmux", "devbox", "")
+	got := proxy.TransportArgs(remote, "tmux", proxy.RemoteKindTmux, "devbox", "")
 	if !reflect.DeepEqual(got[:len(sshWant)], sshWant) || !strings.Contains(got[len(got)-1], "session_last_attached") || !strings.Contains(got[len(got)-1], "attach-session") {
 		t.Fatalf("ssh transport args = %#v, want keepalive and last-attached resolver", got)
 	}
 	remote.Transport = "mosh"
-	if got := proxy.TransportArgs(remote, "tmux", "devbox", ""); len(got) != 6 || got[0] != "mosh" || got[2] != "--" || got[3] != "sh" || got[4] != "-c" || !strings.Contains(got[5], "session_last_attached") {
+	if got := proxy.TransportArgs(remote, "tmux", proxy.RemoteKindTmux, "devbox", ""); len(got) != 6 || got[0] != "mosh" || got[2] != "--" || got[3] != "sh" || got[4] != "-c" || !strings.Contains(got[5], "session_last_attached") {
 		t.Fatalf("mosh transport args = %#v, want shell resolver", got)
 	}
 	remote.Transport = "et"
-	if got := proxy.TransportArgs(remote, "tmux", "devbox", ""); len(got) != 4 || got[0] != "et" || !strings.HasPrefix(got[3], "sh -c '") || !strings.Contains(got[3], "session_last_attached") {
+	if got := proxy.TransportArgs(remote, "tmux", proxy.RemoteKindTmux, "devbox", ""); len(got) != 4 || got[0] != "et" || !strings.HasPrefix(got[3], "sh -c '") || !strings.Contains(got[3], "session_last_attached") {
 		t.Fatalf("et transport args = %#v, want quoted shell resolver", got)
 	}
 }
@@ -446,5 +446,101 @@ func TestSendPaneTextUsesLiteralAndOptionBoundaries(t *testing.T) {
 	want := []string{"-u", "send-keys", "-t", "%9", "-l", "--", `-x; text\;`}
 	if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0].args, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestProxyRemoteCreatesTheHerdrBridgePaneInTheSameProxySession(t *testing.T) {
+	runner := &fakeRunner{
+		outputFunc: func(_ string, args []string) ([]byte, bool) {
+			if len(args) > 1 && args[1] == "new-session" {
+				return []byte("$2\n"), true
+			}
+			return nil, false
+		},
+	}
+	backend := New(runner, true)
+	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "")
+	if err := backend.ProxyRemote(context.Background(), proxy.RemoteKindHerdr, "rpi", "w2"); err != nil {
+		t.Fatalf("ProxyRemote() error = %v", err)
+	}
+	var created string
+	for _, call := range runner.calls {
+		if len(call.args) > 1 && call.args[1] == "new-session" {
+			created = call.args[len(call.args)-1]
+		}
+		if call.name == "ssh" {
+			t.Fatalf("ProxyRemote() used ssh to create the local proxy: %#v", runner.calls)
+		}
+	}
+	if !strings.Contains(created, "--backend tmux remote attach --remote-kind herdr --initial 'w2' -- 'rpi'") {
+		t.Fatalf("bridge pane command = %q, want the herdr attach command", created)
+	}
+}
+
+func TestProxyRemoteSwitchesAnExistingBridgeClientWithoutRespawning(t *testing.T) {
+	args := proxy.HerdrSwitchSSHArgs(config.RemoteConfig{}, "rpi", "w3")
+	runner := &fakeRunner{
+		sequences: map[string][][]byte{
+			"list-sessions -F #{session_id}\t#{@nexo-proxy}": {[]byte("$1\trpi\n")},
+		},
+	}
+	backend := New(runner, true)
+	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "")
+	if err := backend.ProxyRemote(context.Background(), proxy.RemoteKindHerdr, "rpi", "w3"); err != nil {
+		t.Fatalf("ProxyRemote() error = %v", err)
+	}
+	var switched []string
+	for _, call := range runner.calls {
+		if call.name == "ssh" {
+			switched = append(switched, strings.Join(call.args, " "))
+		}
+		if len(call.args) > 1 && call.args[1] == "respawn-pane" {
+			t.Fatalf("ProxyRemote() respawned the bridge pane: %#v", runner.calls)
+		}
+	}
+	if len(switched) != 1 || switched[0] != strings.Join(args, " ") || !strings.Contains(switched[0], "workspace focus") {
+		t.Fatalf("switch calls = %#v, want one herdr workspace focus", switched)
+	}
+	if len(runner.calls) > 1 && runner.calls[0].args[1] != "list-sessions" {
+		t.Fatalf("first tmux call = %#v, want the proxy lookup", runner.calls[0])
+	}
+}
+
+func TestProxyRemoteReportsAMissingWorkspaceInsteadOfStartingOne(t *testing.T) {
+	exitTwo := exec.Command("sh", "-c", "exit 2").Run()
+	if exitTwo == nil {
+		t.Fatal("expected a non-zero exit from the helper shell")
+	}
+	args := proxy.HerdrSwitchSSHArgs(config.RemoteConfig{}, "rpi", "w9")
+	runner := &fakeRunner{
+		sequences: map[string][][]byte{
+			"list-sessions -F #{session_id}\t#{@nexo-proxy}": {[]byte("$1\trpi\n")},
+		},
+		fail: map[string]error{commandKey(args): exitTwo},
+	}
+	backend := New(runner, true)
+	backend.ConfigureRemoteConfig(config.RemoteConfig{}, "")
+	err := backend.ProxyRemote(context.Background(), proxy.RemoteKindHerdr, "rpi", "w9")
+	if err == nil || err.Error() != "no workspace w9 on rpi" {
+		t.Fatalf("ProxyRemote() error = %v, want the missing-workspace diagnostic", err)
+	}
+	for _, call := range runner.calls {
+		if len(call.args) > 1 && (call.args[1] == "respawn-pane" || call.args[1] == "new-session") {
+			t.Fatalf("missing workspace restarted the pane: %#v", runner.calls)
+		}
+		if strings.Contains(strings.Join(call.args, " "), "workspace create") {
+			t.Fatalf("missing workspace created remote state: %#v", runner.calls)
+		}
+	}
+}
+
+func TestProxyRemoteRejectsAnUnsupportedRemoteKind(t *testing.T) {
+	runner := &fakeRunner{}
+	backend := New(runner, true)
+	if err := backend.ProxyRemote(context.Background(), "zellij", "rpi", "w2"); err == nil {
+		t.Fatal("ProxyRemote() accepted an unsupported remote kind")
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("calls = %#v, want none before validation", runner.calls)
 	}
 }

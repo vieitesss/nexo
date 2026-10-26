@@ -12,21 +12,36 @@ import (
 	"github.com/vieitesss/nexo/internal/config"
 )
 
+// Remote multiplexer kinds an attachment can target. Tmux is the historical
+// default: a proxy pane attaches to a remote tmux unless it names another
+// kind explicitly.
+const (
+	RemoteKindTmux  = "tmux"
+	RemoteKindHerdr = "herdr"
+)
+
 // AttachCommand builds the shell command typed into a proxy pane. A non-empty
 // initial target is used only for the first attachment; reconnects resolve an
-// unpinned target on the remote machine.
-func AttachCommand(binary, backend, configPath, machine, initial string, fromEnv bool) (string, error) {
+// unpinned target on the remote machine. remoteKind names the remote
+// multiplexer; it is written only when the remote is not tmux.
+func AttachCommand(binary, backend, configPath, remoteKind, machine, initial string, fromEnv bool) (string, error) {
 	values := []string{binary, configPath, machine, initial}
 	for _, value := range values {
 		if err := rejectControl(value); err != nil {
 			return "", err
 		}
 	}
+	if remoteKind != "" && remoteKind != RemoteKindTmux && remoteKind != RemoteKindHerdr {
+		return "", errors.New("unknown remote multiplexer kind " + remoteKind)
+	}
 	parts := []string{"exec", ShellQuote(binary), "--backend", backend}
 	if configPath != "" {
 		parts = append(parts, "--config-file", ShellQuote(configPath))
 	}
 	parts = append(parts, "remote", "attach")
+	if remoteKind != "" && remoteKind != RemoteKindTmux {
+		parts = append(parts, "--remote-kind", remoteKind)
+	}
 	if initial != "" {
 		parts = append(parts, "--initial", ShellQuote(initial))
 	}
@@ -135,6 +150,54 @@ func RemoteAttachShell(key, machine, initial string) string {
 	return strings.Join(lines, "\n")
 }
 
+// HerdrAttachShell attaches a proxy pane to the default Herdr session on a
+// remote machine. Herdr starts a server (and an empty server creates a
+// workspace) when a client attaches, so the shell guards both cases and waits
+// on the same r/q contract as the tmux resolver. It never edits the remote
+// Herdr configuration and never starts anything itself.
+func HerdrAttachShell(machine, initial string) string {
+	lines := []string{
+		"machine=" + ShellQuote(machine),
+		"herdr_compact() { printf '%s' \"$1\" | tr -d '[:space:]'; }",
+		"ask_retry() {",
+		"  printf '%s\\n' \"$1\" >&2",
+		"  tty_state=$(stty -g 2>/dev/null) || tty_state=",
+		"  if [ -n \"$tty_state\" ]; then stty -icanon -echo min 1 time 0 2>/dev/null || tty_state=; fi",
+		"  answer=$(dd bs=1 count=1 2>/dev/null)",
+		"  if [ -n \"$tty_state\" ]; then stty \"$tty_state\" 2>/dev/null || :; fi",
+		"  case \"$answer\" in r|R) return 0 ;; *) return 1 ;; esac",
+		"}",
+	}
+	if initial != "" {
+		lines = append(lines, "initial="+ShellQuote(initial))
+	} else {
+		lines = append(lines, "initial=")
+	}
+	lines = append(lines,
+		"while :; do",
+		"  status=$(herdr status server --json 2>/dev/null) || status=",
+		"  case \"$(herdr_compact \"$status\")\" in",
+		"    *'\"running\":true'*) ;;",
+		"    *) ask_retry \"no Herdr server on $machine — press r to retry, q to close\" || exit 0; continue ;;",
+		"  esac",
+		"  if [ -n \"$initial\" ]; then",
+		"    target=$initial",
+		"    initial=",
+		"    if ! herdr workspace focus \"$target\" >/dev/null 2>&1; then",
+		"      ask_retry \"no workspace $target on $machine — press r to retry, q to close\" || exit 0",
+		"      continue",
+		"    fi",
+		"  fi",
+		"  workspaces=$(herdr workspace list 2>/dev/null) || workspaces=",
+		"  case \"$(herdr_compact \"$workspaces\")\" in",
+		"    *'\"workspaces\":[]'*) ask_retry \"no workspaces on $machine — press r to retry, q to close\" || exit 0; continue ;;",
+		"  esac",
+		"  exec herdr",
+		"done",
+	)
+	return strings.Join(lines, "\n")
+}
+
 const MissingRemoteTargetExitCode = 2
 
 // RemoteSwitchClientShell switches the existing remote proxy tmux client to
@@ -157,6 +220,33 @@ func RemoteSwitchClientShell(key, machine, container string) string {
 		"tmux switch-client -c \"$client\" -t \"$target\" && printf '%s\\n' \"$target\" > " + stateFile,
 	}
 	return strings.Join(lines, "\n")
+}
+
+// HerdrSwitchShell focuses one remote workspace by ID. A focused workspace is
+// server-wide, so this moves every client attached to that remote server. Exit
+// code 2 means the workspace is missing; any other exit leaves the pane to the
+// attach guard, which reports a stopped server and keeps its retry loop.
+func HerdrSwitchShell(workspaceID string) string {
+	lines := []string{
+		"status=$(herdr status server --json 2>/dev/null) || status=",
+		"compact=$(printf '%s' \"$status\" | tr -d '[:space:]')",
+		"case \"$compact\" in",
+		"  *'\"running\":true'*) ;;",
+		"  *) exit 1 ;;",
+		"esac",
+		"herdr workspace focus " + ShellQuote(workspaceID) + " >/dev/null 2>&1 || exit 2",
+	}
+	return strings.Join(lines, "\n")
+}
+
+// HerdrSwitchSSHArgs builds the plain SSH invocation that retargets an
+// existing remote Herdr client.
+func HerdrSwitchSSHArgs(remote config.RemoteConfig, machine, workspaceID string) []string {
+	args := []string{"-o", "BatchMode=yes"}
+	if strings.TrimSpace(remote.SSHConfig) != "" {
+		args = append(args, "-F", remote.SSHConfig)
+	}
+	return append(args, machine, "sh -c "+ShellQuote(HerdrSwitchShell(workspaceID)))
 }
 
 // IsMissingRemoteTarget reports the explicit-open sentinel returned by the

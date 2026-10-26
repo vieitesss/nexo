@@ -147,7 +147,7 @@ func (b *Backend) createProxyWorkspace(ctx context.Context, machine, initial str
 	if err := b.verifyProxyToken(ctx, workspaceID, identityValue); err != nil {
 		return "", b.operationWithCleanup(err, workspaceID)
 	}
-	command, err := proxy.AttachCommand(proxyBinary(), "herdr", b.proxyConfigPath, "", initial, true)
+	command, err := proxy.AttachCommand(proxyBinary(), "herdr", b.proxyConfigPath, proxy.RemoteKindTmux, "", initial, true)
 	if err != nil {
 		return "", b.operationWithCleanup(err, workspaceID)
 	}

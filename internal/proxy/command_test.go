@@ -8,7 +8,7 @@ import (
 )
 
 func TestAttachCommandUsesUnpinnedMachineTarget(t *testing.T) {
-	got, err := AttachCommand("/usr/bin/nexo", "tmux", "", "devbox", "", false)
+	got, err := AttachCommand("/usr/bin/nexo", "tmux", "", RemoteKindTmux, "devbox", "", false)
 	if err != nil {
 		t.Fatalf("AttachCommand() error = %v", err)
 	}
@@ -19,7 +19,7 @@ func TestAttachCommandUsesUnpinnedMachineTarget(t *testing.T) {
 }
 
 func TestAttachCommandUsesInitialTargetOnlyOnFirstAttach(t *testing.T) {
-	got, err := AttachCommand("/usr/bin/nexo", "tmux", "", "devbox", "api", false)
+	got, err := AttachCommand("/usr/bin/nexo", "tmux", "", RemoteKindTmux, "devbox", "api", false)
 	if err != nil {
 		t.Fatalf("AttachCommand() error = %v", err)
 	}
@@ -30,7 +30,7 @@ func TestAttachCommandUsesInitialTargetOnlyOnFirstAttach(t *testing.T) {
 }
 
 func TestAttachCommandUsesEnvironmentForHerdrProxy(t *testing.T) {
-	got, err := AttachCommand("/usr/bin/nexo", "herdr", "/tmp/nexo config.toml", "", "", true)
+	got, err := AttachCommand("/usr/bin/nexo", "herdr", "/tmp/nexo config.toml", RemoteKindTmux, "", "", true)
 	if err != nil {
 		t.Fatalf("AttachCommand() error = %v", err)
 	}
@@ -85,7 +85,7 @@ func TestProxyRendezvousKeyDoesNotCollapseDistinctMachines(t *testing.T) {
 func TestBackendRendezvousIsSharedByAttachAndSwitch(t *testing.T) {
 	for _, backend := range []string{"tmux", "herdr"} {
 		key := ProxyRendezvousKey(backend, "reviewbox")
-		attach := strings.Join(TransportArgs(config.RemoteConfig{Transport: "ssh"}, backend, "reviewbox", ""), " ")
+		attach := strings.Join(TransportArgs(config.RemoteConfig{Transport: "ssh"}, backend, RemoteKindTmux, "reviewbox", ""), " ")
 		if !strings.Contains(attach, "nexo-proxy-"+key+".tty") {
 			t.Fatalf("%s attach = %q, want rendezvous %q", backend, attach, key)
 		}
@@ -106,7 +106,7 @@ func TestRemoteSwitchClientShellUsesCanonicalTarget(t *testing.T) {
 
 func TestAttachCommandRejectsControlAndFormatCharacters(t *testing.T) {
 	for _, value := range []string{"/tmp/nexo\u0015", "/tmp/nexo\u200e"} {
-		if _, err := AttachCommand(value, "herdr", "", "", "", true); err == nil {
+		if _, err := AttachCommand(value, "herdr", "", RemoteKindTmux, "", "", true); err == nil {
 			t.Fatalf("AttachCommand(%q) accepted a control/format character", value)
 		}
 	}
