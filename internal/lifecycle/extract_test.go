@@ -1,4 +1,4 @@
-package lifecycle
+package lifecycle_test
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/git"
+	"github.com/vieitesss/nexo/internal/lifecycle"
 	"github.com/vieitesss/nexo/internal/runner"
 )
 
@@ -44,9 +45,9 @@ func currentBranch(t *testing.T, repo string) string {
 	return runTestGit(t, repo, "branch", "--show-current")
 }
 
-func extractAdapter(gitAdapter *git.Commands, calls *extractCalls) ExtractAdapter {
-	return ExtractAdapter{
-		WorktreeAdapter: WorktreeAdapter{
+func extractAdapter(gitAdapter *git.Commands, calls *extractCalls) lifecycle.ExtractAdapter {
+	return lifecycle.ExtractAdapter{
+		WorktreeAdapter: lifecycle.WorktreeAdapter{
 			Create: func(_ context.Context, options capabilities.WorktreeCreateOptions) (capabilities.Worktree, error) {
 				calls.create = append(calls.create, options)
 				if calls.createErr != nil {
@@ -106,10 +107,10 @@ func (realWorktreeAdapter) rollback(ctx context.Context, worktree capabilities.W
 	return nil
 }
 
-func realExtractAdapter() ExtractAdapter {
+func realExtractAdapter() lifecycle.ExtractAdapter {
 	adapter := realWorktreeAdapter{}
-	return ExtractAdapter{
-		WorktreeAdapter: WorktreeAdapter{Create: adapter.create, Open: adapter.open, Rollback: adapter.rollback},
+	return lifecycle.ExtractAdapter{
+		WorktreeAdapter: lifecycle.WorktreeAdapter{Create: adapter.create, Open: adapter.open, Rollback: adapter.rollback},
 		Git:             git.New(runner.ExecRunner{}),
 	}
 }
@@ -121,11 +122,11 @@ func TestExtractWorktreeMovesBranchToDestination(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "feature")
 
 	var calls extractCalls
-	got, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	got, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination, NoFocus: true,
 	}, extractAdapter(git.New(runner.ExecRunner{}), &calls))
 	if err != nil {
-		t.Fatalf("ExtractWorktree() error = %v", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v", err)
 	}
 	if len(calls.create) != 1 {
 		t.Fatalf("create calls = %#v", calls.create)
@@ -151,11 +152,11 @@ func TestExtractWorktreeUsesExplicitReturnBranch(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "feature")
 
 	var calls extractCalls
-	got, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	got, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination, ReturnBranch: "release",
 	}, extractAdapter(git.New(runner.ExecRunner{}), &calls))
 	if err != nil {
-		t.Fatalf("ExtractWorktree() error = %v", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v", err)
 	}
 	if got.ReturnBranch != "release" {
 		t.Fatalf("return branch = %q, want release", got.ReturnBranch)
@@ -176,11 +177,11 @@ func TestExtractWorktreeFallsBackToDefaultBranchWithoutPrevious(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "feature")
 
 	var calls extractCalls
-	got, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	got, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination,
 	}, extractAdapter(git.New(runner.ExecRunner{}), &calls))
 	if err != nil {
-		t.Fatalf("ExtractWorktree() error = %v", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v", err)
 	}
 	if got.ReturnBranch != base {
 		t.Fatalf("return branch = %q, want default %q", got.ReturnBranch, base)
@@ -196,11 +197,11 @@ func TestExtractWorktreeRefusesDirtyOriginal(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "feature")
 
 	var calls extractCalls
-	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	_, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination,
 	}, extractAdapter(git.New(runner.ExecRunner{}), &calls))
 	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
-		t.Fatalf("ExtractWorktree() error = %v, want dirty refusal", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v, want dirty refusal", err)
 	}
 	if len(calls.create) != 0 {
 		t.Fatalf("create calls = %#v, want none", calls.create)
@@ -219,11 +220,11 @@ func TestExtractWorktreeRefusesExistingDestination(t *testing.T) {
 	}
 
 	var calls extractCalls
-	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	_, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination,
 	}, extractAdapter(git.New(runner.ExecRunner{}), &calls))
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("ExtractWorktree() error = %v, want existing destination refusal", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v, want existing destination refusal", err)
 	}
 	if branch := currentBranch(t, repo); branch != "feature" {
 		t.Fatalf("original branch = %q, want feature", branch)
@@ -238,11 +239,11 @@ func TestExtractWorktreeRefusesReturnBranchCheckedOutElsewhere(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "feature")
 
 	var calls extractCalls
-	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	_, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination, ReturnBranch: "occupied",
 	}, extractAdapter(git.New(runner.ExecRunner{}), &calls))
 	if err == nil || !strings.Contains(err.Error(), "already checked out") {
-		t.Fatalf("ExtractWorktree() error = %v, want ownership refusal", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v, want ownership refusal", err)
 	}
 	if len(calls.create) != 0 {
 		t.Fatalf("create calls = %#v, want none", calls.create)
@@ -259,11 +260,11 @@ func TestExtractWorktreeRestoresOriginalWhenCreateFails(t *testing.T) {
 	createErr := errors.New("create failed")
 
 	calls := extractCalls{createErr: createErr}
-	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	_, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination,
 	}, extractAdapter(git.New(runner.ExecRunner{}), &calls))
 	if !errors.Is(err, createErr) {
-		t.Fatalf("ExtractWorktree() error = %v, want create failure", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v, want create failure", err)
 	}
 	if branch := currentBranch(t, repo); branch != "feature" {
 		t.Fatalf("original branch = %q, want feature restored", branch)
@@ -277,11 +278,11 @@ func TestExtractWorktreeRollsBackAndRestoresWhenOpenFails(t *testing.T) {
 	openErr := errors.New("open failed")
 
 	calls := extractCalls{openErr: openErr}
-	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	_, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination,
 	}, extractAdapter(git.New(runner.ExecRunner{}), &calls))
 	if !errors.Is(err, openErr) {
-		t.Fatalf("ExtractWorktree() error = %v, want open failure", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v, want open failure", err)
 	}
 	if len(calls.rolledBack) != 1 {
 		t.Fatalf("rollback calls = %#v, want one", calls.rolledBack)
@@ -312,11 +313,11 @@ func TestExtractWorktreeRefusesIgnoredOverwriteAndPreservesOriginal(t *testing.T
 	destination := filepath.Join(t.TempDir(), "feature")
 	before := runTestGit(t, repo, "rev-parse", "HEAD")
 
-	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	_, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination, ReturnBranch: base,
 	}, realExtractAdapter())
 	if err == nil || !strings.Contains(err.Error(), "checkout") {
-		t.Fatalf("ExtractWorktree() error = %v, want ignored overwrite refusal", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v, want ignored overwrite refusal", err)
 	}
 	if currentBranch(t, repo) != "feature" || runTestGit(t, repo, "rev-parse", "HEAD") != before {
 		t.Fatalf("original checkout changed after refusal")
@@ -342,11 +343,11 @@ func TestExtractWorktreeCleanCheckIgnoresStatusConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	destination := filepath.Join(t.TempDir(), "feature")
-	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	_, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination, ReturnBranch: base,
 	}, realExtractAdapter())
 	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
-		t.Fatalf("ExtractWorktree() error = %v, want configuration-independent dirty refusal", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v, want configuration-independent dirty refusal", err)
 	}
 	if currentBranch(t, repo) != "feature" {
 		t.Fatalf("original branch changed after dirty refusal")
@@ -378,11 +379,11 @@ func TestExtractWorktreeCleanCheckCatchesTrackedChanges(t *testing.T) {
 				runTestGit(t, repo, "add", "README")
 			}
 			destination := filepath.Join(t.TempDir(), "feature")
-			_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+			_, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 				Repo: repo, Destination: destination, ReturnBranch: base,
 			}, realExtractAdapter())
 			if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
-				t.Fatalf("ExtractWorktree() error = %v, want dirty refusal", err)
+				t.Fatalf("lifecycle.ExtractWorktree() error = %v, want dirty refusal", err)
 			}
 			if currentBranch(t, repo) != "feature" || strings.Contains(runTestGit(t, repo, "worktree", "list", "--porcelain"), destination) {
 				t.Fatalf("repository changed after tracked dirty refusal")
@@ -405,11 +406,11 @@ func TestExtractWorktreeCleanCheckIncludesIgnoredSubmoduleChanges(t *testing.T) 
 		t.Fatal(err)
 	}
 	destination := filepath.Join(t.TempDir(), "feature")
-	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	_, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination, ReturnBranch: base,
 	}, realExtractAdapter())
 	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
-		t.Fatalf("ExtractWorktree() error = %v, want ignored submodule refusal", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v, want ignored submodule refusal", err)
 	}
 	if currentBranch(t, repo) != "feature" || strings.Contains(runTestGit(t, repo, "worktree", "list", "--porcelain"), destination) {
 		t.Fatalf("repository changed after ignored submodule refusal")
@@ -426,11 +427,11 @@ func TestExtractWorktreeRestoresAfterInitialCheckoutHookFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	destination := filepath.Join(t.TempDir(), "feature")
-	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	_, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination, ReturnBranch: base,
 	}, realExtractAdapter())
 	if err == nil {
-		t.Fatal("ExtractWorktree() error = nil, want hook failure")
+		t.Fatal("lifecycle.ExtractWorktree() error = nil, want hook failure")
 	}
 	if currentBranch(t, repo) != "feature" || runTestGit(t, repo, "rev-parse", "HEAD") != before {
 		t.Fatalf("original checkout was not restored after hook failure")
@@ -448,11 +449,11 @@ func TestExtractWorktreeRejectsNestedDestination(t *testing.T) {
 	base := currentBranch(t, repo)
 	runTestGit(t, repo, "checkout", "-qb", "feature")
 	destination := filepath.Join(repo, "nested", "feature")
-	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
+	_, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination, ReturnBranch: base,
 	}, realExtractAdapter())
 	if err == nil || !strings.Contains(err.Error(), "inside registered worktree") {
-		t.Fatalf("ExtractWorktree() error = %v, want nested destination refusal", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v, want nested destination refusal", err)
 	}
 	if currentBranch(t, repo) != "feature" || strings.Contains(runTestGit(t, repo, "worktree", "list", "--porcelain"), destination) {
 		t.Fatalf("repository changed after nested destination refusal")
@@ -468,8 +469,8 @@ func TestExtractWorktreeCleanupSurvivesCancellationAfterCreate(t *testing.T) {
 	defer cancel()
 	adapter := realWorktreeAdapter{}
 	openErr := errors.New("open canceled")
-	gotAdapter := ExtractAdapter{
-		WorktreeAdapter: WorktreeAdapter{
+	gotAdapter := lifecycle.ExtractAdapter{
+		WorktreeAdapter: lifecycle.WorktreeAdapter{
 			Create: adapter.create,
 			Open: func(_ context.Context, path string, _ capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
 				cancel()
@@ -479,11 +480,11 @@ func TestExtractWorktreeCleanupSurvivesCancellationAfterCreate(t *testing.T) {
 		},
 		Git: git.New(runner.ExecRunner{}),
 	}
-	_, err := ExtractWorktree(ctx, capabilities.WorktreeExtractOptions{
+	_, err := lifecycle.ExtractWorktree(ctx, capabilities.WorktreeExtractOptions{
 		Repo: repo, Destination: destination, ReturnBranch: base,
 	}, gotAdapter)
 	if !errors.Is(err, openErr) {
-		t.Fatalf("ExtractWorktree() error = %v, want open cancellation error", err)
+		t.Fatalf("lifecycle.ExtractWorktree() error = %v, want open cancellation error", err)
 	}
 	if currentBranch(t, repo) != "feature" {
 		t.Fatalf("original branch = %q, want feature", currentBranch(t, repo))
@@ -498,8 +499,8 @@ func TestExtractWorktreeCleanupSurvivesCancellationAfterCreate(t *testing.T) {
 }
 
 func TestExtractWorktreeRequiresGitAdapter(t *testing.T) {
-	_, err := ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{}, ExtractAdapter{})
+	_, err := lifecycle.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{}, lifecycle.ExtractAdapter{})
 	if err == nil {
-		t.Fatal("ExtractWorktree() error = nil, want git adapter error")
+		t.Fatal("lifecycle.ExtractWorktree() error = nil, want git adapter error")
 	}
 }
