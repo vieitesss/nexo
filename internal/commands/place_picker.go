@@ -13,6 +13,7 @@ import (
 	"github.com/vieitesss/nexo/internal/picker"
 	"github.com/vieitesss/nexo/internal/proxy"
 	"github.com/vieitesss/nexo/internal/proxyidentity"
+	"github.com/vieitesss/nexo/internal/remote"
 )
 
 func containerOpenID(place picker.Place) string {
@@ -22,6 +23,17 @@ func containerOpenID(place picker.Place) string {
 		return place.ContainerName
 	}
 	return place.ContainerID
+}
+
+// remoteOpenTarget names one remote row for its remote kind. A Herdr
+// workspace is addressed by ID: its label is display data that may equal
+// another workspace's ID or repeat across workspaces, so only the selected
+// row's ID names it. tmux keeps the displayed session name.
+func remoteOpenTarget(kind remote.Kind, place picker.Place) string {
+	if kind == remote.KindHerdr {
+		return place.ContainerID
+	}
+	return containerOpenID(place)
 }
 
 type containerTargetGroup struct {
@@ -176,7 +188,7 @@ func remotePlaceCommands(ctx context.Context, invocation Invocation) []tea.Cmd {
 					continue
 				}
 				places[index].OpenAction = func(openCtx context.Context, place picker.Place) error {
-					return orchestrator.Open(openCtx, result, containerOpenID(place))
+					return orchestrator.Open(openCtx, result, remoteOpenTarget(result.Kind, place))
 				}
 			}
 			return picker.RemoteBatch{Machine: result.Machine, Backend: string(result.Kind), Places: places, Agents: result.Agents, Warning: result.Warning, Error: result.Error}
