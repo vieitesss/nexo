@@ -15,12 +15,24 @@ import (
 	"github.com/vieitesss/nexo/internal/statefile"
 )
 
+// createsSession reports whether one fake request is a session.create call.
+// The payload carries the resolved nexo binary, so a test cannot spell the
+// request in advance and decodes it instead.
+func createsSession(request call) bool {
+	return len(request.args) == 5 && request.args[2] == "call" && request.args[3] == "session.create"
+}
+
+// proxyCreatedSession is the session.create result for one proxy session.
+func proxyCreatedSession(sessionID string) string {
+	return `{"session_id":"` + sessionID + `","initial_windows":[{"window_id":"window:1","block_ids":["block:1"]}]}`
+}
+
 // proxySessionCreate answers the session.create request, whose payload carries
 // the resolved nexo binary and therefore cannot be spelled in advance.
 func proxySessionCreate(sessionID string) func(call) ([]byte, bool) {
 	return func(request call) ([]byte, bool) {
-		if len(request.args) == 5 && request.args[2] == "call" && request.args[3] == "session.create" {
-			return []byte(`{"session_id":"` + sessionID + `","initial_windows":[{"window_id":"window:1","block_ids":["block:1"]}]}`), true
+		if createsSession(request) {
+			return []byte(proxyCreatedSession(sessionID)), true
 		}
 		return nil, false
 	}
@@ -31,7 +43,7 @@ func createSessionInputs(t *testing.T, runner *fakeRunner) []createInput {
 	t.Helper()
 	var inputs []createInput
 	for _, request := range runner.calls {
-		if len(request.args) != 5 || request.args[2] != "call" || request.args[3] != "session.create" {
+		if !createsSession(request) {
 			continue
 		}
 		var input createInput
@@ -639,12 +651,12 @@ func sharedProxyRunner(server *sharedProxyServer, sessionID string, create func(
 		switch {
 		case request.key() == api("session.list", ""):
 			return []byte(server.list()), true
-		case len(request.args) == 5 && request.args[2] == "call" && request.args[3] == "session.create":
+		case createsSession(request):
 			if create != nil {
 				create()
 			}
 			server.add(sessionID)
-			return []byte(`{"session_id":"` + sessionID + `","initial_windows":[{"window_id":"window:1","block_ids":["block:1"]}]}`), true
+			return []byte(proxyCreatedSession(sessionID)), true
 		}
 		return nil, false
 	}
