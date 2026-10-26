@@ -360,6 +360,9 @@ func chooseBackend(ctx context.Context, in Input, options Options) (string, stri
 			reason = "detected in this terminal"
 		}
 	}
+	if selected == "rex" {
+		return "", "", errors.New("nexo setup does not integrate the rex backend yet: set backend = \"rex\" in the config file yourself and check it with nexo backend")
+	}
 	if selected == "tmux" || selected == "herdr" {
 		return selected, reason, nil
 	}
