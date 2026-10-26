@@ -135,3 +135,20 @@ func TestServerNamespaceScopesStateToTheServerRun(t *testing.T) {
 		})
 	}
 }
+
+// api is the fake-runner key for one Rex API call, including the safety flag.
+func api(method, payload string) string {
+	key := "--autostart=false api call " + method
+	if payload != "" {
+		key += " " + payload
+	}
+	return key
+}
+
+// whoamiKey is the fake-runner key for the server identity probe.
+const whoamiKey = "--autostart=false whoami --json"
+
+// connectedApp is one connected desktop app fixture for client.list.
+func connectedApp(id, label, connectedAt string) string {
+	return `{"client_id":"` + id + `","info":{"kind":"app","label":"` + label + `"},"connected_at":"` + connectedAt + `","connection_state":"connected"}`
+}
