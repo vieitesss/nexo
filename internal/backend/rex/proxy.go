@@ -5,9 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -198,7 +195,7 @@ func (b *Backend) retargetProxy(ctx context.Context, sessionID, remoteKind, mach
 // shared attach command directly, so no shell profile, alias, or interpolation
 // can change what the proxy attaches to.
 func (b *Backend) createProxySession(ctx context.Context, remoteKind, machine, container string) (string, error) {
-	command, err := proxy.AttachCommand(attachmentBinary(), "rex", b.proxyConfigPath, remoteKind, machine, container, false)
+	command, err := proxy.AttachCommand(proxy.ExecutablePath(), "rex", b.proxyConfigPath, remoteKind, machine, container, false)
 	if err != nil {
 		return "", err
 	}
@@ -236,19 +233,6 @@ func (b *Backend) switchRemoteProxy(ctx context.Context, remoteKind, machine, co
 
 func (b *Backend) destroyProxySession(ctx context.Context, sessionID string) error {
 	return b.KillContainer(ctx, sessionID)
-}
-
-// attachmentBinary resolves the nexo executable the proxy block runs. The
-// invocation's own binary is the only one known to carry this protocol.
-func attachmentBinary() string {
-	binary := os.Args[0]
-	if resolved, err := exec.LookPath(binary); err == nil {
-		binary = resolved
-	}
-	if absolute, err := filepath.Abs(binary); err == nil {
-		binary = absolute
-	}
-	return binary
 }
 
 // rexProxyStore serves proxy lookup from the sidecar document, filtered to the
