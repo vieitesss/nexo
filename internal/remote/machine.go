@@ -107,8 +107,9 @@ func (o Orchestrator) New(ctx context.Context, result MachineResult, name string
 // backend adapter.
 func (o Orchestrator) FocusAgent(ctx context.Context, result MachineResult, agent capabilities.Agent) error {
 	container := strings.TrimSpace(agent.Container)
+	containerID := strings.TrimSpace(agent.ContainerID)
 	if container == "" {
-		container = strings.TrimSpace(agent.ContainerID)
+		container = containerID
 	}
 	if container == "" {
 		return errors.New("remote agent has no container name")
@@ -121,27 +122,36 @@ func (o Orchestrator) FocusAgent(ctx context.Context, result MachineResult, agen
 	}
 	// A bridged Herdr agent is addressed by its workspace ID: the label is
 	// display data and `workspace focus` takes IDs only.
-	if result.Kind == KindHerdr && o.listing.config.Backend != backend.Herdr && strings.TrimSpace(agent.ContainerID) != "" {
-		container = strings.TrimSpace(agent.ContainerID)
+	if bridgedHerdr(o.listing.config.Backend, result.Kind) && containerID != "" {
+		container = containerID
 	}
 	return o.policy.openValidated(ctx, o.listing.runner, o.listing.config.Backend, result.Machine, result.Kind, container)
 }
 
+// bridgedHerdr reports whether a remote Herdr machine is reached through a
+// local proxy whose pane attaches to the remote Herdr client, instead of
+// Herdr's native machine path. It is the one statement of that routing: the
+// kind policy, the target resolver, agent focus, and the open path all agree
+// with it.
+func bridgedHerdr(local backend.Kind, kind Kind) bool {
+	return kind == KindHerdr && local != backend.Herdr
+}
+
 func (p OperationPolicy) validateKind(local backend.Kind, machine string, kind Kind, operation string) error {
+	display := ""
 	switch kind {
 	case KindTmux:
-		if local != backend.Tmux && local != backend.Herdr {
-			return fmt.Errorf("unsupported: %s runs tmux; use tmux or Herdr to %s it", machine, operation)
-		}
+		display = "tmux"
 	case KindHerdr:
-		// A Herdr remote opens natively from Herdr. From any other local
-		// backend it needs a local proxy whose only pane attaches to the
-		// remote Herdr client.
-		if local != backend.Herdr && local != backend.Tmux {
-			return fmt.Errorf("unsupported: %s runs Herdr; use tmux or Herdr to %s it", machine, operation)
-		}
+		display = "Herdr"
 	default:
 		return fmt.Errorf("remote machine %q has an unknown multiplexer kind", machine)
+	}
+	// tmux and Herdr are the local backends nexo can drive. A Herdr remote
+	// opens natively from Herdr and through a local proxy from tmux; any other
+	// local backend has no seam to reach either kind.
+	if local != backend.Tmux && local != backend.Herdr {
+		return fmt.Errorf("unsupported: %s runs %s; use tmux or Herdr to %s it", machine, display, operation)
 	}
 	return nil
 }
@@ -150,7 +160,7 @@ func (p OperationPolicy) validateKind(local backend.Kind, machine string, kind K
 // remote path needs. The bridge needs a Herdr workspace ID, so an exact ID wins
 // and a unique workspace label is accepted for convenience.
 func resolveRemoteTarget(local backend.Kind, result MachineResult, container string) (string, error) {
-	if result.Kind != KindHerdr || local == backend.Herdr {
+	if !bridgedHerdr(local, result.Kind) {
 		return container, nil
 	}
 	target := strings.TrimSpace(container)
@@ -184,10 +194,10 @@ func (p OperationPolicy) open(ctx context.Context, commandRunner runner.CommandR
 
 func (p OperationPolicy) openValidated(ctx context.Context, commandRunner runner.CommandRunner, local backend.Kind, machine string, kind Kind, container string) error {
 	if kind == KindHerdr {
-		if local == backend.Herdr {
-			return p.openHerdr(ctx, commandRunner, machine, container)
+		if bridgedHerdr(local, kind) {
+			return p.openBridgedHerdr(ctx, local, machine, container)
 		}
-		return p.openBridgedHerdr(ctx, local, machine, container)
+		return p.openHerdr(ctx, commandRunner, machine, container)
 	}
 	container = proxy.CanonicalContainerName(container)
 	if p.Resolver != nil {
@@ -340,15 +350,9 @@ func createHerdrWorkspace(ctx context.Context, commandRunner runner.CommandRunne
 // createdHerdrWorkspaceID reads the workspace ID from a create response. An
 // unparsable response is not an error: the caller falls back to the label.
 func createdHerdrWorkspaceID(output []byte) string {
-	var envelope struct {
-		Result json.RawMessage `json:"result"`
-	}
-	if json.Unmarshal(output, &envelope) != nil {
+	raw, err := herdrResult(output)
+	if err != nil {
 		return ""
-	}
-	raw := output
-	if len(envelope.Result) != 0 && string(envelope.Result) != "null" {
-		raw = envelope.Result
 	}
 	var result struct {
 		Workspace struct {
