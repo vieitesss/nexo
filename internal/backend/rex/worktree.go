@@ -3,9 +3,6 @@ package rex
 import (
 	"context"
 	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/git"
@@ -26,11 +23,7 @@ func (b *Backend) CreateWorktree(ctx context.Context, options capabilities.Workt
 	if b == nil || b.Runner == nil {
 		return capabilities.Worktree{}, errors.New("rex worktree creator requires a command runner")
 	}
-	return lifecycle.CreateWorktree(ctx, options, lifecycle.WorktreeAdapter{
-		Create:   b.createWorktree,
-		Open:     b.openProjectNative,
-		Rollback: b.removeWorktree,
-	})
+	return lifecycle.CreateWorktree(ctx, options, b.worktreeAdapter())
 }
 
 // ExtractWorktree moves a branch out of the original checkout. The shared
@@ -40,36 +33,24 @@ func (b *Backend) ExtractWorktree(ctx context.Context, options capabilities.Work
 		return capabilities.Worktree{}, errors.New("rex worktree extractor requires a command runner")
 	}
 	return lifecycle.ExtractWorktree(ctx, options, lifecycle.ExtractAdapter{
-		WorktreeAdapter: lifecycle.WorktreeAdapter{
-			Create:   b.createWorktree,
-			Open:     b.openProjectNative,
-			Rollback: b.removeWorktree,
-		},
-		Git: git.New(b.Runner),
+		WorktreeAdapter: b.worktreeAdapter(),
+		Git:             git.New(b.Runner),
 	})
 }
 
-func (b *Backend) createWorktree(ctx context.Context, options capabilities.WorktreeCreateOptions) (capabilities.Worktree, error) {
-	branchExisted := false
-	if options.NewBranch {
-		branchExisted = b.branchExists(ctx, options.Repo, options.Branch)
-		if branchExisted {
-			return capabilities.Worktree{}, fmt.Errorf("branch %q already exists", options.Branch)
-		}
+// worktreeAdapter binds the shared raw-Git transaction to Rex's native work:
+// creation opens the worktree in a session, rollback destroys only the session
+// nexo created and then removes the Git resources.
+func (b *Backend) worktreeAdapter() lifecycle.WorktreeAdapter {
+	return lifecycle.WorktreeAdapter{
+		Create:   b.worktrees().Create,
+		Open:     b.openProjectNative,
+		Rollback: b.removeWorktree,
 	}
-	args := []string{"-C", options.Repo, "worktree", "add"}
-	if options.NewBranch {
-		args = append(args, "-b", options.Branch, options.Destination)
-	} else {
-		args = append(args, options.Destination, options.Branch)
-	}
-	if _, err := b.runGit(ctx, args...); err != nil {
-		cleanupCtx, cancel := lifecycle.CleanupContext(ctx)
-		defer cancel()
-		rollbackErr := b.rollbackWorktree(cleanupCtx, options.Repo, options.Destination, options.NewBranch, options.Branch, branchExisted)
-		return capabilities.Worktree{}, errors.Join(err, rollbackErr)
-	}
-	return capabilities.Worktree{Path: options.Destination, Branch: options.Branch, Repo: options.Repo, NewBranch: options.NewBranch}, nil
+}
+
+func (b *Backend) worktrees() *git.Worktrees {
+	return git.NewWorktrees(b.runGit)
 }
 
 // RollbackExtractWorktree removes the extracted worktree and restores its
@@ -102,38 +83,8 @@ func (b *Backend) removeWorktree(ctx context.Context, worktree capabilities.Work
 			failures = append(failures, err)
 		}
 	}
-	path, err := filepath.Abs(worktree.Path)
-	if err != nil {
-		failures = append(failures, fmt.Errorf("resolve worktree destination: %w", err))
-	} else if _, err := b.runGit(ctx, "-C", worktree.Repo, "worktree", "remove", "--force", path); err != nil {
-		failures = append(failures, err)
-	}
-	if worktree.NewBranch {
-		if _, err := b.runGit(ctx, "-C", worktree.Repo, "branch", "-D", worktree.Branch); err != nil {
-			failures = append(failures, err)
-		}
-	}
+	failures = append(failures, b.worktrees().Remove(ctx, worktree))
 	return errors.Join(failures...)
-}
-
-func (b *Backend) rollbackWorktree(ctx context.Context, repo, path string, newBranch bool, branch string, branchExisted bool) error {
-	var failures []error
-	if _, err := os.Lstat(path); err == nil {
-		if _, removeErr := b.runGit(ctx, "-C", repo, "worktree", "remove", "--force", path); removeErr != nil {
-			failures = append(failures, removeErr)
-		}
-	}
-	if newBranch && !branchExisted && b.branchExists(ctx, repo, branch) {
-		if _, err := b.runGit(ctx, "-C", repo, "branch", "-D", branch); err != nil {
-			failures = append(failures, err)
-		}
-	}
-	return errors.Join(failures...)
-}
-
-func (b *Backend) branchExists(ctx context.Context, repo, branch string) bool {
-	_, err := b.runGit(ctx, "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
-	return err == nil
 }
 
 func (b *Backend) runGit(ctx context.Context, args ...string) ([]byte, error) {

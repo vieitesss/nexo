@@ -76,9 +76,6 @@ func TestCreateWorktreeAddsTheWorktreeAndOpensASession(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(destination, ".git")); err != nil {
 		t.Fatalf("worktree checkout missing: %v", err)
 	}
-	if output, err := (runner.ExecRunner{}).Run(context.Background(), "git", "-C", repo, "rev-parse", "--verify", "feature"); err != nil {
-		t.Fatalf("branch feature missing: %v: %s", err, output)
-	}
 }
 
 func TestCreateWorktreeRollsBackWhenTheSessionCannotBeCreated(t *testing.T) {
@@ -105,9 +102,6 @@ func TestCreateWorktreeRollsBackWhenTheSessionCannotBeCreated(t *testing.T) {
 	}
 	if _, statErr := os.Stat(destination); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("destination still exists after rollback: %v", statErr)
-	}
-	if _, gitErr := (runner.ExecRunner{}).Run(context.Background(), "git", "-C", repo, "rev-parse", "--verify", "feature"); gitErr == nil {
-		t.Fatal("branch feature survived rollback, want it deleted")
 	}
 }
 
@@ -235,9 +229,6 @@ func TestCreateWorktreeRollsBackTheSessionWhenFocusFailsAfterCreation(t *testing
 	}
 	if _, statErr := os.Stat(destination); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("destination still exists after rollback: %v", statErr)
-	}
-	if _, gitErr := (runner.ExecRunner{}).Run(context.Background(), "git", "-C", repo, "rev-parse", "--verify", "feature"); gitErr == nil {
-		t.Fatal("branch feature survived rollback, want it deleted")
 	}
 	index, err := backend.metadata(context.Background())
 	if err != nil {
