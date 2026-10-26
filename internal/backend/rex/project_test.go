@@ -3,6 +3,7 @@ package rex
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -455,5 +456,38 @@ func TestOpenProjectKeepsTheCreatedSessionWhenFocusFails(t *testing.T) {
 	}
 	if recorded, ok, err := index.lookup(filepath.Clean(project)); ok || err != nil {
 		t.Fatalf("sidecar entry %q points at a session the open did not finish: %v", recorded, err)
+	}
+}
+
+func TestOpenProjectRejectsAProjectPathThatIsNotADirectory(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "gone")
+	file := filepath.Join(t.TempDir(), "README.md")
+	if err := os.WriteFile(file, []byte("project notes\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	for name, project := range map[string]string{"missing directory": missing, "regular file": file} {
+		t.Run(name, func(t *testing.T) {
+			runner := &fakeRunner{outputs: map[string]string{
+				api("session.list", ""): sessionsJSON(),
+				whoamiKey:               `{"host_id":"host-1","instance_id":"instance-1"}`,
+			}}
+			backend := newTestBackend(t, runner, nil)
+
+			opened, err := backend.OpenProject(context.Background(), project, capabilities.OpenOptions{NoFocus: true})
+			if err == nil {
+				t.Fatal("OpenProject() error = nil, want an unusable project path rejected")
+			}
+			if !strings.Contains(err.Error(), project) {
+				t.Fatalf("error = %v, want the project path named", err)
+			}
+			if opened.ID != "" {
+				t.Fatalf("opened = %#v, want no session for an unusable path", opened)
+			}
+			for _, key := range runner.keys() {
+				if strings.Contains(key, "session.create") {
+					t.Fatalf("commands = %#v, want no session created for an unusable path", runner.keys())
+				}
+			}
+		})
 	}
 }

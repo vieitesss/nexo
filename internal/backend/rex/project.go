@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -178,6 +179,9 @@ func (b *Backend) recentCandidate(ctx context.Context, candidates []sessionInfo)
 }
 
 func (b *Backend) createSession(ctx context.Context, path string) (sessionInfo, error) {
+	if err := validateProjectDirectory(path); err != nil {
+		return sessionInfo{}, err
+	}
 	label := truncateLabel(projects.TargetName(path))
 	output, err := b.api(ctx, "session.create", createInput{
 		Label: label,
@@ -199,6 +203,21 @@ func (b *Backend) createSession(ctx context.Context, path string) (sessionInfo, 
 		return sessionInfo{}, errors.New("rex session.create returned no session id")
 	}
 	return sessionInfo{ID: created.SessionID, Label: label}, nil
+}
+
+// validateProjectDirectory refuses a project path Rex cannot use as a working
+// directory. Rex silently falls back to the home directory when cwd is not a
+// directory, so a vanished checkout must fail here instead of opening a shell
+// in the wrong place while nexo reports the project root.
+func validateProjectDirectory(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("project path %s is not usable: %w", path, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("project path %s is not a directory", path)
+	}
+	return nil
 }
 
 // truncateLabel keeps a generated project name inside Rex's stored label.
