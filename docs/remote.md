@@ -211,9 +211,11 @@ The block runs that command directly: `shell = "none"` and no login shell, so
 no profile, alias, or interpolation can change what the pane attaches to.
 `--backend rex` is part of the rendezvous key, so a Rex proxy and a tmux proxy
 for the same machine never share a remote file. An explicit
-`remote open MACHINE/CONTAINER` retargets the client already in the pane and
-records the kind it just proved; a failed switch leaves the healthy proxy
-alone.
+`remote open MACHINE/CONTAINER` retargets the client already in the pane; a
+failed switch leaves the healthy proxy alone. Opening the proxy for the other
+remote kind is refused before any switch: a proxy keeps the kind it was
+created with, and `nexo remote close MACHINE` plus opening it again is how the
+kind changes.
 
 Rex has no native project or proxy metadata, so the machine identity lives in
 nexo's sidecar document for that server run, keyed by the native session ID.

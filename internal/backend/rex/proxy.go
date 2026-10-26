@@ -161,8 +161,25 @@ func (b *Backend) openProxy(ctx context.Context, remoteKind, machine, container 
 
 // retargetProxy switches the remote client of the existing machine proxy to an
 // explicit container, then focuses the proxy. It never creates, restarts, or
-// closes the remote container.
+// closes the remote container, and it never changes the kind the block is
+// attached to: the recorded kind is the block's real multiplexer, so switching
+// it would leave the record lying about what the pane runs.
 func (b *Backend) retargetProxy(ctx context.Context, sessionID, remoteKind, machine, container string) error {
+	store, err := b.metadata(ctx)
+	if err != nil {
+		return err
+	}
+	record, ok, err := store.lookupProxy(sessionID)
+	if err != nil {
+		return err
+	}
+	attached := proxy.RemoteKindTmux
+	if ok && record.RemoteKind != "" {
+		attached = record.RemoteKind
+	}
+	if attached != remoteKind {
+		return fmt.Errorf("proxy for %s is attached to %s, not %s; run nexo remote close %s and open it again", machine, attached, remoteKind, machine)
+	}
 	if container != "" {
 		if err := b.switchRemoteProxy(ctx, remoteKind, machine, container); err != nil {
 			if proxy.IsMissingRemoteTarget(err) {
@@ -171,14 +188,6 @@ func (b *Backend) retargetProxy(ctx context.Context, sessionID, remoteKind, mach
 				}
 				return fmt.Errorf("no session %s on %s", container, machine)
 			}
-			return err
-		}
-		// A successful switch is the only moment the attached kind is proven.
-		store, err := b.metadata(ctx)
-		if err != nil {
-			return err
-		}
-		if err := store.recordProxy(sessionID, proxyRecord{Machine: machine, RemoteKind: remoteKind}); err != nil {
 			return err
 		}
 	}

@@ -211,28 +211,76 @@ func TestProxyReusesTheMachineProxyAndSwitchesItsRemoteTarget(t *testing.T) {
 	}
 }
 
-// TestProxySwitchUpdatesTheRememberedRemoteKind pins that a proxy retargeted to
-// another remote multiplexer is remembered with the new kind, so M-o recreates
-// the bridge that is actually attached.
-func TestProxySwitchUpdatesTheRememberedRemoteKind(t *testing.T) {
-	runner := machineProxyRunner(t, "session:proxy", map[string]string{
-		api("session.list", ""): `{"sessions":[{"session_id":"session:proxy","label":"rpi"}]}`,
-		api("client.list", ""):  oneApp,
-		api("client.perform", `{"client_id":"client:1","action":"session.select","args":{"session_id":"session:proxy"},"origin":"cli","timeout_ms":3000}`): `{"performed_by":"client:1"}`,
-	})
-	backend := newProxyBackend(t, runner)
-	useIdentity(backend, identity{HostID: "host-1", InstanceID: "instance-1"})
-	seedProxySession(t, backend)
+// sshSwitches counts the remote client switches a fake runner saw.
+func sshSwitches(runner *fakeRunner) int {
+	count := 0
+	for _, request := range runner.calls {
+		if request.name == "ssh" {
+			count++
+		}
+	}
+	return count
+}
 
-	if err := backend.Proxy(context.Background(), proxy.RemoteKindHerdr, "devbox", "w2"); err != nil {
-		t.Fatalf("Proxy() error = %v", err)
+// TestProxyRefusesToChangeTheAttachedRemoteKind pins that a proxy keeps the
+// kind it was created with: an explicit open for the other multiplexer is
+// refused before any switch, so the recorded kind and the healthy attachment
+// stay together instead of disagreeing.
+func TestProxyRefusesToChangeTheAttachedRemoteKind(t *testing.T) {
+	cases := []struct {
+		name      string
+		attached  string
+		requested string
+		container string
+	}{
+		{name: "tmux to herdr", attached: proxy.RemoteKindTmux, requested: proxy.RemoteKindHerdr, container: "w2"},
+		{name: "herdr to tmux", attached: proxy.RemoteKindHerdr, requested: proxy.RemoteKindTmux, container: "api"},
 	}
-	entries, err := backend.RecentContainers(context.Background())
-	if err != nil {
-		t.Fatalf("RecentContainers() error = %v", err)
-	}
-	if len(entries) != 1 || entries[0].RemoteKind != "herdr" || entries[0].Machine != "devbox" {
-		t.Fatalf("proxy history = %#v, want the switched herdr bridge", entries)
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			runner := machineProxyRunner(t, "session:proxy", map[string]string{
+				api("session.list", ""): `{"sessions":[{"session_id":"session:proxy","label":"devbox"}]}`,
+			})
+			backend := newProxyBackend(t, runner)
+			useIdentity(backend, identity{HostID: "host-1", InstanceID: "instance-1"})
+			if err := backend.Proxy(context.Background(), test.attached, "devbox", ""); err != nil {
+				t.Fatalf("seed proxy error = %v", err)
+			}
+			store, err := backend.metadata(context.Background())
+			if err != nil {
+				t.Fatalf("metadata() error = %v", err)
+			}
+			before, ok, err := store.lookupProxy("session:proxy")
+			if err != nil || !ok {
+				t.Fatalf("lookupProxy() = %#v, %v, %v", before, ok, err)
+			}
+			attachedKind := before.RemoteKind
+			if attachedKind == "" {
+				attachedKind = proxy.RemoteKindTmux
+			}
+			if attachedKind != test.attached || before.Machine != "devbox" {
+				t.Fatalf("seeded record = %#v, want a %s devbox proxy", before, test.attached)
+			}
+
+			err = backend.Proxy(context.Background(), test.requested, "devbox", test.container)
+			want := "proxy for devbox is attached to " + test.attached + ", not " + test.requested + "; run nexo remote close devbox and open it again"
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("Proxy() error = %v, want %q", err, want)
+			}
+			if switches := sshSwitches(runner); switches != 0 {
+				t.Fatalf("ssh switches = %d, want the refusal before any remote switch", switches)
+			}
+			if creates := len(createSessionInputs(t, runner)); creates != 1 {
+				t.Fatalf("session.create calls = %d, want the one healthy proxy", creates)
+			}
+			after, ok, err := store.lookupProxy("session:proxy")
+			if err != nil || !ok {
+				t.Fatalf("lookupProxy() = %#v, %v, %v", after, ok, err)
+			}
+			if after != before {
+				t.Fatalf("recorded proxy = %#v, want the unchanged %#v", after, before)
+			}
+		})
 	}
 }
 
