@@ -491,3 +491,116 @@ func TestOpenProjectRejectsAProjectPathThatIsNotADirectory(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateSessionUsesConfiguredName(t *testing.T) {
+	for _, tc := range []struct{ template, want string }{
+		{"{org}/{repo}", "acme/api"}, {"-task-{repo}", "-task-api"}, {"$(literal)-{repo}", "$(literal)-api"},
+		{strings.Repeat("界", 127) + "{repo}", strings.Repeat("界", 127) + "a"},
+		{strings.Repeat("界", 128), strings.Repeat("界", 128)},
+	} {
+		t.Run(tc.template, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "acme", "api")
+			if err := os.MkdirAll(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			r := &fakeRunner{outputs: map[string]string{api("session.create", createPayload(tc.want, path)): createdSession}}
+			b := newTestBackend(t, r, nil)
+			b.NameTemplate = &tc.template
+			got, err := b.createSession(context.Background(), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Label != tc.want || got.ID != "session:new" {
+				t.Fatalf("session = %#v", got)
+			}
+			if len(r.calls) != 1 || r.calls[0].name != "rex" || r.calls[0].key() != api("session.create", createPayload(tc.want, path)) {
+				t.Fatalf("calls = %#v", r.calls)
+			}
+		})
+	}
+	for _, cancelled := range []bool{false, true} {
+		template := "{team}"
+		r := &fakeRunner{}
+		b := newTestBackend(t, r, nil)
+		b.NameTemplate = &template
+		ctx, cancel := context.WithCancel(context.Background())
+		if cancelled {
+			cancel()
+		}
+		_, err := b.createSession(ctx, t.TempDir())
+		cancel()
+		if err == nil || (cancelled && !errors.Is(err, context.Canceled)) {
+			t.Fatalf("error = %v", err)
+		}
+		if len(r.calls) != 0 {
+			t.Fatalf("calls = %#v", r.calls)
+		}
+	}
+}
+
+func TestConfiguredNameDoesNotRenameAdoptedSession(t *testing.T) {
+	for _, mode := range []string{"recorded", "working directory", "explicit ID"} {
+		for _, label := range []string{"native/name", ""} {
+			t.Run(mode+"/"+label, func(t *testing.T) {
+				path := t.TempDir()
+				if err := os.Mkdir(filepath.Join(path, ".git"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				fixtures := map[string]string{api("session.list", ""): sessionsJSON(sessionJSON("session:1", label)), whoamiKey: `{"host_id":"host-1","instance_id":"instance-1"}`}
+				if mode == "working directory" {
+					fixtures[api("session.list_blocks", `{"session_id":"session:1"}`)] = blocksJSON(terminalBlockJSON("block:1", "host-1"))
+					addBlockPaths(fixtures, "session:1", "block:1", path)
+				}
+				r := &fakeRunner{outputs: fixtures}
+				b := newTestBackend(t, r, nil)
+				template := "{team}"
+				b.NameTemplate = &template
+				if mode == "recorded" {
+					index, err := b.metadata(context.Background())
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := index.recordRoot(path, "session:1"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				options := capabilities.OpenOptions{NoFocus: true}
+				if mode == "explicit ID" {
+					options.ContainerID = "session:1"
+				}
+				got, err := b.OpenProject(context.Background(), path, options)
+				if err != nil || got.Created || got.Name != label || got.ID != "session:1" {
+					t.Fatalf("container = %#v, %v", got, err)
+				}
+				for _, c := range r.calls {
+					if c.name != "rex" || strings.Contains(c.key(), "session.create") {
+						t.Fatalf("adoption resolved a name or created: %#v", r.calls)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCreateSessionCancellationDuringNameDiscovery(t *testing.T) {
+	path := t.TempDir()
+	if err := os.Mkdir(filepath.Join(path, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := &fakeRunner{handler: func(c call) ([]byte, bool) {
+		if c.name != "git" || c.key() != "-C "+path+" rev-parse --show-toplevel" {
+			t.Fatalf("unexpected command: %#v", c)
+		}
+		cancel()
+		return []byte(path), true
+	}}
+	b := newTestBackend(t, r, nil)
+	template := "{org}/{repo}"
+	b.NameTemplate = &template
+	_, err := b.createSession(ctx, path)
+	if !errors.Is(err, context.Canceled) || len(r.calls) != 1 || r.calls[0].name != "git" {
+		t.Fatalf("error=%v calls=%#v", err, r.calls)
+	}
+}

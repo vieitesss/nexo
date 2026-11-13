@@ -165,3 +165,45 @@ func TestPrepareSetupSkipsPathsTheConfigAlreadyCovers(t *testing.T) {
 		t.Fatalf("paths = %q, want only ~/code appended: %q", after, want)
 	}
 }
+
+func TestPrepareSetupPreservesSessionNameTemplateBytes(t *testing.T) {
+	before := "paths = [\"~/src\"]\n\n# naming stays local\n[session] # keep table comment\nname-template = '{org}/{team}/{repo}' # keep value comment\n"
+	after, err := PrepareSetup([]byte(before), "config.toml", "/home/u", SetupValues{Paths: []string{"~/code"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(before, `paths = ["~/src"]`, `paths = ["~/src", "~/code"]`, 1)
+	if string(after) != want {
+		t.Fatalf("config = %q, want %q", after, want)
+	}
+	var cfg Config
+	if err := decode(after, "config.toml", &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Session.NameTemplate == nil || *cfg.Session.NameTemplate != "{org}/{team}/{repo}" {
+		t.Fatalf("session = %#v", cfg.Session)
+	}
+	without, err := PrepareSetup(nil, "config.toml", "/home/u", SetupValues{Paths: []string{"~/code"}})
+	if err != nil || strings.Contains(string(without), "session") {
+		t.Fatalf("implicit session config = %q, %v", without, err)
+	}
+}
+
+func TestMergeAgentsDoesNotCopySessionNameTemplate(t *testing.T) {
+	local := []byte("[session]\nname-template = '{org}/{repo}'\n[agents]\nnotify = true\n")
+	for _, session := range []string{"", "\n# remote-owned naming\n[session] # retained\nname-template = 'remote-{repo}' # unchanged\n"} {
+		remote := "[agents]\nnotify = false\n" + session
+		got, err := MergeAgents([]byte(remote), local, "remote.toml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := strings.Replace(remote, "notify = false", "notify = true", 1)
+		if string(got) != want {
+			t.Fatalf("remote config = %q, want %q", got, want)
+		}
+		var cfg Config
+		if err := decode(got, "remote.toml", &cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

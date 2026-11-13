@@ -182,7 +182,11 @@ func (b *Backend) createSession(ctx context.Context, path string) (sessionInfo, 
 	if err := validateProjectDirectory(path); err != nil {
 		return sessionInfo{}, err
 	}
-	label := truncateLabel(projects.TargetName(path))
+	name, err := projects.ResolveTargetName(ctx, path, b.NameTemplate, b.Runner)
+	if err != nil {
+		return sessionInfo{}, err
+	}
+	label := truncateLabel(name)
 	output, err := b.api(ctx, "session.create", createInput{
 		Label: label,
 		InitialWindows: []createWindow{{

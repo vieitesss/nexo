@@ -2,11 +2,14 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sort"
 	"testing"
 
+	"github.com/vieitesss/nexo/internal/backend/herdr"
 	"github.com/vieitesss/nexo/internal/backend/rex"
+	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/config"
 )
 
@@ -143,5 +146,36 @@ func TestResolveNoneHasNoAdapterOrCapabilities(t *testing.T) {
 	}
 	if got.Capabilities == nil {
 		t.Fatal("selection capabilities = nil, want empty list")
+	}
+}
+
+func TestResolvePassesNameTemplate(t *testing.T) {
+	template := "{org}/{repo}"
+	for _, kind := range []string{"tmux", "herdr", "rex"} {
+		for _, configured := range []*string{nil, &template} {
+			t.Run(kind+fmt.Sprint(configured != nil), func(t *testing.T) {
+				calls := 0
+				r := fakeRunner(func(context.Context, string, ...string) ([]byte, error) { calls++; return nil, nil })
+				cfg := config.Config{Backend: kind, Session: config.SessionConfig{NameTemplate: configured}}
+				selected, err := Resolve(context.Background(), ResolveInput{Config: cfg, Env: mapEnvironment{}, Runner: r})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got *string
+				switch b := selected.Adapter.(type) {
+				case *tmux.Backend:
+					got = b.NameTemplate
+				case *herdr.Backend:
+					got = b.NameTemplate
+				case *rex.Backend:
+					got = b.NameTemplate
+				default:
+					t.Fatalf("adapter = %T", b)
+				}
+				if got != configured || calls != 0 {
+					t.Fatalf("template = %v, want %v; selection calls = %d", got, configured, calls)
+				}
+			})
+		}
 	}
 }

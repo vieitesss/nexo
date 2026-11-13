@@ -3,11 +3,16 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/vieitesss/nexo/internal/backend"
 	"github.com/vieitesss/nexo/internal/backend/rex"
+	"github.com/vieitesss/nexo/internal/backend/tmux"
 	"github.com/vieitesss/nexo/internal/capabilities"
 	"github.com/vieitesss/nexo/internal/config"
 	"github.com/vieitesss/nexo/internal/picker"
@@ -184,5 +189,74 @@ func TestTUIDependenciesAcceptTheRexAdapter(t *testing.T) {
 	}
 	if deps.FocusAgent == nil {
 		t.Fatal("FocusAgent = nil, want the Rex pane focuser")
+	}
+}
+
+func TestTUIProjectOpenUsesConfiguredAdapterName(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "acme", "api")
+	var calls [][]string
+	r := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "tmux" {
+			t.Fatalf("unexpected command: %s %v", name, args)
+		}
+		calls = append(calls, append([]string(nil), args...))
+		switch strings.Join(args, " ") {
+		case "-u has-session -t =acme/api":
+			return []byte("can't find session"), errors.New("can't find session")
+		case "-u new-session -d -s acme/api -c " + path:
+			return nil, nil
+		case "-u display-message -p -t =acme/api: #{session_id}":
+			return []byte("$7\n"), nil
+		case "switch-client -t =acme/api":
+			return nil, nil
+		case "-u display-message -p -t $7 #{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}":
+			return nil, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return nil, nil
+		}
+	})
+	template := "{org}/{repo}"
+	adapter := tmux.New(r, true)
+	adapter.NameTemplate = &template
+	deps, err := tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter, Runner: r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deps.OpenProject(context.Background(), picker.Place{Path: path}); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"-u", "has-session", "-t", "=acme/api"}, {"-u", "new-session", "-d", "-s", "acme/api", "-c", path}, {"-u", "display-message", "-p", "-t", "=acme/api:", "#{session_id}"}, {"switch-client", "-t", "=acme/api"}, {"-u", "display-message", "-p", "-t", "$7", "#{session_id}\t#{session_name}\t#{@nexo-proxy}\t#{socket_path}"}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%#v, want %#v", calls, want)
+	}
+}
+
+func TestTUISetupDoesNotResolveSessionNames(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "api")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	template := "{team}"
+	cfg := config.Config{ProjectsConfig: config.ProjectsConfig{Paths: []string{root}}, Session: config.SessionConfig{NameTemplate: &template}}
+	r := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatalf("TUI setup invoked %s %v", name, args)
+		return nil, nil
+	})
+	adapter := tmux.New(r, true)
+	adapter.NameTemplate = &template
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("paths = [%q]\n[session]\nname-template = '{team}'\n", root)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	deps, err := tuiDependencies(context.Background(), Invocation{Selection: backend.Selection{Kind: backend.Tmux}, Adapter: adapter, Runner: r, Config: cfg, ConfigPath: configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	places, err := deps.ProjectSource(context.Background())
+	if err != nil || len(places) != 1 || places[0].Path != project {
+		t.Fatalf("projects=%#v, %v", places, err)
 	}
 }

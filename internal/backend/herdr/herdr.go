@@ -25,8 +25,9 @@ import (
 // Backend is the Herdr backend. Capabilities are added independently as each
 // feature is implemented.
 type Backend struct {
-	Runner runner.CommandRunner
-	agents *Source
+	NameTemplate *string
+	Runner       runner.CommandRunner
+	agents       *Source
 
 	proxyConfig     config.RemoteConfig
 	proxyConfigPath string
@@ -285,6 +286,13 @@ func (b *Backend) createWorktree(ctx context.Context, options capabilities.Workt
 	if err != nil {
 		cleanupErr := b.rollbackPartialCreate(options, workspaceID(output), ctx)
 		return capabilities.Worktree{}, errors.Join(err, cleanupErr)
+	}
+	if workspace.Label == "" && b.NameTemplate != nil {
+		workspace.Label, err = projects.ResolveTargetName(ctx, options.Destination, b.NameTemplate, b.Runner)
+		if err != nil {
+			cleanupErr := b.rollbackPartialCreate(options, workspace.ID, ctx)
+			return capabilities.Worktree{}, errors.Join(err, cleanupErr)
+		}
 	}
 	return capabilities.Worktree{
 		Path:        options.Destination,
@@ -562,7 +570,10 @@ func (b *Backend) openProjectNative(ctx context.Context, path string, options ca
 		return capabilities.OpenedContainer{}, err
 	}
 
-	target := projects.TargetName(path)
+	target, err := projects.ResolveTargetName(ctx, path, b.NameTemplate, b.Runner)
+	if err != nil {
+		return capabilities.OpenedContainer{}, err
+	}
 	directory := filepath.Base(filepath.Clean(path))
 	if workspace, ok := matchWorkspace(workspaces, target, directory); ok {
 		if !options.NoFocus {
@@ -584,6 +595,9 @@ func (b *Backend) openProjectNative(ctx context.Context, path string, options ca
 	created, err := decodeWorktreeWorkspace(createdOutput)
 	if err != nil {
 		return capabilities.OpenedContainer{}, err
+	}
+	if created.Label == "" {
+		created.Label = target
 	}
 	return capabilities.OpenedContainer{ID: created.ID, Name: created.Label, Path: path, Created: true}, nil
 }

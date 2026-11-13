@@ -3,6 +3,7 @@ package tmux
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -403,5 +404,81 @@ func TestReportsNoServerMatchesTmuxConnectionFailures(t *testing.T) {
 	}
 	if ReportsNoServer("can't find session: api") {
 		t.Error("ReportsNoServer matched a missing session")
+	}
+}
+
+func TestOpenProjectUsesConfiguredName(t *testing.T) {
+	for _, tc := range []struct{ template, want string }{
+		{"{org}/{repo}", "acme/api"}, {"-task-{repo}", "-task-api"}, {"$(literal)-{repo}", "$(literal)-api"},
+	} {
+		t.Run(tc.template, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "acme", "api")
+			r := &fakeRunner{fail: map[string]error{"has-session -t =" + tc.want: errors.New("can't find session")}, outputs: map[string][]byte{"display-message -p -t =" + tc.want + ": #{session_id}": []byte("$7\n")}}
+			b := New(r, true)
+			b.NameTemplate = &tc.template
+			opened, err := b.OpenProject(context.Background(), path, capabilities.OpenOptions{NoFocus: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if opened.Name != tc.want || !opened.Created || opened.ID != "$7" || opened.Path != path {
+				t.Fatalf("opened = %#v", opened)
+			}
+			want := []call{{"tmux", []string{"-u", "has-session", "-t", "=" + tc.want}}, {"tmux", []string{"-u", "new-session", "-d", "-s", tc.want, "-c", path}}, {"tmux", []string{"-u", "display-message", "-p", "-t", "=" + tc.want + ":", "#{session_id}"}}}
+			if !reflect.DeepEqual(r.calls, want) {
+				t.Fatalf("calls = %#v, want %#v", r.calls, want)
+			}
+			delete(r.fail, "has-session -t ="+tc.want)
+			r.calls = nil
+			reused, err := b.OpenProject(context.Background(), path, capabilities.OpenOptions{NoFocus: true})
+			if err != nil || reused.Created || reused.Name != tc.want {
+				t.Fatalf("reuse = %#v, %v", reused, err)
+			}
+			if !reflect.DeepEqual(r.calls, []call{want[0], want[2]}) {
+				t.Fatalf("reuse calls = %#v", r.calls)
+			}
+		})
+	}
+	for _, cancelled := range []bool{false, true} {
+		t.Run(fmt.Sprint("failure", cancelled), func(t *testing.T) {
+			template := "{team}"
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if cancelled {
+				cancel()
+			}
+			r := &fakeRunner{}
+			b := New(r)
+			b.NameTemplate = &template
+			_, err := b.OpenProject(ctx, "/work/acme/api", capabilities.OpenOptions{NoFocus: true})
+			if err == nil || (cancelled && !errors.Is(err, context.Canceled)) {
+				t.Fatalf("error = %v", err)
+			}
+			if len(r.calls) != 0 {
+				t.Fatalf("calls after naming failure = %#v", r.calls)
+			}
+		})
+	}
+}
+
+func TestOpenProjectCancellationDuringNameDiscovery(t *testing.T) {
+	path := t.TempDir()
+	if err := os.Mkdir(filepath.Join(path, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := &fakeRunner{outputFunc: func(name string, args []string) ([]byte, bool) {
+		if name != "git" || !reflect.DeepEqual(args, []string{"-C", path, "rev-parse", "--show-toplevel"}) {
+			t.Fatalf("unexpected command: %s %v", name, args)
+		}
+		cancel()
+		return []byte(path), true
+	}}
+	b := New(r, true)
+	template := "{org}/{repo}"
+	b.NameTemplate = &template
+	_, err := b.OpenProject(ctx, path, capabilities.OpenOptions{NoFocus: true})
+	if !errors.Is(err, context.Canceled) || len(r.calls) != 1 || r.calls[0].name != "git" {
+		t.Fatalf("error=%v calls=%#v", err, r.calls)
 	}
 }

@@ -3,6 +3,7 @@ package rex
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,5 +237,135 @@ func TestCreateWorktreeRollsBackTheSessionWhenFocusFailsAfterCreation(t *testing
 	}
 	if recorded, ok, err := index.lookupRoot(filepath.Clean(destination)); ok || err != nil {
 		t.Fatalf("sidecar entry %q survived rollback: %v", recorded, err)
+	}
+}
+
+func TestWorktreeUsesConfiguredName(t *testing.T) {
+	for _, extract := range []bool{false, true} {
+		t.Run(fmt.Sprint("extract=", extract), func(t *testing.T) {
+			repo := initRepository(t)
+			if _, err := (runner.ExecRunner{}).Run(context.Background(), "git", "-C", repo, "remote", "add", "origin", "git@example.test:acme/api.git"); err != nil {
+				t.Fatal(err)
+			}
+			if extract {
+				if _, err := (runner.ExecRunner{}).Run(context.Background(), "git", "-C", repo, "checkout", "-b", "feature"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			destination := filepath.Join(t.TempDir(), "checkout")
+			r := &fakeRunner{outputs: map[string]string{api("session.list", ""): sessionsJSON(), whoamiKey: `{"host_id":"host-1","instance_id":"instance-1"}`, api("session.create", createPayload("acme/api", destination)): createdSession}}
+			b := New(realGit{rex: r, t: t}, nil)
+			b.binary = "rex"
+			b.stateDir = t.TempDir()
+			template := "{org}/{repo}"
+			b.NameTemplate = &template
+			var got capabilities.Worktree
+			var err error
+			if extract {
+				got, err = b.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{Repo: repo, Destination: destination, NoFocus: true})
+			} else {
+				got, err = b.CreateWorktree(context.Background(), capabilities.WorktreeCreateOptions{Repo: repo, Branch: "feature", Destination: destination, NewBranch: true, NoFocus: true})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Container.Name != "acme/api" || !got.Container.Created || got.ContainerID != "session:new" {
+				t.Fatalf("worktree = %#v", got)
+			}
+			marker, err := os.Stat(filepath.Join(destination, ".git"))
+			if err != nil || marker.IsDir() {
+				t.Fatalf("marker = %v, %v", marker, err)
+			}
+			inputs := createSessionInputs(t, r)
+			if len(inputs) != 1 || inputs[0].Label != "acme/api" {
+				t.Fatalf("create inputs = %#v", inputs)
+			}
+		})
+	}
+}
+
+func TestWorktreeNamingFailureRollsBack(t *testing.T) {
+	for _, extract := range []bool{false, true} {
+		t.Run(fmt.Sprint("extract=", extract), func(t *testing.T) {
+			repo := initRepository(t)
+			if extract {
+				if _, err := (runner.ExecRunner{}).Run(context.Background(), "git", "-C", repo, "checkout", "-b", "feature"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			destination := filepath.Join(t.TempDir(), "checkout")
+			r := &fakeRunner{outputs: map[string]string{api("session.list", ""): sessionsJSON(), whoamiKey: `{"host_id":"host-1","instance_id":"instance-1"}`}}
+			b := New(realGit{rex: r, t: t}, nil)
+			b.binary = "rex"
+			b.stateDir = t.TempDir()
+			template := "{team}"
+			b.NameTemplate = &template
+			var err error
+			if extract {
+				_, err = b.ExtractWorktree(context.Background(), capabilities.WorktreeExtractOptions{Repo: repo, Destination: destination, NoFocus: true})
+			} else {
+				_, err = b.CreateWorktree(context.Background(), capabilities.WorktreeCreateOptions{Repo: repo, Branch: "feature", Destination: destination, NewBranch: true, NoFocus: true})
+			}
+			if err == nil || !strings.Contains(err.Error(), "name") {
+				t.Fatalf("error = %v", err)
+			}
+			if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("destination leaked: %v", err)
+			}
+			for _, key := range r.keys() {
+				if strings.Contains(key, "session.create") || strings.Contains(key, "session.destroy") {
+					t.Fatalf("unexpected mutation: %s", key)
+				}
+			}
+			if extract {
+				current, err := (runner.ExecRunner{}).Run(context.Background(), "git", "-C", repo, "branch", "--show-current")
+				if err != nil || strings.TrimSpace(string(current)) != "feature" {
+					t.Fatalf("original branch = %s, %v", current, err)
+				}
+			}
+		})
+	}
+}
+
+func TestConfiguredWorktreeAdoptionPreservesNativeLabel(t *testing.T) {
+	for _, failFocus := range []bool{false, true} {
+		t.Run(fmt.Sprint("focus failure=", failFocus), func(t *testing.T) {
+			repo := initRepository(t)
+			destination := filepath.Join(t.TempDir(), "feature")
+			fixtures := map[string]string{api("session.list", ""): sessionsJSON(sessionJSON("session:1", "native/name")), whoamiKey: `{"host_id":"host-1","instance_id":"instance-1"}`, api("session.list_blocks", `{"session_id":"session:1"}`): blocksJSON(terminalBlockJSON("block:1", "host-1"))}
+			addBlockPaths(fixtures, "session:1", "block:1", destination)
+			r := &fakeRunner{outputs: fixtures}
+			focusErr := errors.New("focus refused")
+			if failFocus {
+				fixtures[api("client.list", "")] = oneApp
+				r.errors = map[string]error{api("client.perform", `{"client_id":"client:1","action":"session.select","args":{"session_id":"session:1"},"origin":"cli","timeout_ms":3000}`): focusErr}
+			}
+			b := New(realGit{rex: r, t: t}, nil)
+			b.binary = "rex"
+			b.stateDir = t.TempDir()
+			template := "{team}"
+			b.NameTemplate = &template
+			got, err := b.CreateWorktree(context.Background(), capabilities.WorktreeCreateOptions{Repo: repo, Branch: "feature", Destination: destination, NewBranch: true, NoFocus: !failFocus})
+			if failFocus {
+				if !errors.Is(err, focusErr) {
+					t.Fatalf("error=%v", err)
+				}
+				if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("destination leaked: %v", err)
+				}
+			} else {
+				if err != nil || got.Container.Created || got.Container.Name != "native/name" {
+					t.Fatalf("result=%#v, %v", got, err)
+				}
+				if err := b.RemoveWorktree(context.Background(), got); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, key := range r.keys() {
+				if strings.Contains(key, "session.create") || strings.Contains(key, "session.destroy") {
+					t.Fatalf("mutated adopted session: %s", key)
+				}
+			}
+		})
 	}
 }

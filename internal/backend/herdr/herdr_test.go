@@ -2,6 +2,7 @@ package herdr
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -496,5 +497,86 @@ func TestOpenProjectRejectsMalformedCreateOutput(t *testing.T) {
 
 	if _, err := backend.OpenProject(context.Background(), "/work/acme/app", capabilities.OpenOptions{NoFocus: true}); err == nil {
 		t.Fatal("OpenProject() error = nil, want malformed output error")
+	}
+}
+
+func TestOpenProjectUsesConfiguredName(t *testing.T) {
+	for _, tc := range []struct {
+		name, template, list, responseLabel, want string
+		id                                        string
+		created                                   bool
+	}{
+		{name: "exact before substring", template: "{org}/{repo}", list: `{"workspace_id":"other","label":"my-api"},{"workspace_id":"chosen","label":"acme/api"}`, want: "acme/api", id: "chosen"},
+		{name: "directory fallback", template: "{org}/{repo}", list: `{"workspace_id":"chosen","label":"my-api"}`, want: "my-api", id: "chosen"},
+		{name: "create", template: "{org}/{repo}", responseLabel: "acme/api", want: "acme/api", id: "new", created: true},
+		{name: "empty created label", template: "{org}/{repo}", want: "acme/api", id: "new", created: true},
+		{name: "leading dash", template: "-task-{repo}", responseLabel: "-task-api", want: "-task-api", id: "new", created: true},
+		{name: "literal shell text", template: "$(literal)-{repo}", responseLabel: "$(literal)-api", want: "$(literal)-api", id: "new", created: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "acme", "api")
+			generated := "acme/api"
+			if strings.HasPrefix(tc.template, "-") {
+				generated = "-task-api"
+			}
+			if strings.HasPrefix(tc.template, "$") {
+				generated = "$(literal)-api"
+			}
+			create := []string{"workspace", "create", "--cwd", path, "--label", generated}
+			r := &fakeRunner{outputs: map[string][]byte{"workspace list": []byte(`{"result":{"workspaces":[` + tc.list + `]}}`), strings.Join(create, " "): []byte(`{"workspace":{"workspace_id":"new","label":"` + tc.responseLabel + `"}}`)}}
+			b := New(r)
+			b.NameTemplate = &tc.template
+			got, err := b.OpenProject(context.Background(), path, capabilities.OpenOptions{NoFocus: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Name != tc.want || got.ID != tc.id || got.Created != tc.created {
+				t.Fatalf("container = %#v", got)
+			}
+			want := []call{{"herdr", []string{"workspace", "list"}}}
+			if tc.created {
+				want = append(want, call{"herdr", create})
+			}
+			if !reflect.DeepEqual(r.calls, want) {
+				t.Fatalf("calls = %#v, want %#v", r.calls, want)
+			}
+		})
+	}
+	for _, label := range []string{"native", ""} {
+		t.Run("explicit ID "+label, func(t *testing.T) {
+			path := t.TempDir()
+			if err := os.Mkdir(filepath.Join(path, ".git"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			template := "{team}" // Would fail if naming were attempted.
+			r := &fakeRunner{outputs: map[string][]byte{"workspace list": []byte(`{"workspaces":[{"workspace_id":"chosen","label":"` + label + `"}]}`)}}
+			b := New(r)
+			b.NameTemplate = &template
+			got, err := b.OpenProject(context.Background(), path, capabilities.OpenOptions{ContainerID: "chosen", NoFocus: true})
+			if err != nil || got.Name != label || got.Created {
+				t.Fatalf("adopted = %#v, %v", got, err)
+			}
+			if !reflect.DeepEqual(r.calls, []call{{"herdr", []string{"workspace", "list"}}}) {
+				t.Fatalf("calls = %#v", r.calls)
+			}
+		})
+	}
+	for _, cancelled := range []bool{false, true} {
+		template := "{team}"
+		r := &fakeRunner{}
+		b := New(r)
+		b.NameTemplate = &template
+		ctx, cancel := context.WithCancel(context.Background())
+		if cancelled {
+			cancel()
+		}
+		_, err := b.OpenProject(ctx, "/work/acme/api", capabilities.OpenOptions{NoFocus: true})
+		cancel()
+		if err == nil || (cancelled && !errors.Is(err, context.Canceled)) {
+			t.Fatalf("error = %v", err)
+		}
+		if !reflect.DeepEqual(r.calls, []call{{"herdr", []string{"workspace", "list"}}}) {
+			t.Fatalf("calls = %#v", r.calls)
+		}
 	}
 }

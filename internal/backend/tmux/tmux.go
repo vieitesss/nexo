@@ -22,10 +22,11 @@ import (
 // Backend is the tmux backend. Capabilities are added independently as each
 // feature is implemented.
 type Backend struct {
-	Runner   runner.CommandRunner
-	Inside   bool
-	agents   *Source
-	notifier *Notifier
+	NameTemplate *string
+	Runner       runner.CommandRunner
+	Inside       bool
+	agents       *Source
+	notifier     *Notifier
 
 	proxyConfig     config.RemoteConfig
 	proxyConfigPath string
@@ -189,8 +190,11 @@ func (b *Backend) openProjectNative(ctx context.Context, path string, options ca
 		return capabilities.OpenedContainer{}, errors.New("tmux project opener requires a command runner")
 	}
 
-	name := projects.TargetName(path)
-	_, err := b.run(ctx, "has-session", "-t", "="+name)
+	name, err := projects.ResolveTargetName(ctx, path, b.NameTemplate, b.Runner)
+	if err != nil {
+		return capabilities.OpenedContainer{}, err
+	}
+	_, err = b.run(ctx, "has-session", "-t", "="+name)
 	exists := err == nil
 	if err != nil && !isMissingSession(err) {
 		return capabilities.OpenedContainer{}, err

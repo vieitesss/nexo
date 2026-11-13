@@ -2,8 +2,11 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -143,5 +146,95 @@ func TestRunWithPassesConfigRunnerAndAdapter(t *testing.T) {
 	}
 	if capture.invocation.Selection.Adapter != adapter {
 		t.Fatal("selection adapter and invocation adapter differ")
+	}
+}
+
+func TestRunOpenUsesConfiguredSessionName(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "acme")
+	project := filepath.Join(root, "api")
+	if err := os.MkdirAll(project, 0700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	contents := fmt.Sprintf("backend = \"tmux\"\npaths = [%q]\n[session]\nname-template = \"{org}/{repo}\"\n", root)
+	if err := os.WriteFile(configPath, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name         string
+		exists, fail bool
+		wantStatus   int
+	}{
+		{name: "created"}, {name: "reused", exists: true}, {name: "backend error", fail: true, wantStatus: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls [][]string
+			r := funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
+				if name != "tmux" {
+					t.Fatalf("unexpected naming discovery: %s %v", name, args)
+				}
+				calls = append(calls, append([]string(nil), args...))
+				switch strings.Join(args, " ") {
+				case "-u has-session -t =acme/api":
+					if !tc.exists {
+						return []byte("can't find session"), errors.New("can't find session")
+					}
+					return nil, nil
+				case "-u new-session -d -s acme/api -c " + project:
+					if tc.fail {
+						return nil, errors.New("creation refused")
+					}
+					return nil, nil
+				case "-u display-message -p -t =acme/api: #{session_id}":
+					return []byte("$7\n"), nil
+				default:
+					t.Fatalf("unexpected command: %v", args)
+					return nil, nil
+				}
+			})
+			var output, stderr strings.Builder
+			status := RunWith([]string{"-c", configPath, "open", "--no-focus", project, "--json"}, &output, &stderr, r, mapEnvironment{}, "")
+			if status != tc.wantStatus {
+				t.Fatalf("status=%d output=%s stderr=%s", status, &output, &stderr)
+			}
+			if tc.fail {
+				if output.Len() != 0 || !strings.Contains(stderr.String(), "creation refused") {
+					t.Fatalf("output=%s stderr=%s", &output, &stderr)
+				}
+				return
+			}
+			want := fmt.Sprintf("{\"backend\":\"tmux\",\"id\":\"$7\",\"name\":\"acme/api\",\"path\":%q,\"created\":%t}\n", project, !tc.exists)
+			if output.String() != want || stderr.Len() != 0 {
+				t.Fatalf("output=%s stderr=%s; want %s", &output, &stderr, want)
+			}
+			wantCalls := [][]string{{"-u", "has-session", "-t", "=acme/api"}}
+			if !tc.exists {
+				wantCalls = append(wantCalls, []string{"-u", "new-session", "-d", "-s", "acme/api", "-c", project})
+			}
+			wantCalls = append(wantCalls, []string{"-u", "display-message", "-p", "-t", "=acme/api:", "#{session_id}"})
+			if !reflect.DeepEqual(calls, wantCalls) {
+				t.Fatalf("calls=%#v, want %#v", calls, wantCalls)
+			}
+		})
+	}
+}
+
+func TestRunListDoesNotResolveSessionNames(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "api")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("backend = \"tmux\"\npaths = [%q]\n[session]\nname-template = \"{team}\"\n", root)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output, stderr strings.Builder
+	status := RunWith([]string{"-c", configPath, "list", "--json"}, &output, &stderr, funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatalf("list invoked %s %v", name, args)
+		return nil, nil
+	}), mapEnvironment{}, "")
+	if status != 0 || stderr.Len() != 0 || !strings.Contains(output.String(), project) {
+		t.Fatalf("status=%d output=%s stderr=%s", status, &output, &stderr)
 	}
 }

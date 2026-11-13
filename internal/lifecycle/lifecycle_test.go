@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -178,5 +179,46 @@ func TestOpenProjectDefaultsCreatedContainerName(t *testing.T) {
 	want := capabilities.OpenedContainer{ID: "workspace-2", Name: projects.TargetName(path), Path: path, Created: true}
 	if got != want {
 		t.Fatalf("container = %#v, want created default %#v", got, want)
+	}
+}
+
+func TestWorktreePreservesAdapterLabelAndCleanupOwnership(t *testing.T) {
+	for _, created := range []bool{false, true} {
+		for _, label := range []string{"", "native/name"} {
+			t.Run(fmt.Sprintf("created=%v/label=%s", created, label), func(t *testing.T) {
+				destination := filepath.Join(t.TempDir(), "acme", "feature")
+				var order []string
+				var rolledBack capabilities.Worktree
+				errOpen := errors.New("focus failed")
+				_, err := CreateWorktree(context.Background(), capabilities.WorktreeCreateOptions{Repo: "/repo", Destination: destination}, WorktreeAdapter{
+					Create: func(context.Context, capabilities.WorktreeCreateOptions) (capabilities.Worktree, error) {
+						order = append(order, "create")
+						return capabilities.Worktree{}, nil
+					},
+					Open: func(context.Context, string, capabilities.OpenOptions) (capabilities.OpenedContainer, error) {
+						order = append(order, "open")
+						return capabilities.OpenedContainer{ID: "native-id", Name: label, Created: created}, errOpen
+					},
+					Rollback: func(ctx context.Context, w capabilities.Worktree) error {
+						order = append(order, "rollback")
+						if ctx.Err() != nil {
+							t.Fatal(ctx.Err())
+						}
+						rolledBack = w
+						return nil
+					},
+				})
+				if !errors.Is(err, errOpen) || !reflect.DeepEqual(order, []string{"create", "open", "rollback"}) {
+					t.Fatalf("error=%v, order=%v", err, order)
+				}
+				want := label
+				if created && label == "" {
+					want = "acme_feature"
+				}
+				if rolledBack.Container.Created != created || rolledBack.Container.Name != want || rolledBack.ContainerID != "native-id" {
+					t.Fatalf("rollback=%#v", rolledBack)
+				}
+			})
+		}
 	}
 }

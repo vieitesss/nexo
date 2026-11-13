@@ -101,6 +101,21 @@ nexo --backend=tmux worktree extract --return-branch main \
   ~/src/api ~/worktrees/api
 ```
 
+## Project container names
+
+`nexo open PATH` and project opens from the TUI share the optional
+[`[session] name-template` configuration](configuration.md#session-naming).
+Without it, naming and reuse are unchanged. A configured template can use
+`{org}`, `{team}` and `{repo}` from local Git/hg/jj remote metadata, or the
+selected directory's parent/name when metadata is unavailable. For example,
+`{org}/{repo}` can create `acme/api`.
+
+This adds no command-line flags, grouping, cloning, or branch/worktree behavior;
+hg/jj support here is naming-only. Native Herdr-created worktree labels remain
+native. Changing naming inputs does not migrate or rename existing containers
+and can create or reuse a different one; see the configuration compatibility
+notes before enabling it.
+
 ## Key bindings
 
 nexo installs no key bindings. The setup wizard offers optional bindings;

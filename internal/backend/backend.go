@@ -397,11 +397,17 @@ func (s Selection) withCapabilities(input ResolveInput) Selection {
 	switch s.Kind {
 	case Tmux:
 		inside, _ := tmuxEnvironment(environment)
-		s.Adapter = tmux.New(input.Runner, inside)
+		adapter := tmux.New(input.Runner, inside)
+		adapter.NameTemplate = input.Config.Session.NameTemplate
+		s.Adapter = adapter
 	case Herdr:
-		s.Adapter = herdr.New(input.Runner)
+		adapter := herdr.New(input.Runner)
+		adapter.NameTemplate = input.Config.Session.NameTemplate
+		s.Adapter = adapter
 	case Rex:
-		s.Adapter = rex.New(input.Runner, input.Messages)
+		adapter := rex.New(input.Runner, input.Messages)
+		adapter.NameTemplate = input.Config.Session.NameTemplate
+		s.Adapter = adapter
 	}
 	s.Capabilities = capabilities.Names(s.Adapter)
 	if s.Capabilities == nil {

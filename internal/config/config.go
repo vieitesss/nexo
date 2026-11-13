@@ -16,6 +16,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/vieitesss/nexo/internal/destination"
+	"github.com/vieitesss/nexo/internal/sessionname"
 )
 
 // Config is the typed configuration shared by all features.
@@ -25,11 +26,12 @@ import (
 type Config struct {
 	Backend        string `toml:"backend"`
 	ProjectsConfig `toml:",inline"`
-	Agents         AgentsConfig `toml:"agents"`
-	Glance         GlanceConfig `toml:"glance"`
-	TUI            TUIConfig    `toml:"tui"`
-	Remote         RemoteConfig `toml:"remote"`
-	Clone          CloneConfig  `toml:"clone"`
+	Agents         AgentsConfig  `toml:"agents"`
+	Glance         GlanceConfig  `toml:"glance"`
+	TUI            TUIConfig     `toml:"tui"`
+	Remote         RemoteConfig  `toml:"remote"`
+	Clone          CloneConfig   `toml:"clone"`
+	Session        SessionConfig `toml:"session"`
 }
 
 // Load reads a required configuration file.
@@ -81,10 +83,11 @@ func parse(contents []byte, path string) (Config, error) {
 	var raw struct {
 		Backend string `toml:"backend"`
 		ProjectsConfig
-		Agents AgentsConfig `toml:"agents"`
-		Glance GlanceConfig `toml:"glance"`
-		TUI    TUIConfig    `toml:"tui"`
-		Clone  struct {
+		Agents  AgentsConfig  `toml:"agents"`
+		Glance  GlanceConfig  `toml:"glance"`
+		Session SessionConfig `toml:"session"`
+		TUI     TUIConfig     `toml:"tui"`
+		Clone   struct {
 			DefaultProtocol string `toml:"default-protocol"`
 			SSHPrefix       string `toml:"ssh-prefix"`
 			HTTPSPrefix     string `toml:"https-prefix"`
@@ -107,6 +110,7 @@ func parse(contents []byte, path string) (Config, error) {
 		Agents:         raw.Agents,
 		Glance:         raw.Glance,
 		TUI:            raw.TUI,
+		Session:        raw.Session,
 		Clone: CloneConfig{
 			DefaultProtocol: raw.Clone.DefaultProtocol,
 			SSHPrefix:       raw.Clone.SSHPrefix,
@@ -147,6 +151,11 @@ func parse(contents []byte, path string) (Config, error) {
 	}
 	if err := validateAgents(cfg.Agents); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, highlightColorKey)
+	}
+	if cfg.Session.NameTemplate != nil {
+		if err := sessionname.ValidateTemplate(*cfg.Session.NameTemplate); err != nil {
+			return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "session.name-template")
+		}
 	}
 	if err := validateClone(cfg.Clone); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "clone.default-protocol")

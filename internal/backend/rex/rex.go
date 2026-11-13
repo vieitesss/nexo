@@ -38,7 +38,8 @@ const appBinary = "Library/Application Support/com.superlogical.rex/RexServer/Ve
 // Backend is the Rex backend. Capabilities are added independently as each
 // feature is implemented.
 type Backend struct {
-	Runner runner.CommandRunner
+	NameTemplate *string
+	Runner       runner.CommandRunner
 
 	binary   string
 	messages io.Writer
