@@ -119,6 +119,18 @@ type Deps struct {
 	KillContainers     func(context.Context, []picker.ContainerRef) error
 	RenameContainer    func(context.Context, picker.ContainerRef, string) error
 
+	// ProjectActions are the configured [tui] project-actions keys.
+	ProjectActions []config.ProjectAction
+	// ProjectBehaviors lists the behaviors the backend implements. Actions
+	// for other behaviors stay out of the footer and explain themselves when
+	// pressed, so one config works across backends.
+	ProjectBehaviors []config.ProjectBehavior
+	// BackendName names the backend in unsupported-behavior messages.
+	BackendName string
+	// PlaceProject opens a project beside the current pane. It runs while the
+	// TUI is still open, so a failure can be shown; success closes the TUI.
+	PlaceProject func(context.Context, picker.Place, config.ProjectBehavior) error
+
 	Input  io.Reader
 	Output io.Writer
 	Now    func() time.Time
@@ -539,6 +551,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SetSize(msg.Width, msg.Height)
 		return m, nil
 	case actionMsg:
+		if msg.kind == placeActionKind {
+			m.input.actionInFlight = false
+			if msg.err != nil {
+				m.toast = msg.err.Error()
+				return m, nil
+			}
+			m.cancelBackgroundLoads()
+			return m, tea.Quit
+		}
 		if msg.kind == "delete-preflight" {
 			if msg.generation != 0 && msg.generation != m.input.actionGeneration {
 				return m, nil

@@ -37,6 +37,7 @@ type renderFrame struct {
 	renameMode        bool
 	renameInput       textinput.Model
 	form              *stagedForm
+	projectHints      []string
 }
 
 func (m Model) frame() renderFrame {
@@ -60,6 +61,7 @@ func (m Model) frame() renderFrame {
 		toast: m.toast, refreshErr: m.source.refreshErr, gitErrors: m.gitErrors,
 		projection: projection, confirmKill: m.input.confirmKill,
 		renameMode: m.input.renameMode, renameInput: m.input.renameInput, form: m.input.form,
+		projectHints: m.deps.projectActionHints(),
 	}
 }
 
@@ -774,6 +776,11 @@ func (m renderFrame) footer() string {
 		}
 		if current, ok := m.currentItem(); ok && current.place.Kind == picker.ProjectKind && current.place.Git {
 			left = append(left, hint("Ctrl-E", "extract"))
+		}
+		if current, ok := m.currentRow(); ok {
+			if _, ok := placeableProject(current); ok {
+				left = append(left, m.projectHints...)
+			}
 		}
 	}
 	if m.currentContainer() || len(m.markedTargets()) > 0 {

@@ -41,6 +41,12 @@ colors = { working = "yellow", unseen = "red", seen = "green" }
 # Theme selection: auto, dark, or light. A running TUI follows changes live.
 theme = "auto"
 
+# Up to three extra keys on a Projects row; see "Project actions" below.
+[[tui.project-actions]]
+key = "ctrl+s"
+behavior = "split-right"
+label = "split"
+
 [clone]
 default-protocol = "ssh"
 ssh-prefix = "git@github.com:"
@@ -80,6 +86,7 @@ devbox = "tmux"             # auto, tmux, or herdr
 | `glance.colors.unseen` | `red` | Glance dot colour for an unseen stopped agent; default red, independently of `agents.highlight-color`. Same forms as `working`. |
 | `glance.colors.seen` | `green` | Glance dot colour for a seen stopped agent. Same forms as `working`. |
 | `tui.theme` | `auto` | Select `auto`, `dark`, or `light`; auto queries the terminal background and falls back to `COLORFGBG`, then dark. A running TUI polls the config and follows `dark`/`light` changes without a restart; `auto` is not re-probed mid-session. |
+| `tui.project-actions` | `[]` | Up to three extra keys on a Projects row, each opening the project beside the current pane; see [Project actions](#project-actions). |
 | `clone.default-protocol` | `ssh` | Protocol selected when the clone form opens: `ssh` or `https`. |
 | `clone.ssh-prefix` | `git@github.com:` | Prefix prepended to the repository path in the SSH form. |
 | `clone.https-prefix` | `https://github.com/` | Prefix prepended to the repository path in the HTTPS form. |
@@ -89,6 +96,51 @@ devbox = "tmux"             # auto, tmux, or herdr
 | `remote.transport` | `ssh` | Proxy attachment transport: `ssh`, `mosh`, or `et`. Listing always uses SSH. |
 | `remote.reconnect-initial` | `1s` | Initial retry delay for SSH proxy attachments; must be positive and no greater than `reconnect-max`. |
 | `remote.reconnect-max` | `30s` | Maximum retry delay for SSH proxy attachments; must be positive. |
+
+## Project actions
+
+Enter opens a project in its own container. A project action opens it beside
+the pane you came from instead, with a key of your choice:
+
+```toml
+[[tui.project-actions]]
+key = "ctrl+s"
+behavior = "split-right"
+label = "split"
+
+[[tui.project-actions]]
+key = "alt+w"
+behavior = "float"
+```
+
+| Field | Meaning |
+| --- | --- |
+| `key` | `ctrl+<letter>` or `alt+<letter>`, lower case. Keys that nexo's actions, its search box, or the terminal already use are rejected: `ctrl+a b c d e f h i j k m n o p r t u v w x y` and `alt+b d f`. That leaves `ctrl+g l q s z` and the other `alt+` letters. |
+| `behavior` | `split-right`, `split-down`, `tab`, or `float`. |
+| `label` | Optional footer text of at most 8 columns; defaults to the behavior. |
+
+At most three actions fit beside the built-in footer hints. Each backend
+implements the behaviors it can; `nexo backend --json` lists them under
+`project_behaviors`:
+
+| Behavior | tmux | Rex | Herdr |
+| --- | --- | --- | --- |
+| `split-right`, `split-down` | `split-window` | `rex split` | `herdr pane split` |
+| `tab` | `new-window` | `rex window new` | `herdr tab create` |
+| `float` | not supported | floating layer | not supported |
+
+tmux and Herdr popups block all other input and close with their command, so
+neither is offered as a float. One config serves every backend: an action the
+current backend cannot perform is left out of the footer, and its key shows
+`<behavior> is not supported by <backend>` instead of failing.
+
+Splits go beside the pane you came from. nexo's tmux and Herdr popups are not
+panes, so those backends find it on their own. A Rex launcher that opens nexo
+in a floating block must name it in `NEXO_ORIGIN_PANE`, because the float
+itself is focused while nexo runs; any backend honours that variable.
+
+The action runs while the TUI is still open. Success closes the TUI; a
+failure keeps it open and shows the error in the footer.
 
 ## Changes that need tmux init
 

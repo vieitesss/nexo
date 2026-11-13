@@ -145,6 +145,9 @@ func parse(contents []byte, path string) (Config, error) {
 	if err := validateTUI(cfg.TUI); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "tui.theme")
 	}
+	if err := validateProjectActions(cfg.TUI.ProjectActions); err != nil {
+		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, "tui.project-actions")
+	}
 	if err := validateAgents(cfg.Agents); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w for key %q", path, err, highlightColorKey)
 	}

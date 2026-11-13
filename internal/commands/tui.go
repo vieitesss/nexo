@@ -185,6 +185,14 @@ func tuiDependencies(ctx context.Context, invocation Invocation) (tui.Deps, erro
 		_, err := opener.OpenProject(openCtx, place.Path, capabilities.OpenOptions{})
 		return err
 	}
+	deps.ProjectActions = invocation.Config.TUI.ProjectActions
+	deps.BackendName = string(invocation.Selection.Kind)
+	if placer, ok := invocation.Adapter.(capabilities.ProjectPlacer); ok {
+		deps.ProjectBehaviors = placer.ProjectBehaviors()
+		deps.PlaceProject = func(placeCtx context.Context, place picker.Place, behavior config.ProjectBehavior) error {
+			return placer.PlaceProject(placeCtx, place.Path, behavior)
+		}
+	}
 	resolver := containerActionResolver(invocation)
 	deps.OpenContainer = func(openCtx context.Context, place picker.Place) error {
 		actions, resolveErr := resolver.ResolveContainerActions(openCtx, place.Machine)

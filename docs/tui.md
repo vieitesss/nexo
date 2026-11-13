@@ -131,6 +131,11 @@ TUI equivalent of `--force`; Git worktrees always use non-force `git worktree
 remove`. Escape cancels, and Enter submits from any field. A successful delete
 refreshes the Projects catalog and keeps selection near the removed row.
 
+Up to three configured keys open the selected project beside the current pane
+as a split, tab, or floating pane instead of its own container. Their hints
+follow the built-in ones on project rows, and only actions the backend
+supports are shown. See [Project actions](configuration.md#project-actions).
+
 ## Keys
 
 | Key | Behavior |

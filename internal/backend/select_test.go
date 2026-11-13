@@ -103,16 +103,16 @@ func TestResolveReportsCompleteBackendCapabilityLists(t *testing.T) {
 		{name: "tmux", want: []string{
 			"AgentSource", "ContainerHistory", "ContainerKiller", "ContainerLister", "ContainerOpener", "ContainerRenamer",
 			"CurrentContainer", "CurrentProxyMachine", "FocusEventRecorder", "MessageDisplayer", "Notifier", "PaneFocuser",
-			"ProjectOpener", "ProjectUseChecker", "RemotePaste", "RemoteProxy", "ScreenReader", "WorktreeCreator", "WorktreeExtractor",
+			"ProjectOpener", "ProjectPlacer", "ProjectUseChecker", "RemotePaste", "RemoteProxy", "ScreenReader", "WorktreeCreator", "WorktreeExtractor",
 		}},
 		{name: "rex", want: []string{
 			"AgentSource", "ContainerHistory", "ContainerKiller", "ContainerLister", "ContainerOpener", "ContainerRenamer",
-			"CurrentContainer", "CurrentProxyMachine", "PaneFocuser", "ProjectOpener", "ProjectUseChecker", "RemoteProxy",
+			"CurrentContainer", "CurrentProxyMachine", "PaneFocuser", "ProjectOpener", "ProjectPlacer", "ProjectUseChecker", "RemoteProxy",
 			"ScreenReader", "WorktreeCreator", "WorktreeExtractor",
 		}},
 		{name: "herdr", want: []string{
 			"AgentSource", "ContainerHistory", "ContainerKiller", "ContainerLister", "ContainerOpener", "ContainerRenamer",
-			"CurrentContainer", "CurrentProxyMachine", "FocusEventRecorder", "PaneFocuser", "ProjectOpener", "ProjectUseChecker",
+			"CurrentContainer", "CurrentProxyMachine", "FocusEventRecorder", "PaneFocuser", "ProjectOpener", "ProjectPlacer", "ProjectUseChecker",
 			"RemotePaste", "RemoteProxy", "ScreenReader", "WorktreeCreator", "WorktreeExtractor",
 		}},
 	}

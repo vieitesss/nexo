@@ -4,7 +4,8 @@ import "fmt"
 
 // TUIConfig controls the terminal interface appearance.
 type TUIConfig struct {
-	Theme string `toml:"theme"`
+	Theme          string          `toml:"theme"`
+	ProjectActions []ProjectAction `toml:"project-actions"`
 }
 
 const (
