@@ -425,6 +425,9 @@ func (s *inputState) key(msg tea.KeyMsg, frame inputFrame) inputEffect {
 		}
 		return inputEffect{}
 	}
+	if action, ok := s.deps.projectAction(msg.String()); ok {
+		return s.runProjectAction(action, frame.rows)
+	}
 	if msg.String() == "shift+tab" {
 		s.switchTab(-1)
 		return inputEffect{rebuild: true}

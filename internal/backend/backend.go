@@ -58,7 +58,10 @@ type Selection struct {
 	Source       string   `json:"source"`
 	Reason       string   `json:"reason"`
 	Capabilities []string `json:"capabilities"`
-	Adapter      any      `json:"-"`
+	// ProjectBehaviors lists the [tui] project-actions behaviors the adapter
+	// implements, so users can tell which configured keys will work.
+	ProjectBehaviors []config.ProjectBehavior `json:"project_behaviors"`
+	Adapter          any                      `json:"-"`
 }
 
 // Require returns an error when a command needs a live multiplexer but none
@@ -406,6 +409,10 @@ func (s Selection) withCapabilities(input ResolveInput) Selection {
 	s.Capabilities = capabilities.Names(s.Adapter)
 	if s.Capabilities == nil {
 		s.Capabilities = []string{}
+	}
+	s.ProjectBehaviors = []config.ProjectBehavior{}
+	if placer, ok := s.Adapter.(capabilities.ProjectPlacer); ok {
+		s.ProjectBehaviors = placer.ProjectBehaviors()
 	}
 	return s
 }
